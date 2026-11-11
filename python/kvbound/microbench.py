@@ -103,13 +103,17 @@ def run(name: str, preset: str) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("names", nargs="*", choices=[*SUMMARIZERS, []], default=list(SUMMARIZERS))
+    parser.add_argument("names", nargs="*", help=f"any of {list(SUMMARIZERS)}; default all")
     parser.add_argument("--preset", default="cuda")
     parser.add_argument("--allow-dirty", action="store_true")
     args = parser.parse_args()
 
+    names = args.names or list(SUMMARIZERS)
+    if unknown := set(names) - set(SUMMARIZERS):
+        parser.error(f"unknown microbenchmarks: {sorted(unknown)}")
+
     record.require_clean_tree(args.allow_dirty)
-    for name in args.names or SUMMARIZERS:
+    for name in names:
         path = run(name, args.preset)
         metrics = json.loads(path.read_text(encoding="utf-8"))["metrics"]
         print(f"{name}: {json.dumps(metrics)}\n  {path}")
