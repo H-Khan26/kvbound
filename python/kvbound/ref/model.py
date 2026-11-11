@@ -14,7 +14,7 @@ import torch.nn.functional as F  # noqa: N812
 from safetensors import safe_open
 from torch import Tensor, nn
 
-from kvbound.ref.config import LlamaConfig
+from kvbound.ref.config import Llama3RopeScaling, LlamaConfig
 
 # Capture sites, in forward order. "layers.{i}.*" repeats per layer.
 LAYER_SITES = ("attn_norm", "attn_out", "resid_mid", "mlp_norm", "mlp_out", "resid_post")
@@ -36,10 +36,36 @@ class RMSNorm(nn.Module):
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps) * self.weight
 
 
-def rope_tables(head_dim: int, theta: float, positions: Tensor) -> tuple[Tensor, Tensor]:
-    """cos and sin of position * theta^(-2j/head_dim), shape [T, head_dim/2]."""
+def llama3_scale(inv_freq: Tensor, s: Llama3RopeScaling) -> Tensor:
+    """Llama 3 frequency scaling, by wavelength (positions per full rotation).
+
+    Wavelengths shorter than original_max / high_freq_factor keep their frequency, those longer
+    than original_max / low_freq_factor are slowed by `factor`, and the band between blends
+    linearly from one to the other.
+    """
+    wavelen = 2 * math.pi / inv_freq
+    low_freq_wavelen = s.original_max_position_embeddings / s.low_freq_factor
+    high_freq_wavelen = s.original_max_position_embeddings / s.high_freq_factor
+    smooth = (s.original_max_position_embeddings / wavelen - s.low_freq_factor) / (
+        s.high_freq_factor - s.low_freq_factor
+    )
+    blended = (1 - smooth) * inv_freq / s.factor + smooth * inv_freq
+    scaled = torch.where(wavelen > low_freq_wavelen, inv_freq / s.factor, inv_freq)
+    is_medium = (wavelen >= high_freq_wavelen) & (wavelen <= low_freq_wavelen)
+    return torch.where(is_medium, blended, scaled)
+
+
+def rope_tables(
+    head_dim: int, theta: float, positions: Tensor, scaling: Llama3RopeScaling | None = None
+) -> tuple[Tensor, Tensor]:
+    """cos and sin of position * inv_freq_j, shape [T, head_dim/2].
+
+    inv_freq_j = theta^(-2j/head_dim), optionally rescaled the Llama 3 way.
+    """
     exponents = torch.arange(0, head_dim, 2, dtype=torch.float32, device=positions.device)
     inv_freq = 1.0 / (theta ** (exponents / head_dim))
+    if scaling is not None:
+        inv_freq = llama3_scale(inv_freq, scaling)
     angles = positions.to(torch.float32)[:, None] * inv_freq[None, :]
     return angles.cos(), angles.sin()
 
@@ -127,7 +153,8 @@ class Llama(nn.Module):
         If capture is given it is filled with every site in SITES.
         """
         positions = torch.arange(input_ids.shape[1], device=input_ids.device)
-        cos, sin = rope_tables(self.cfg.head_dim, self.cfg.rope_theta, positions)
+        cfg = self.cfg
+        cos, sin = rope_tables(cfg.head_dim, cfg.rope_theta, positions, cfg.rope_scaling)
         if capture is None:
             capture = {}
 

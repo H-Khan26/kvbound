@@ -9,6 +9,7 @@ Usage: python -m kvbound.golden <model-name>
 
 import argparse
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -67,42 +68,45 @@ def site_depth(site: str, n_layers: int) -> int:
     return n_layers
 
 
-def fp16_rel_rms_max(thresholds: dict[str, Any], site: str, n_layers: int) -> float:
-    """rel-RMS allowed at a site for FP16 arithmetic; grows linearly with depth."""
-    fp16 = thresholds["fp16"]
-    return fp16["rel_rms_base"] + fp16["rel_rms_per_layer"] * site_depth(site, n_layers)
-
-
 def fp16_thresholds(
     model_fp16: Llama, prompts: list[Prompt], golden: dict[str, Tensor]
 ) -> dict[str, Any]:
-    """Measures torch's FP16 forward against the FP32 goldens and fits a depth envelope over it."""
+    """Measures torch's FP16 forward against the FP32 goldens and sets limits above it.
+
+    The per-site rel-RMS limit is a line through depth (layers of accumulated error) that sits
+    FP16_MARGIN above every observed error. Limits are stored per site, so readers need no
+    formula.
+    """
     n_layers = model_fp16.cfg.n_layers
     worst = [0.0] * (n_layers + 1)  # indexed by site depth
-    agree, positions, kl = 0.0, 0, 0.0
+    mismatches, positions, kl = 0, 0, 0.0
+    site_names: list[str] = []
     for prompt in prompts:
         sites = capture_sites(model_fp16, prompt.input_ids)
+        site_names = list(sites)
         for site, value in sites.items():
             depth = site_depth(site, n_layers)
             err = tolerance.rel_rms(value, golden[f"{prompt.id}/{site}"])
             worst[depth] = max(worst[depth], err)
         expected = golden[f"{prompt.id}/logits"]
-        agree += tolerance.top1_agreement(sites["logits"], expected) * len(prompt.input_ids)
+        mismatches += int((sites["logits"].argmax(-1) != expected.argmax(-1)).sum())
         positions += len(prompt.input_ids)
         kl = max(kl, tolerance.mean_kl(sites["logits"], expected))
 
     base = FP16_MARGIN * worst[0]
     slope = max((FP16_MARGIN * worst[d] - base) / d for d in range(1, n_layers + 1))
+    slope = max(slope, 0.0)
     return {
-        "rel_rms_base": base,
-        "rel_rms_per_layer": max(slope, 0.0),
-        # Teacher-forced argmax agreement, pooled over every position of every prompt.
-        "top1_min": 0.99,
+        "rel_rms_max": {site: base + slope * site_depth(site, n_layers) for site in site_names},
+        # Teacher-forced argmax mismatches allowed, pooled over all positions of all prompts.
+        # Near-ties flip under any rounding change, so at least one is always allowed.
+        "top1_mismatches_max": max(1, math.ceil(FP16_MARGIN * mismatches)),
+        "positions": positions,
         # Largest per-prompt mean KL(golden || actual), in nats.
         "mean_kl_max": FP16_MARGIN * kl,
         "observed_torch_fp16": {
             "rel_rms_by_depth": worst,
-            "top1": agree / positions,
+            "top1_mismatches": mismatches,
             "mean_kl": kl,
         },
     }

@@ -19,9 +19,6 @@ ModelConfig parse_model_config(const json::Value& root) {
   if (const json::Value* act = root.find("hidden_act"); act && act->as_string() != "silu") {
     throw Error("unsupported hidden_act " + act->as_string());
   }
-  if (const json::Value* scaling = root.find("rope_scaling"); scaling && !scaling->is_null()) {
-    throw Error("rope_scaling is not supported");
-  }
   if (flag_or(root, "attention_bias", false) || flag_or(root, "mlp_bias", false)) {
     throw Error("biased projections are not supported");
   }
@@ -39,6 +36,18 @@ ModelConfig parse_model_config(const json::Value& root) {
   const json::Value* theta = root.find("rope_theta");
   cfg.rope_theta = theta ? theta->as_number() : 10000.0;
   cfg.tie_word_embeddings = flag_or(root, "tie_word_embeddings", false);
+  if (const json::Value* scaling = root.find("rope_scaling"); scaling && !scaling->is_null()) {
+    if (scaling->at("rope_type").as_string() != "llama3") {
+      throw Error("unsupported rope_type " + scaling->at("rope_type").as_string());
+    }
+    cfg.rope_scaling = Llama3RopeScaling{
+        .factor = scaling->at("factor").as_number(),
+        .low_freq_factor = scaling->at("low_freq_factor").as_number(),
+        .high_freq_factor = scaling->at("high_freq_factor").as_number(),
+        .original_max_position_embeddings =
+            scaling->at("original_max_position_embeddings").as_int(),
+    };
+  }
 
   const bool positive = cfg.vocab_size > 0 && cfg.hidden_size > 0 && cfg.n_layers > 0 &&
                         cfg.n_heads > 0 && cfg.n_kv_heads > 0 && cfg.intermediate_size > 0;

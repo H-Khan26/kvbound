@@ -1,7 +1,6 @@
 #include "kvbound/json.h"
 
 #include <charconv>
-#include <cstdlib>
 
 #include "kvbound/error.h"
 
@@ -243,9 +242,11 @@ class Parser {
       if (result.ec == std::errc() && result.ptr == last) return Value(Value::Storage(value));
       // Falls through for integers beyond 64 bits, which are kept as doubles.
     }
-    // The grammar above already validated the token; strtod needs a terminated copy.
-    const std::string token(first, last);
-    return Value(Value::Storage(std::strtod(token.c_str(), nullptr)));
+    // from_chars ignores the process locale, unlike strtod.
+    double value = 0.0;
+    const auto result = std::from_chars(first, last, value);
+    if (result.ec != std::errc() || result.ptr != last) fail("number out of range");
+    return Value(Value::Storage(value));
   }
 
   std::string_view text_;

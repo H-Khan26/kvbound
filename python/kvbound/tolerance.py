@@ -17,10 +17,6 @@ def cosine(actual: Tensor, expected: Tensor) -> float:
     return F.cosine_similarity(actual.double().flatten(), expected.double().flatten(), dim=0).item()
 
 
-def max_abs(actual: Tensor, expected: Tensor) -> float:
-    return (actual.double() - expected.double()).abs().max().item()
-
-
 def top1_agreement(actual_logits: Tensor, expected_logits: Tensor) -> float:
     """Fraction of positions whose argmax token matches (teacher-forced comparison)."""
     return (actual_logits.argmax(-1) == expected_logits.argmax(-1)).double().mean().item()

@@ -1,6 +1,5 @@
 add_library(kvbound STATIC
   core/dtype.cpp
-  core/error.cpp
   io/json.cpp
   io/mapped_file.cpp
   io/model_config.cpp

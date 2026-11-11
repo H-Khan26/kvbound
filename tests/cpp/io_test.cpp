@@ -36,8 +36,9 @@ TEST(Json, KeepsLargeOffsetsExact) {
 }
 
 TEST(Json, RejectsMalformedInput) {
-  for (const char* bad : {"", "{", "[1,]", "{\"a\":1,}", "{\"a\":1,\"a\":2}", "01", "1.", "\"\\x\"",
-                          "\"\\ud800\"", "nul", "1 2", "\"unterminated", "{\"a\" 1}", "-"}) {
+  for (const char* bad :
+       {"", "{", "[1,]", "{\"a\":1,}", "{\"a\":1,\"a\":2}", "01", "1.", "\"\\x\"", "\"\\ud800\"",
+        "nul", "1e400", "1 2", "\"unterminated", "{\"a\" 1}", "-"}) {
     EXPECT_THROW(parse(bad), kvb::Error) << bad;
   }
   EXPECT_THROW(parse(std::string(100, '[')), kvb::Error);
@@ -52,20 +53,28 @@ TEST(Dtype, HalfToFloat) {
   EXPECT_EQ(kvb::half_bits_to_float(0x0400), 0x1p-14f);  // smallest normal
 }
 
-// Writes a safetensors file with the given header JSON and data bytes; removes it when destroyed.
+// Writes a file made of an 8-byte header length, the header text and the data bytes, under a name
+// unique to this test; removes it when destroyed.
 class TempSafetensors {
  public:
-  TempSafetensors(const std::string& header, const std::string& data) {
-    path_ = std::filesystem::temp_directory_path() / "kvbound_io_test.safetensors";
+  TempSafetensors(std::uint64_t header_len, const std::string& header, const std::string& data) {
+    const auto* test = testing::UnitTest::GetInstance()->current_test_info();
+    path_ = std::filesystem::temp_directory_path() /
+            (std::string("kvbound_") + test->test_suite_name() + "_" + test->name() + "_" +
+             std::to_string(counter_++) + ".safetensors");
     std::ofstream out(path_, std::ios::binary);
-    const std::uint64_t header_len = header.size();
     out.write(reinterpret_cast<const char*>(&header_len), sizeof(header_len));
     out << header << data;
+    out.close();
+    EXPECT_TRUE(out.good()) << "cannot write " << path_;
   }
+  TempSafetensors(const std::string& header, const std::string& data)
+      : TempSafetensors(header.size(), header, data) {}
   ~TempSafetensors() { std::filesystem::remove(path_); }
   const std::filesystem::path& path() const { return path_; }
 
  private:
+  static inline int counter_ = 0;
   std::filesystem::path path_;
 };
 
@@ -105,15 +114,8 @@ TEST(Safetensors, RejectsInconsistentHeaders) {
 }
 
 TEST(Safetensors, RejectsHeaderLengthBeyondFile) {
-  const auto path = std::filesystem::temp_directory_path() / "kvbound_io_test_short.safetensors";
-  {
-    std::ofstream out(path, std::ios::binary);
-    const std::uint64_t header_len = 1000;
-    out.write(reinterpret_cast<const char*>(&header_len), sizeof(header_len));
-    out << "{}";
-  }
-  EXPECT_THROW(kvb::SafetensorsFile{path}, kvb::Error);
-  std::filesystem::remove(path);
+  const TempSafetensors tmp(1000, "{}", "");
+  EXPECT_THROW(kvb::SafetensorsFile{tmp.path()}, kvb::Error);
 }
 
 }  // namespace

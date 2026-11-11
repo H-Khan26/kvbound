@@ -57,6 +57,8 @@ TEST(FixtureContract, WeightFileMatchesConfig) {
   const Fixture fx;
   const kvb::ModelConfig& cfg = fx.config;
   EXPECT_EQ(fx.weights.metadata().at("format"), "pt");
+  ASSERT_TRUE(cfg.rope_scaling.has_value());
+  EXPECT_EQ(cfg.rope_scaling->factor, 8.0);
 
   const kvb::TensorView& embed = fx.weights.at("model.embed_tokens.weight");
   EXPECT_EQ(embed.dtype, kvb::DType::F16);

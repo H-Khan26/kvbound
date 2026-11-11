@@ -7,6 +7,16 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class Llama3RopeScaling:
+    """Llama 3 RoPE frequency scaling: slows the low-frequency rotations by `factor`."""
+
+    factor: float
+    low_freq_factor: float
+    high_freq_factor: float
+    original_max_position_embeddings: int
+
+
+@dataclass(frozen=True)
 class LlamaConfig:
     vocab_size: int
     hidden_size: int
@@ -18,6 +28,7 @@ class LlamaConfig:
     rope_theta: float
     max_position_embeddings: int
     tie_word_embeddings: bool
+    rope_scaling: Llama3RopeScaling | None = None
 
     @property
     def head_dim(self) -> int:
@@ -37,13 +48,22 @@ class LlamaConfig:
         unsupported = {
             "model_type": raw.get("model_type") != "llama",
             "hidden_act": raw.get("hidden_act", "silu") != "silu",
-            "rope_scaling": raw.get("rope_scaling") is not None,
             "attention_bias": bool(raw.get("attention_bias", False)),
             "mlp_bias": bool(raw.get("mlp_bias", False)),
         }
         bad = [key for key, is_bad in unsupported.items() if is_bad]
         if bad:
             raise ValueError(f"unsupported config fields: {bad}")
+        scaling = raw.get("rope_scaling")
+        if scaling is not None:
+            if scaling.get("rope_type") != "llama3":
+                raise ValueError(f"unsupported rope_scaling: {scaling}")
+            scaling = Llama3RopeScaling(
+                factor=scaling["factor"],
+                low_freq_factor=scaling["low_freq_factor"],
+                high_freq_factor=scaling["high_freq_factor"],
+                original_max_position_embeddings=scaling["original_max_position_embeddings"],
+            )
         cfg = cls(
             vocab_size=raw["vocab_size"],
             hidden_size=raw["hidden_size"],
@@ -55,6 +75,7 @@ class LlamaConfig:
             rope_theta=raw.get("rope_theta", 10000.0),
             max_position_embeddings=raw["max_position_embeddings"],
             tie_word_embeddings=raw.get("tie_word_embeddings", False),
+            rope_scaling=scaling,
         )
         if cfg.hidden_size % cfg.n_heads or cfg.n_heads % cfg.n_kv_heads or cfg.head_dim % 2:
             raise ValueError(f"inconsistent head dimensions: {cfg}")

@@ -15,11 +15,17 @@
       "rms_norm_eps": 1e-05,
       "rope_theta": 10000.0,
       "max_position_embeddings": 128,
-      "tie_word_embeddings": true
+      "tie_word_embeddings": true,
+      "rope_scaling": {
+        "factor": 8.0,
+        "low_freq_factor": 1.0,
+        "high_freq_factor": 4.0,
+        "original_max_position_embeddings": 512
+      }
     }
   },
   "golden_file": "goldens.safetensors",
-  "golden_sha256": "d817846d2d3121c9f55cc7a61fba9ca365182f7dece51781b9ef2c47e76ebe8f",
+  "golden_sha256": "3f69004bc0880a50dace2e583df8d167642d11d18b99018a80a36f68d9cd9802",
   "golden_dtype": "F32",
   "tensor_name": "<prompt id>/<site>",
   "sites": [
@@ -53,18 +59,34 @@
       "cosine_min": 0.99999
     },
     "fp16": {
-      "rel_rms_base": 0.006201469963642294,
-      "rel_rms_per_layer": 0.0,
-      "top1_min": 0.99,
-      "mean_kl_max": 1.3803846966010196e-06,
+      "rel_rms_max": {
+        "embed": 0.006201469963642294,
+        "layers.0.attn_norm": 0.006201469963642294,
+        "layers.0.attn_out": 0.006201469963642294,
+        "layers.0.resid_mid": 0.006201469963642294,
+        "layers.0.mlp_norm": 0.006201469963642294,
+        "layers.0.mlp_out": 0.006201469963642294,
+        "layers.0.resid_post": 0.006201469963642294,
+        "layers.1.attn_norm": 0.0062688733930871335,
+        "layers.1.attn_out": 0.0062688733930871335,
+        "layers.1.resid_mid": 0.0062688733930871335,
+        "layers.1.mlp_norm": 0.0062688733930871335,
+        "layers.1.mlp_out": 0.0062688733930871335,
+        "layers.1.resid_post": 0.0062688733930871335,
+        "final_norm": 0.006336276822531973,
+        "logits": 0.006336276822531973
+      },
+      "top1_mismatches_max": 1,
+      "positions": 18,
+      "mean_kl_max": 1.0945681233298695e-05,
       "observed_torch_fp16": {
         "rel_rms_by_depth": [
           0.0015503674909105735,
-          0.0014518573920791638,
-          0.000987311495509043
+          0.0015672183482717834,
+          0.001101066387922498
         ],
-        "top1": 1.0,
-        "mean_kl": 3.450961741502549e-07
+        "top1_mismatches": 0,
+        "mean_kl": 2.736420308324674e-06
       }
     }
   },

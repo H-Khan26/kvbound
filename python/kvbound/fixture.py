@@ -1,5 +1,8 @@
 """Generates fixtures/tiny-llama: a random 2-layer Llama small enough to commit, plus its goldens.
 
+It mirrors the primary model's variants: grouped-query attention, tied embeddings and Llama 3
+RoPE scaling.
+
 CI has no GPU and no real weights, so every CPU test (Python and C++) runs against this fixture.
 It has the same file layout as a real checkpoint (config.json + model.safetensors with Hugging
 Face tensor names), so the same loaders are exercised.
@@ -35,6 +38,14 @@ HF_CONFIG = {
     "max_position_embeddings": 128,
     "rms_norm_eps": 1e-5,
     "rope_theta": 10000.0,
+    # Llama 3 frequency scaling with all three bands in play for head_dim 16.
+    "rope_scaling": {
+        "rope_type": "llama3",
+        "factor": 8.0,
+        "low_freq_factor": 1.0,
+        "high_freq_factor": 4.0,
+        "original_max_position_embeddings": 512,
+    },
     "tie_word_embeddings": True,
     "attention_bias": False,
     "bos_token_id": 1,
