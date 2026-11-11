@@ -1,9 +1,11 @@
-.PHONY: help setup build test lint format typecheck clean
+.PHONY: help setup doctor build test test-real fetch fixture golden bench-hf lint format typecheck clean
 
 # torch wheel: cu128 on GPU machines, cpu in CI and on machines without a GPU
 TORCH ?= cu128
 # CMake preset: cpu | cuda | cuda-relwithdebinfo
 PRESET ?= cpu
+# Model name from configs/models/
+MODEL ?= tinyllama-1.1b
 
 # On Windows, recipes need a POSIX sh (Git Bash) and cmake/ctest run inside the MSVC environment.
 ifeq ($(OS),Windows_NT)
@@ -20,6 +22,9 @@ setup:            ## install the locked Python env (TORCH=cu128|cpu) and pre-com
 	uv sync --locked --extra $(TORCH)
 	uv run pre-commit install
 
+doctor:           ## check GPU, toolchain, profilers and clock state on this machine
+	uv run python -m kvbound.doctor
+
 build:            ## configure and build C++/CUDA targets (PRESET=cpu|cuda|cuda-relwithdebinfo)
 	$(VSENV) cmake --preset $(PRESET)
 	$(VSENV) cmake --build --preset $(PRESET)
@@ -27,6 +32,23 @@ build:            ## configure and build C++/CUDA targets (PRESET=cpu|cuda|cuda-
 test: build       ## C++ tests via ctest, then Python tests via pytest
 	$(VSENV) ctest --preset $(PRESET)
 	uv run pytest; s=$$?; [ $$s -eq 0 ] || [ $$s -eq 5 ]  # 5 = no tests collected
+
+test-real:        ## reference model vs Hugging Face on fetched real checkpoints (minutes)
+	uv run pytest -m slow
+
+fetch:            ## download the pinned checkpoint into data/models/ (MODEL=...)
+	uv run python -m kvbound.models fetch $(MODEL)
+
+fixture:          ## regenerate the committed tiny-llama fixture and its goldens
+	uv run python -m kvbound.fixture
+
+golden:           ## dump real-model golden tensors into data/golden/ (MODEL=...)
+	uv run python -m kvbound.golden $(MODEL)
+
+bench-hf:         ## Hugging Face baseline: batch 1, batch 8, and a long prompt (MODEL=...)
+	uv run python -m kvbound.baselines.hf --model $(MODEL) --batch 1 --prompt-len 128
+	uv run python -m kvbound.baselines.hf --model $(MODEL) --batch 8 --prompt-len 128
+	uv run python -m kvbound.baselines.hf --model $(MODEL) --batch 1 --prompt-len 1024
 
 lint:             ## ruff lint + format check, clang-format check
 	uv run ruff check .

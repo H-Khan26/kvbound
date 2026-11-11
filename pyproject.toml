@@ -10,6 +10,7 @@ dependencies = [
     "transformers>=4.45",
     "huggingface-hub>=0.25",
     "nvidia-ml-py>=12.560",
+    "matplotlib>=3.9",
 ]
 
 # Pick exactly one torch build: `uv sync --extra cu128` on GPU machines, `--extra cpu` in CI.
