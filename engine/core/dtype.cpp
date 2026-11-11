@@ -1,6 +1,7 @@
 #include "kvbound/dtype.h"
 
 #include <array>
+#include <bit>
 #include <utility>
 
 namespace kvb {
@@ -18,6 +19,29 @@ constexpr std::array<std::pair<DType, std::string_view>, 8> kNames{{
 }};
 
 }  // namespace
+
+float half_bits_to_float(std::uint16_t bits) noexcept {
+  const std::uint32_t sign = static_cast<std::uint32_t>(bits & 0x8000u) << 16;
+  std::uint32_t exponent = (bits >> 10) & 0x1Fu;
+  std::uint32_t mantissa = bits & 0x3FFu;
+
+  std::uint32_t out;
+  if (exponent == 0x1Fu) {  // infinity or NaN
+    out = sign | 0x7F800000u | (mantissa << 13);
+  } else if (exponent != 0) {  // normal: rebias the exponent from 15 to 127
+    out = sign | ((exponent + 112u) << 23) | (mantissa << 13);
+  } else if (mantissa == 0) {  // signed zero
+    out = sign;
+  } else {  // subnormal: shift the leading one up to the implicit position
+    exponent = 113u;
+    while ((mantissa & 0x400u) == 0) {
+      mantissa <<= 1;
+      --exponent;
+    }
+    out = sign | (exponent << 23) | ((mantissa & 0x3FFu) << 13);
+  }
+  return std::bit_cast<float>(out);
+}
 
 std::string_view dtype_name(DType t) noexcept {
   for (const auto& [dtype, name] : kNames) {

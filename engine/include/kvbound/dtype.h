@@ -29,6 +29,10 @@ constexpr std::size_t size_bytes(DType t) noexcept {
   return 0;
 }
 
+// Converts IEEE 754 binary16 bits to float exactly (every half is representable as a float).
+// Host-side only: tests and loaders use it; kernels convert on the GPU.
+float half_bits_to_float(std::uint16_t bits) noexcept;
+
 // Names as written in safetensors headers: "F32", "F16", "BF16", "F8_E4M3", "I8", ...
 std::string_view dtype_name(DType t) noexcept;
 std::optional<DType> dtype_from_name(std::string_view name) noexcept;
