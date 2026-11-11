@@ -15,9 +15,10 @@ ceilings and the analytical performance model. The engine itself starts in Phase
 | Dependent-load latency, L1 / L2 / DRAM | about 22 / 133 / 320 ns | `kvb-pointer_chase` |
 | GEMM peak, FP16 with FP16 / FP32 accumulate | about 59 / 32 TFLOPS | `kvb-gemm_peak` (cuBLASLt) |
 | Decode ceiling, batch 1 | about 180 tokens/s (weights 2.07 GB read once per token) | `python -m kvbound.perfmodel` |
-| Hugging Face Transformers decode, batch 1 | about 33 tokens/s | `python -m kvbound.baselines.hf` |
+| Hugging Face Transformers decode, batch 1 | 18 to 33 tokens/s, depending on where the unlocked GPU clock settles | `python -m kvbound.baselines.hf` |
 
-These runs come from Windows (WDDM), where GPU clocks cannot be locked, so every record is tagged `os=windows`.
+These runs come from Windows (WDDM), where GPU clocks cannot be locked, so every record is tagged `os=windows`, and `clock_varied` when the
+clock moved during the run.
 Numbers meant for publication come from native Ubuntu with locked clocks. Exact values are in `results/raw/` and the
 figures in `reports/`.
 

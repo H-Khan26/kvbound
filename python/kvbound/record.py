@@ -63,7 +63,12 @@ def require_clean_tree(allow_dirty: bool) -> None:
         )
 
 
-def _tags(fingerprint: dict[str, Any]) -> list[str]:
+# A run whose slowest SM clock sample is below this fraction of its fastest was throttled or
+# down-clocked by the driver partway through.
+CLOCK_STEADY_RATIO = 0.95
+
+
+def _tags(fingerprint: dict[str, Any], nvml: dict[str, Any] | None) -> list[str]:
     """Flags that make a record unfit for published numbers."""
     tags = []
     if fingerprint["git"]["dirty"]:
@@ -71,6 +76,9 @@ def _tags(fingerprint: dict[str, Any]) -> list[str]:
     os_class = fingerprint["software"]["os_class"]
     if os_class != "linux":
         tags.append(f"os={os_class}")  # clocks cannot be locked outside native Linux
+    clock = (nvml or {}).get("sm_clock_mhz")
+    if clock and clock["min"] < CLOCK_STEADY_RATIO * clock["max"]:
+        tags.append("clock_varied")
     return tags
 
 
@@ -100,7 +108,7 @@ def write_record(
         "run_id": run_id,
         "kind": kind,
         "created_utc": now.isoformat(timespec="seconds"),
-        "tags": _tags(fingerprint),
+        "tags": _tags(fingerprint, nvml),
         "engine": engine,
         "model": model,
         "params": params,
