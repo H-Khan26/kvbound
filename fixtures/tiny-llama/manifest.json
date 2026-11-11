@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "model": {
+    "name": "tiny-llama",
+    "weights_sha256": "b06c4d62ca8df5eb2c0535d1e848e72323eff9e3b97115b5d079eaf85ea532f3",
+    "weights_precision": "fp16",
+    "seed": 0,
+    "config": {
+      "vocab_size": 256,
+      "hidden_size": 64,
+      "n_layers": 2,
+      "n_heads": 4,
+      "n_kv_heads": 2,
+      "intermediate_size": 128,
+      "rms_norm_eps": 1e-05,
+      "rope_theta": 10000.0,
+      "max_position_embeddings": 128,
+      "tie_word_embeddings": true
+    }
+  },
+  "golden_file": "goldens.safetensors",
+  "golden_sha256": "d817846d2d3121c9f55cc7a61fba9ca365182f7dece51781b9ef2c47e76ebe8f",
+  "golden_dtype": "F32",
+  "tensor_name": "<prompt id>/<site>",
+  "sites": [
+    "embed",
+    "layers.<i>.attn_norm",
+    "layers.<i>.attn_out",
+    "layers.<i>.resid_mid",
+    "layers.<i>.mlp_norm",
+    "layers.<i>.mlp_out",
+    "layers.<i>.resid_post",
+    "final_norm",
+    "logits"
+  ],
+  "prompts": [
+    {
+      "id": "p0",
+      "n_tokens": 1
+    },
+    {
+      "id": "p1",
+      "n_tokens": 5
+    },
+    {
+      "id": "p2",
+      "n_tokens": 12
+    }
+  ],
+  "thresholds": {
+    "fp32": {
+      "rel_rms_max": 1e-05,
+      "cosine_min": 0.99999
+    },
+    "fp16": {
+      "rel_rms_base": 0.006201469963642294,
+      "rel_rms_per_layer": 0.0,
+      "top1_min": 0.99,
+      "mean_kl_max": 1.3803846966010196e-06,
+      "observed_torch_fp16": {
+        "rel_rms_by_depth": [
+          0.0015503674909105735,
+          0.0014518573920791638,
+          0.000987311495509043
+        ],
+        "top1": 1.0,
+        "mean_kl": 3.450961741502549e-07
+      }
+    }
+  },
+  "torch_version": "2.11.0+cu128"
+}
