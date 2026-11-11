@@ -11,10 +11,10 @@ ceilings and the analytical performance model. The engine itself starts in Phase
 
 | Quantity | Value | Source |
 | --- | --- | --- |
-| Memory bandwidth, working set beyond cache | about 369 GB/s (82% of the 448 GB/s spec) | `kvb-bandwidth_sweep` |
-| Dependent-load latency, L1 / L2 / DRAM | about 22 / 133 / 320 ns | `kvb-pointer_chase` |
-| GEMM peak, FP16 with FP16 / FP32 accumulate | about 59 / 32 TFLOPS | `kvb-gemm_peak` (cuBLASLt) |
-| Decode ceiling, batch 1 | about 178 tokens/s (weights 2.07 GB read once per token) | `python -m kvbound.perfmodel` |
+| Memory bandwidth, working set beyond cache | about 371 GB/s (83% of the 448 GB/s spec) | `kvb-bandwidth_sweep` |
+| Dependent-load latency, L1 / L2 / DRAM | about 21 / 135 / 312 ns | `kvb-pointer_chase` |
+| GEMM peak, FP16 with FP16 / FP32 accumulate; INT8 | about 58 / 33 TFLOPS; 115 TOPS | `kvb-gemm_peak` (cuBLASLt) |
+| Decode ceiling, batch 1 | about 179 tokens/s (weights 2.07 GB read once per token) | `python -m kvbound.perfmodel` |
 | Hugging Face Transformers decode, batch 1 | 17 to 33 tokens/s, depending on where the unlocked GPU clock settles | `python -m kvbound.baselines.hf` |
 
 These runs come from Windows (WDDM), where GPU clocks cannot be locked, so every record is tagged `os=windows`, and `clock_varied` when the

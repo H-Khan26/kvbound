@@ -1,0 +1,296 @@
+{
+  "schema_version": 1,
+  "run_id": "20261111T020226Z-microbench-gemm_peak-7fcb",
+  "kind": "microbench.gemm_peak",
+  "created_utc": "2026-11-11T02:02:26+00:00",
+  "tags": [
+    "os=windows",
+    "clock_varied"
+  ],
+  "engine": {
+    "name": "kvb-gemm_peak.exe",
+    "preset": "cuda"
+  },
+  "model": null,
+  "params": {
+    "library": "cublasLt",
+    "target_seconds": 0.25,
+    "repeats": 5
+  },
+  "metrics": {
+    "peak_tops": {
+      "fp32": 12.0,
+      "fp16_acc16": 57.74,
+      "fp16_acc32": 32.68,
+      "int8": 114.56
+    },
+    "unsupported": {
+      "fp8_e4m3": "needs_sm_89"
+    },
+    "decode_gemm_weight_gbs": 310.76
+  },
+  "samples": {
+    "device": {
+      "name": "NVIDIA GeForce RTX 3060 Ti",
+      "compute_capability": "8.6",
+      "sm_count": 38,
+      "l2_cache_bytes": 3145728,
+      "total_memory_bytes": 8589410304
+    },
+    "peak": [
+      {
+        "precision": "fp32",
+        "n": 2048,
+        "status": "success",
+        "best_tops": 9.33,
+        "median_tops": 9.25
+      },
+      {
+        "precision": "fp32",
+        "n": 4096,
+        "status": "success",
+        "best_tops": 9.33,
+        "median_tops": 9.27
+      },
+      {
+        "precision": "fp32",
+        "n": 8192,
+        "status": "success",
+        "best_tops": 12.0,
+        "median_tops": 11.92
+      },
+      {
+        "precision": "fp16_acc16",
+        "n": 2048,
+        "status": "success",
+        "best_tops": 49.8,
+        "median_tops": 49.42
+      },
+      {
+        "precision": "fp16_acc16",
+        "n": 4096,
+        "status": "success",
+        "best_tops": 56.8,
+        "median_tops": 56.16
+      },
+      {
+        "precision": "fp16_acc16",
+        "n": 8192,
+        "status": "success",
+        "best_tops": 57.74,
+        "median_tops": 57.02
+      },
+      {
+        "precision": "fp16_acc32",
+        "n": 2048,
+        "status": "success",
+        "best_tops": 31.17,
+        "median_tops": 30.9
+      },
+      {
+        "precision": "fp16_acc32",
+        "n": 4096,
+        "status": "success",
+        "best_tops": 31.25,
+        "median_tops": 31.12
+      },
+      {
+        "precision": "fp16_acc32",
+        "n": 8192,
+        "status": "success",
+        "best_tops": 32.68,
+        "median_tops": 32.66
+      },
+      {
+        "precision": "int8",
+        "n": 2048,
+        "status": "success",
+        "best_tops": 83.19,
+        "median_tops": 82.96
+      },
+      {
+        "precision": "int8",
+        "n": 4096,
+        "status": "success",
+        "best_tops": 104.45,
+        "median_tops": 104.19
+      },
+      {
+        "precision": "int8",
+        "n": 8192,
+        "status": "success",
+        "best_tops": 114.56,
+        "median_tops": 113.39
+      },
+      {
+        "precision": "fp8_e4m3",
+        "n": 2048,
+        "status": "needs_sm_89"
+      },
+      {
+        "precision": "fp8_e4m3",
+        "n": 4096,
+        "status": "needs_sm_89"
+      },
+      {
+        "precision": "fp8_e4m3",
+        "n": 8192,
+        "status": "needs_sm_89"
+      }
+    ],
+    "shapes": {
+      "precision": "fp16_acc32",
+      "rows": 2048,
+      "cols": 2048,
+      "distinct_weight_matrices": 127,
+      "points": [
+        {
+          "tokens": 1,
+          "status": "success",
+          "best_gflops": 310.76,
+          "median_gflops": 309.47,
+          "weight_gbs": 310.76
+        },
+        {
+          "tokens": 2,
+          "status": "success",
+          "best_gflops": 609.59,
+          "median_gflops": 606.09,
+          "weight_gbs": 304.79
+        },
+        {
+          "tokens": 4,
+          "status": "success",
+          "best_gflops": 1208.74,
+          "median_gflops": 1207.8,
+          "weight_gbs": 302.19
+        },
+        {
+          "tokens": 8,
+          "status": "success",
+          "best_gflops": 2404.83,
+          "median_gflops": 2399.38,
+          "weight_gbs": 300.6
+        },
+        {
+          "tokens": 16,
+          "status": "success",
+          "best_gflops": 4780.41,
+          "median_gflops": 4762.16,
+          "weight_gbs": 298.78
+        },
+        {
+          "tokens": 32,
+          "status": "success",
+          "best_gflops": 9304.81,
+          "median_gflops": 9257.0,
+          "weight_gbs": 290.78
+        },
+        {
+          "tokens": 64,
+          "status": "success",
+          "best_gflops": 18532.01,
+          "median_gflops": 18477.75,
+          "weight_gbs": 289.56
+        },
+        {
+          "tokens": 128,
+          "status": "success",
+          "best_gflops": 24744.07,
+          "median_gflops": 24643.43,
+          "weight_gbs": 193.31
+        },
+        {
+          "tokens": 256,
+          "status": "success",
+          "best_gflops": 24227.47,
+          "median_gflops": 24183.74,
+          "weight_gbs": 94.64
+        },
+        {
+          "tokens": 512,
+          "status": "success",
+          "best_gflops": 26789.38,
+          "median_gflops": 26712.52,
+          "weight_gbs": 52.32
+        },
+        {
+          "tokens": 1024,
+          "status": "success",
+          "best_gflops": 26801.77,
+          "median_gflops": 26711.93,
+          "weight_gbs": 26.17
+        }
+      ]
+    }
+  },
+  "nvml": {
+    "interval_s": 1.0,
+    "n_samples": 34,
+    "sm_clock_mhz": {
+      "min": 1755,
+      "mean": 1898.8235294117646,
+      "max": 1980
+    },
+    "mem_clock_mhz": {
+      "min": 6800,
+      "mean": 6800.0,
+      "max": 6800
+    },
+    "temp_c": {
+      "min": 29,
+      "mean": 29.0,
+      "max": 29
+    },
+    "power_w": {
+      "min": 68.82,
+      "mean": 190.2995882352941,
+      "max": 218.093
+    },
+    "util_pct": {
+      "min": 3,
+      "mean": 96.02941176470588,
+      "max": 100
+    },
+    "mem_used_mib": {
+      "min": 1225,
+      "mean": 2861.470588235294,
+      "max": 2969
+    },
+    "sm_clock_mhz_busy": {
+      "min": 1755,
+      "max": 1980,
+      "n": 33
+    }
+  },
+  "fingerprint": {
+    "device_id": "rtx3060ti-fd7b40d5",
+    "device_config": "rtx3060ti",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3060 Ti",
+      "uuid": "GPU-fd7b40d5-161e-fadf-f3ad-10e7ae835d42",
+      "compute_capability": "8.6",
+      "memory_total_mib": 8192,
+      "driver_version": "576.02",
+      "sm_clock_max_mhz": 2100,
+      "pcie_gen_max": 3,
+      "pcie_width_max": 16,
+      "power_limit_w": 220.0,
+      "persistence_mode": null
+    },
+    "software": {
+      "os_class": "windows",
+      "os": "Windows 10 (10.0.19045)",
+      "cpu": "Intel64 Family 6 Model 165 Stepping 5, GenuineIntel",
+      "python": "3.12.14",
+      "torch": "2.11.0+cu128",
+      "torch_cuda": "12.8",
+      "nvcc": "12.9",
+      "cmake": "4.4.4"
+    },
+    "git": {
+      "sha": "40e90951a5dc2a68439db28940b769ceebd2e89c",
+      "dirty": false
+    }
+  }
+}
