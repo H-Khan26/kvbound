@@ -1,4 +1,4 @@
-# Spec-sheet ceilings. Phase 1 microbenchmarks add a [measured] table next to these.
+# Spec-sheet ceilings. Measured ceilings live in the microbenchmark records under results/raw/.
 name = "NVIDIA GeForce RTX 4070 Ti"
 arch = "ada"
 compute_capability = "8.9"

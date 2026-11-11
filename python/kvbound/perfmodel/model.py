@@ -73,6 +73,8 @@ class Precision:
     def named(cls, weights: str, kv: str) -> "Precision":
         # Quantization here is weight-only: INT8 and INT4 weights are converted to FP16 inside
         # the kernel and multiplied with FP16 activations, so the FP16 ceiling applies to all.
+        # The ceiling is FP16 accumulate, the faster of the two FP16 modes, so the result stays
+        # a lower bound for kernels that accumulate in FP32 at half the rate.
         weight_bytes = {"fp16": 2.0, "int8": 1.0, "int4": 0.5}
         kv_bytes = {"fp16": 2.0, "int8": 1.0, "fp8": 1.0}
         return cls(weight_bytes[weights], kv_bytes[kv], "fp16_acc16")

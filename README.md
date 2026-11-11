@@ -59,7 +59,7 @@ make test-real                       # reference model vs Hugging Face on the re
 make golden MODEL=tinyllama-1.1b     # golden tensors into data/golden/ (manifest is committed)
 make bench-hf MODEL=tinyllama-1.1b   # Hugging Face baseline records
 make microbench                      # builds the cuda preset first
-make report DEVICE=rtx3060ti         # figures into reports/
+make report MODEL=tinyllama-1.1b DEVICE=rtx3060ti   # figures into reports/
 make predict MODEL=llama-3.2-1b DEVICE=rtx3060ti
 ```
 

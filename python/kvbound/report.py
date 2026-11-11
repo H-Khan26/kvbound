@@ -18,7 +18,7 @@ from matplotlib.figure import Figure
 from kvbound.models import load_spec
 from kvbound.paths import CONFIGS, REPORTS
 from kvbound.perfmodel import hardware
-from kvbound.perfmodel.model import Arch
+from kvbound.perfmodel.model import Arch, Precision, step_costs
 
 # Chart tokens: surface, inks, and the categorical series colors in their fixed order.
 SURFACE, INK, INK_2, MUTED, GRID, AXIS = (
@@ -123,23 +123,30 @@ def roofline(
         xs.append(2 * rows * cols * point["tokens"] / moved)
         ys.append(point["best_gflops"])
     ax.plot(xs, ys, "o", ms=6, color=SERIES[0], mec=SURFACE, mew=1, zorder=3,
-            label="measured cuBLASLt FP16 GEMM, 1 to 1024 tokens")  # fmt: skip
+            label="measured cuBLASLt FP16 GEMM (FP32 accumulate), 1 to 1024 tokens")  # fmt: skip
 
-    # Where the model's operations sit on the bound.
-    marks = [
-        (1.0, "linear layers, decode batch 1"),
-        (float(arch.n_heads // arch.n_kv_heads), "attention over the KV cache"),
-        (8.0, "linear layers, decode batch 8"),
-        (512.0, "linear layers, prefill 512 tokens"),
-    ]
-    roof_top = hw.peak_tops["fp16_acc16"] * 1e3
-    mx = [mark[0] for mark in marks]
-    my = [min(mark[0] * hw.dram_gbs, roof_top) for mark in marks]
-    ax.plot(mx, my, "D", ms=7, color=SERIES[1], mec=SURFACE, mew=1, zorder=4,
-            label=f"bound for {model_name} operations")  # fmt: skip
-    for (x, text), y in zip(marks, my, strict=True):
-        on_flat = x * hw.dram_gbs > roof_top
-        note(text, (x, y), (0, 14) if on_flat else (-12, 10), "center" if on_flat else "right")
+    # Where the model's operations sit on the bound, taken from the perf model's own costs.
+    fp16 = Precision.named("fp16", "fp16")
+    marks = []
+    for label, batch, new_tokens, context, op in (
+        ("linear layers, decode batch 1", 1, 1, 1024, "gate_proj"),
+        ("attention over the KV cache", 1, 1, 1024, "attention"),
+        ("linear layers, decode batch 8", 8, 1, 1024, "gate_proj"),
+        ("linear layers, prefill 512", 1, 512, 0, "gate_proj"),
+    ):
+        costs = step_costs(arch, hw, fp16, batch, new_tokens, context)
+        cost = next(c for c in costs if c.name == op)
+        marks.append((cost.intensity, cost.ops / cost.seconds / 1e9, cost.bound_by, label))
+    ax.plot([m[0] for m in marks], [m[1] for m in marks], "D", ms=7, color=SERIES[1],
+            mec=SURFACE, mew=1, zorder=4, label=f"bound for {model_name} operations")  # fmt: skip
+    for x, y, bound_by, text in marks:
+        # Labels go left of the slope, except attention and compute-bound marks, which go right.
+        if bound_by == "compute":
+            note(text, (x, y), (-22, 12), "left")
+        elif text.startswith("attention"):
+            note(text, (x, y), (12, -13), "left")
+        else:
+            note(text, (x, y), (-12, 10), "right")
 
     ax.set_xscale("log")
     ax.set_yscale("log")
@@ -212,7 +219,7 @@ def latency(records: dict[str, dict[str, Any]]) -> Figure:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", required=True, help="name from configs/devices/")
-    parser.add_argument("--model", default="llama-3.2-1b", help="model placed on the roofline")
+    parser.add_argument("--model", required=True, help="model placed on the roofline")
     args = parser.parse_args()
 
     records = hardware.latest_records(args.device)

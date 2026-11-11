@@ -56,8 +56,8 @@ microbench:       ## build the cuda preset, then run bandwidth, latency and GEMM
 	$(MAKE) build PRESET=cuda
 	uv run python -m kvbound.microbench --preset cuda
 
-report:           ## roofline, bandwidth and latency figures from the records (DEVICE=...)
-	uv run python -m kvbound.report --device $(DEVICE)
+report:           ## roofline, bandwidth and latency figures from the records (MODEL=... DEVICE=...)
+	uv run python -m kvbound.report --device $(DEVICE) --model $(MODEL)
 
 predict:          ## latency bounds from the perf model (MODEL=... DEVICE=...)
 	uv run python -m kvbound.perfmodel --model $(MODEL) --device $(DEVICE)
