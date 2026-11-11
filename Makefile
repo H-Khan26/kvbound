@@ -1,4 +1,4 @@
-.PHONY: help setup doctor build test test-real fetch fixture golden bench-hf lint format typecheck clean
+.PHONY: help setup doctor build test test-real fetch fixture golden bench-hf microbench lint format typecheck clean
 
 # torch wheel: cu128 on GPU machines, cpu in CI and on machines without a GPU
 TORCH ?= cu128
@@ -49,6 +49,9 @@ bench-hf:         ## Hugging Face baseline: batch 1, batch 8, and a long prompt 
 	uv run python -m kvbound.baselines.hf --model $(MODEL) --batch 1 --prompt-len 128
 	uv run python -m kvbound.baselines.hf --model $(MODEL) --batch 8 --prompt-len 128
 	uv run python -m kvbound.baselines.hf --model $(MODEL) --batch 1 --prompt-len 1024
+
+microbench:       ## hardware microbenchmarks: bandwidth, latency, GEMM peaks (needs PRESET=cuda build)
+	uv run python -m kvbound.microbench
 
 lint:             ## ruff lint + format check, clang-format check
 	uv run ruff check .

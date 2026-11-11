@@ -31,6 +31,9 @@ endif()
 include(CTest)
 
 add_subdirectory(engine)
+if(KVB_ENABLE_CUDA)
+  add_subdirectory(microbench)
+endif()
 
 if(BUILD_TESTING)
   add_subdirectory(tests/cpp)
