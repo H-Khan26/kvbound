@@ -52,8 +52,9 @@ bench-hf:         ## Hugging Face baseline: batch 1, batch 8, and a long prompt 
 	uv run python -m kvbound.baselines.hf --model $(MODEL) --batch 8 --prompt-len 128
 	uv run python -m kvbound.baselines.hf --model $(MODEL) --batch 1 --prompt-len 1024
 
-microbench:       ## hardware microbenchmarks: bandwidth, latency, GEMM peaks (needs PRESET=cuda build)
-	uv run python -m kvbound.microbench
+microbench:       ## build the cuda preset, then run bandwidth, latency and GEMM microbenchmarks
+	$(MAKE) build PRESET=cuda
+	uv run python -m kvbound.microbench --preset cuda
 
 report:           ## roofline, bandwidth and latency figures from the records (DEVICE=...)
 	uv run python -m kvbound.report --device $(DEVICE)

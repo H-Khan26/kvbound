@@ -11,7 +11,7 @@ ceilings and the analytical performance model. The engine itself starts in Phase
 
 | Quantity | Value | Source |
 | --- | --- | --- |
-| Memory bandwidth, working set beyond cache | about 370 GB/s (83% of the 448 GB/s spec) | `kvb-bandwidth_sweep` |
+| Memory bandwidth, working set beyond cache | about 369 GB/s (82% of the 448 GB/s spec) | `kvb-bandwidth_sweep` |
 | Dependent-load latency, L1 / L2 / DRAM | about 22 / 133 / 320 ns | `kvb-pointer_chase` |
 | GEMM peak, FP16 with FP16 / FP32 accumulate | about 59 / 32 TFLOPS | `kvb-gemm_peak` (cuBLASLt) |
 | Decode ceiling, batch 1 | about 178 tokens/s (weights 2.07 GB read once per token) | `python -m kvbound.perfmodel` |
@@ -58,7 +58,7 @@ make fetch MODEL=tinyllama-1.1b      # pinned checkpoint into data/models/
 make test-real                       # reference model vs Hugging Face on the real checkpoint
 make golden MODEL=tinyllama-1.1b     # golden tensors into data/golden/ (manifest is committed)
 make bench-hf MODEL=tinyllama-1.1b   # Hugging Face baseline records
-make build PRESET=cuda && make microbench
+make microbench                      # builds the cuda preset first
 make report DEVICE=rtx3060ti         # figures into reports/
 make predict MODEL=llama-3.2-1b DEVICE=rtx3060ti
 ```

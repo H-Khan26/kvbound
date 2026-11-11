@@ -23,6 +23,21 @@ constexpr std::size_t kWorkspaceBytes = 64u << 20;
 constexpr double kTargetSeconds = 0.25;
 constexpr int kRepeats = 5;
 
+// Fills memory with pseudo-random bytes in [0x30, 0x3B]. Any run of them is a small positive
+// finite number as FP32, FP16 or FP8 and a small integer as INT8, so no format sees zeros,
+// infinities or NaNs. Real operands matter: all-zero data draws less power and runs faster.
+__global__ void fill_kernel(std::uint8_t* bytes, std::size_t n) {
+  const std::size_t n_threads = static_cast<std::size_t>(gridDim.x) * blockDim.x;
+  const std::size_t tid = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  for (std::size_t i = tid; i < n; i += n_threads) {
+    std::uint32_t h = static_cast<std::uint32_t>(i) * 0x9E3779B1u;
+    h ^= h >> 15;
+    h *= 0x85EBCA77u;
+    h ^= h >> 13;
+    bytes[i] = static_cast<std::uint8_t>(0x30u + h % 12u);
+  }
+}
+
 const char* status_name(cublasStatus_t status) {
   switch (status) {
     case CUBLAS_STATUS_SUCCESS:
@@ -62,14 +77,17 @@ struct Precision {
   cublasComputeType_t compute;
   cudaDataType_t scale;        // type of alpha and beta
   int min_compute_capability;  // major * 10 + minor
+  // Stores A as its transpose (k x m) and multiplies by op(A) = A^T. cuBLASLt selects its
+  // INT8 and FP8 tensor-core kernels only for this layout.
+  bool transpose_a;
 };
 
 constexpr Precision kPrecisions[] = {
-    {"fp32", CUDA_R_32F, CUDA_R_32F, CUBLAS_COMPUTE_32F, CUDA_R_32F, 0},
-    {"fp16_acc16", CUDA_R_16F, CUDA_R_16F, CUBLAS_COMPUTE_16F, CUDA_R_16F, 0},
-    {"fp16_acc32", CUDA_R_16F, CUDA_R_16F, CUBLAS_COMPUTE_32F, CUDA_R_32F, 0},
-    {"int8", CUDA_R_8I, CUDA_R_32I, CUBLAS_COMPUTE_32I, CUDA_R_32I, 0},
-    {"fp8_e4m3", CUDA_R_8F_E4M3, CUDA_R_16F, CUBLAS_COMPUTE_32F, CUDA_R_32F, 89},
+    {"fp32", CUDA_R_32F, CUDA_R_32F, CUBLAS_COMPUTE_32F, CUDA_R_32F, 0, false},
+    {"fp16_acc16", CUDA_R_16F, CUDA_R_16F, CUBLAS_COMPUTE_16F, CUDA_R_16F, 0, false},
+    {"fp16_acc32", CUDA_R_16F, CUDA_R_16F, CUBLAS_COMPUTE_32F, CUDA_R_32F, 0, false},
+    {"int8", CUDA_R_8I, CUDA_R_32I, CUBLAS_COMPUTE_32I, CUDA_R_32I, 0, true},
+    {"fp8_e4m3", CUDA_R_8F_E4M3, CUDA_R_16F, CUBLAS_COMPUTE_32F, CUDA_R_32F, 89, true},
 };
 
 // alpha = 1 and beta = 0 encoded in the scale type.
@@ -88,13 +106,21 @@ struct Scalars {
 };
 
 // A planned C[m x n] = A[m x k] * B[k x n] in column-major order, ready to run repeatedly.
+// With Precision::transpose_a the A buffer holds A^T; the product is the same.
 class Gemm {
  public:
   Gemm(cublasLtHandle_t handle, const Precision& p, std::uint64_t m, std::uint64_t n,
        std::uint64_t k)
       : handle_(handle), scalars_(p.scale) {
     status_ = cublasLtMatmulDescCreate(&desc_, p.compute, p.scale);
-    if (ok()) status_ = cublasLtMatrixLayoutCreate(&a_, p.input, m, k, m);
+    if (ok() && p.transpose_a) {
+      const std::int32_t op = CUBLAS_OP_T;
+      status_ = cublasLtMatmulDescSetAttribute(desc_, CUBLASLT_MATMUL_DESC_TRANSA, &op, sizeof(op));
+    }
+    if (ok()) {
+      status_ = p.transpose_a ? cublasLtMatrixLayoutCreate(&a_, p.input, k, m, k)
+                              : cublasLtMatrixLayoutCreate(&a_, p.input, m, k, m);
+    }
     if (ok()) status_ = cublasLtMatrixLayoutCreate(&b_, p.input, k, n, k);
     if (ok()) status_ = cublasLtMatrixLayoutCreate(&c_, p.output, m, n, m);
     if (ok()) status_ = cublasLtMatmulPreferenceCreate(&pref_);
@@ -188,15 +214,16 @@ int main() {
     return 1;
   }
 
-  // One pool reused by every measurement. Zeroed memory is a valid operand in every format, and
-  // GEMM timing does not depend on the values.
+  // One pool reused by every measurement, filled with bytes that form ordinary finite values
+  // in every format (see fill_kernel).
   constexpr std::size_t kPoolBytes = 1u << 30;
   constexpr std::size_t kOutBytes = 512u << 20;
   void *pool = nullptr, *out = nullptr, *workspace = nullptr;
   CUDA_CHECK(cudaMalloc(&pool, kPoolBytes));
   CUDA_CHECK(cudaMalloc(&out, kOutBytes));
   CUDA_CHECK(cudaMalloc(&workspace, kWorkspaceBytes));
-  CUDA_CHECK(cudaMemset(pool, 0, kPoolBytes));
+  fill_kernel<<<1024, 256>>>(static_cast<std::uint8_t*>(pool), kPoolBytes);
+  CUDA_CHECK(cudaGetLastError());
   CUDA_CHECK(cudaMemset(out, 0, kOutBytes));
 
   std::printf("{\n  \"benchmark\": \"gemm_peak\",\n");

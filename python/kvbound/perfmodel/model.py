@@ -71,10 +71,11 @@ class Precision:
 
     @classmethod
     def named(cls, weights: str, kv: str) -> "Precision":
-        # INT4 weights are unpacked to FP16 inside the kernel, so FP16 arithmetic applies.
-        weight = {"fp16": (2.0, "fp16_acc16"), "int8": (1.0, "int8"), "int4": (0.5, "fp16_acc16")}
+        # Quantization here is weight-only: INT8 and INT4 weights are converted to FP16 inside
+        # the kernel and multiplied with FP16 activations, so the FP16 ceiling applies to all.
+        weight_bytes = {"fp16": 2.0, "int8": 1.0, "int4": 0.5}
         kv_bytes = {"fp16": 2.0, "int8": 1.0, "fp8": 1.0}
-        return cls(weight[weights][0], kv_bytes[kv], weight[weights][1])
+        return cls(weight_bytes[weights], kv_bytes[kv], "fp16_acc16")
 
 
 def kv_bytes_per_token(arch: Arch, kv_bytes: float) -> float:

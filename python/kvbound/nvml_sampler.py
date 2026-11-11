@@ -11,14 +11,17 @@ from typing import Any
 
 import pynvml
 
+# A sample counts as taken under load at or above this GPU utilization.
+BUSY_UTIL_PCT = 50
+
 METRICS = ("sm_clock_mhz", "mem_clock_mhz", "temp_c", "power_w", "util_pct", "mem_used_mib")
 
 
 class NvmlSampler:
     """Context manager: samples every `interval_s` between enter and exit.
 
-    The default is slow on purpose: NVML queries stall the GPU briefly, and sampling at 10 Hz
-    lowered measured memory bandwidth by about 5%.
+    Samples once per second by default: NVML queries stall the GPU briefly, and faster sampling
+    lowers measured memory bandwidth.
     """
 
     def __init__(self, gpu_index: int = 0, interval_s: float = 1.0) -> None:
@@ -77,4 +80,15 @@ class NvmlSampler:
                     "mean": sum(values) / len(values),
                     "max": max(values),
                 }
+        # Clock range over the samples where the GPU was working, which leaves out process
+        # start-up, host-side setup and the ramp from idle.
+        busy = [
+            clock
+            for clock, util in zip(
+                self.samples["sm_clock_mhz"], self.samples["util_pct"], strict=True
+            )
+            if util >= BUSY_UTIL_PCT
+        ]
+        if busy:
+            out["sm_clock_mhz_busy"] = {"min": min(busy), "max": max(busy), "n": len(busy)}
         return out

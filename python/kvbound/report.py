@@ -35,7 +35,7 @@ PRECISION_LABELS = {
     "fp32": "FP32",
     "fp16_acc32": "FP16, FP32 accumulate",
     "fp16_acc16": "FP16, FP16 accumulate",
-    "int8": "INT8 (column-major)",
+    "int8": "INT8",
     "fp8_e4m3": "FP8 E4M3",
 }
 

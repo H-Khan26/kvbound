@@ -63,8 +63,8 @@ def require_clean_tree(allow_dirty: bool) -> None:
         )
 
 
-# A run whose slowest SM clock sample is below this fraction of its fastest was throttled or
-# down-clocked by the driver partway through.
+# A run whose slowest SM clock sample under load is below this fraction of its fastest was
+# throttled or down-clocked by the driver partway through.
 CLOCK_STEADY_RATIO = 0.95
 
 
@@ -76,7 +76,7 @@ def _tags(fingerprint: dict[str, Any], nvml: dict[str, Any] | None) -> list[str]
     os_class = fingerprint["software"]["os_class"]
     if os_class != "linux":
         tags.append(f"os={os_class}")  # clocks cannot be locked outside native Linux
-    clock = (nvml or {}).get("sm_clock_mhz")
+    clock = (nvml or {}).get("sm_clock_mhz_busy")
     if clock and clock["min"] < CLOCK_STEADY_RATIO * clock["max"]:
         tags.append("clock_varied")
     return tags
