@@ -1,0 +1,51 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 27, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": { "CMAKE_EXPORT_COMPILE_COMMANDS": "ON" }
+    },
+    {
+      "name": "cpu",
+      "inherits": "base",
+      "displayName": "CPU only, Debug (parser, allocator, scheduler; what CI builds)",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "KVB_ENABLE_CUDA": "OFF" }
+    },
+    {
+      "name": "cuda",
+      "inherits": "base",
+      "displayName": "CUDA for this machine's GPU, Release (benchmarks)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "KVB_ENABLE_CUDA": "ON",
+        "CMAKE_CUDA_ARCHITECTURES": "native"
+      }
+    },
+    {
+      "name": "cuda-relwithdebinfo",
+      "inherits": "cuda",
+      "displayName": "CUDA with line info (Nsight profiling)",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "cpu", "configurePreset": "cpu" },
+    { "name": "cuda", "configurePreset": "cuda" },
+    { "name": "cuda-relwithdebinfo", "configurePreset": "cuda-relwithdebinfo" }
+  ],
+  "testPresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "ignore" }
+    },
+    { "name": "cpu", "inherits": "base", "configurePreset": "cpu" },
+    { "name": "cuda", "inherits": "base", "configurePreset": "cuda" },
+    { "name": "cuda-relwithdebinfo", "inherits": "base", "configurePreset": "cuda-relwithdebinfo" }
+  ]
+}

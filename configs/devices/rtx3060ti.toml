@@ -1,0 +1,18 @@
+# Spec-sheet ceilings. Phase 1 microbenchmarks add a [measured] table next to these.
+name = "NVIDIA GeForce RTX 3060 Ti"
+arch = "ampere"
+compute_capability = "8.6"
+sm_count = 38
+tensor_cores = 152
+boost_clock_mhz = 1665
+memory_gb = 8
+memory_type = "GDDR6"
+memory_bus_bits = 256
+memory_bandwidth_gbs = 448
+l2_cache_mb = 4
+
+[spec_peak_dense]
+fp32_tflops = 16.2
+fp16_tensor_fp16acc_tflops = 64.8
+fp16_tensor_fp32acc_tflops = 32.4  # GeForce runs FP32 accumulate at half rate
+int8_tensor_tops = 129.6

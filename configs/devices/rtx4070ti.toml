@@ -1,0 +1,20 @@
+# Spec-sheet ceilings. Phase 1 microbenchmarks add a [measured] table next to these.
+name = "NVIDIA GeForce RTX 4070 Ti"
+arch = "ada"
+compute_capability = "8.9"
+sm_count = 60
+tensor_cores = 240
+boost_clock_mhz = 2610
+memory_gb = 12
+memory_type = "GDDR6X"
+memory_bus_bits = 192
+memory_bandwidth_gbs = 504
+l2_cache_mb = 48
+
+[spec_peak_dense]
+fp32_tflops = 40.1
+fp16_tensor_fp16acc_tflops = 160.4
+fp16_tensor_fp32acc_tflops = 80.2  # GeForce runs FP32 accumulate at half rate
+int8_tensor_tops = 320.7
+fp8_tensor_fp16acc_tflops = 320.7
+fp8_tensor_fp32acc_tflops = 160.4

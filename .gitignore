@@ -1,0 +1,29 @@
+# Build trees (one per CMake preset)
+build/
+out/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Model weights and real-model goldens (manifests are committed)
+data/**
+!data/**/
+!data/**/manifest.json
+
+# Profiler reports go to GitHub Release assets; CSV summaries are committed
+*.nsys-rep
+*.ncu-rep
+*.qdrep
+*.sqlite
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
