@@ -1,4 +1,4 @@
-.PHONY: help setup doctor build test test-real fetch fixture golden bench-hf microbench lint format typecheck clean
+.PHONY: help setup doctor build test test-real fetch fixture golden bench-hf microbench report predict lint format typecheck clean
 
 # torch wheel: cu128 on GPU machines, cpu in CI and on machines without a GPU
 TORCH ?= cu128
@@ -6,6 +6,8 @@ TORCH ?= cu128
 PRESET ?= cpu
 # Model name from configs/models/
 MODEL ?= tinyllama-1.1b
+# Device name from configs/devices/
+DEVICE ?= rtx3060ti
 
 # On Windows, recipes need a POSIX sh (Git Bash) and cmake/ctest run inside the MSVC environment.
 ifeq ($(OS),Windows_NT)
@@ -52,6 +54,12 @@ bench-hf:         ## Hugging Face baseline: batch 1, batch 8, and a long prompt 
 
 microbench:       ## hardware microbenchmarks: bandwidth, latency, GEMM peaks (needs PRESET=cuda build)
 	uv run python -m kvbound.microbench
+
+report:           ## roofline, bandwidth and latency figures from the records (DEVICE=...)
+	uv run python -m kvbound.report --device $(DEVICE)
+
+predict:          ## latency bounds from the perf model (MODEL=... DEVICE=...)
+	uv run python -m kvbound.perfmodel --model $(MODEL) --device $(DEVICE)
 
 lint:             ## ruff lint + format check, clang-format check
 	uv run ruff check .

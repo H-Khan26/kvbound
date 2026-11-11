@@ -15,9 +15,13 @@ METRICS = ("sm_clock_mhz", "mem_clock_mhz", "temp_c", "power_w", "util_pct", "me
 
 
 class NvmlSampler:
-    """Context manager: samples every `interval_s` between enter and exit."""
+    """Context manager: samples every `interval_s` between enter and exit.
 
-    def __init__(self, gpu_index: int = 0, interval_s: float = 0.1) -> None:
+    The default is slow on purpose: NVML queries stall the GPU briefly, and sampling at 10 Hz
+    lowered measured memory bandwidth by about 5%.
+    """
+
+    def __init__(self, gpu_index: int = 0, interval_s: float = 1.0) -> None:
         self.gpu_index = gpu_index
         self.interval_s = interval_s
         self.t: list[float] = []
