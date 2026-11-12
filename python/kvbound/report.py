@@ -61,9 +61,9 @@ def _figure(title: str, subtitle: str) -> tuple[Figure, Axes]:
     return fig, ax
 
 
-def _save(fig: Figure, path: Path) -> Path:
+def _save(fig: Figure, path: Path, top: float = 0.95) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.tight_layout(rect=(0, 0, 1, top))
     fig.savefig(path, facecolor=SURFACE)
     plt.close(fig)
     return path
@@ -286,7 +286,6 @@ def kv_layout(records: dict[str, dict[str, Any]]) -> Figure:
     axes[0].set_yticks(ticks, [f"{t:g}" for t in ticks])
     axes[0].set_ylabel("milliseconds per step, all layers", color=INK_2, fontsize=9)
     axes[0].legend(loc="upper left", frameon=False, fontsize=8, labelcolor=INK_2)
-    fig.tight_layout(rect=(0, 0, 1, 0.8))
     return fig
 
 
@@ -344,7 +343,6 @@ def static_memory(serve: dict[tuple[str, int], dict[str, Any]], slots: int) -> F
         ax.set_xlim(0, max(t))
     axes[0].set_ylabel("KV cache (MiB)", color=INK_2, fontsize=9)
     axes[-1].legend(loc="center right", frameon=False, fontsize=8.5, labelcolor=INK_2)
-    fig.tight_layout(rect=(0, 0, 1, 0.8))
     return fig
 
 
@@ -400,11 +398,11 @@ def main() -> None:
     print(_save(bandwidth(args.device, records), out / "bandwidth.png"))
     print(_save(latency(records), out / "latency.png"))
     if "kv_layout" in records:
-        print(_save(kv_layout(records), out / "kv_layout.png"))
+        print(_save(kv_layout(records), out / "kv_layout.png", top=0.85))
     serve = latest_serve_records(args.device, args.model)
     slots = max((n for _, n in serve), default=0)
     if slots:
-        print(_save(static_memory(serve, slots), out / "static_memory.png"))
+        print(_save(static_memory(serve, slots), out / "static_memory.png", top=0.85))
         print(
             _save(
                 arena(next(rec for (_, n), rec in serve.items() if n == slots)), out / "arena.png"

@@ -4,24 +4,24 @@
   "gpu_ms_per_step_total": 0,
   "api_per_step": {
     "cudaStreamSynchronize": {
-      "ms": 7.06454743359375,
+      "ms": 6.90033865625,
       "calls": 1.0078125,
-      "median_us": 7156.19
+      "median_us": 6993.8765
     },
     "cudaGraphLaunch_v10000": {
-      "ms": 0.11154610546875,
+      "ms": 0.12903241015625,
       "calls": 1.0,
-      "median_us": 110.81
+      "median_us": 125.697
     },
     "cudaLaunchKernel": {
-      "ms": 0.04522132421875,
+      "ms": 0.0449356640625,
       "calls": 2.18359375,
-      "median_us": 0.798
+      "median_us": 0.849
     },
     "cuLaunchKernel": {
-      "ms": 8.351171875e-05,
+      "ms": 9.110546875e-05,
       "calls": 0.0859375,
-      "median_us": 0.6295
+      "median_us": 0.689
     }
   }
 }

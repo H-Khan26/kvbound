@@ -41,7 +41,7 @@ def find_nsys() -> str:
 
 def kernel_family(name: str) -> str:
     """Groups demangled kernel names: the engine's own by name, cuBLAS by kind."""
-    if own := re.search(r"kvb::kernels::.*?(\w+)_kernel\(", name):
+    if own := re.search(r"kvb::kernels::.*?(\w+)_kernel[<(]", name):
         return own.group(1)
     if "gemv" in name:
         return "cublas gemv"

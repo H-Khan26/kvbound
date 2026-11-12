@@ -4,11 +4,12 @@ A from-scratch LLM inference engine in C++ and CUDA. It implements two KV-cache 
 preallocated one (how phone NPU runtimes work) and a paged one with continuous batching (how GPU serving systems
 work), then quantizes and profiles both against the roofline of an RTX 3060 Ti (Ampere) and an RTX 4070 Ti (Ada).
 
-**Status:** Phases 0 to 2 are done on the RTX 3060 Ti: reference model, golden tensors, hardware ceilings, the
-analytical performance model, and a single-sequence FP16 engine that generates the same tokens as the reference model.
+**Status:** Phases 0 to 3 are done on the RTX 3060 Ti: reference model, golden tensors, hardware ceilings, the
+analytical performance model, an FP16 engine that generates the same tokens as the reference model, and the static
+memory design (preallocated KV slots, static batching, planned activation arena). The paged KV cache is next.
 The RTX 4070 Ti runs are pending.
 
-## Where things stand (RTX 3060 Ti, TinyLlama 1.1B, FP16, batch 1)
+## Where things stand (RTX 3060 Ti, TinyLlama 1.1B, FP16)
 
 | Quantity | Value | Source |
 | --- | --- | --- |
@@ -16,19 +17,44 @@ The RTX 4070 Ti runs are pending.
 | Memory bandwidth beyond cache, sustained 0.1 s | about 367 GB/s; other desktop programs take turns on the GPU | `kvb-bandwidth_sweep` |
 | Dependent-load latency, L1 / L2 / DRAM | about 21 / 135 / 312 ns | `kvb-pointer_chase` |
 | GEMM peak, FP16 with FP16 / FP32 accumulate; INT8 | about 58 / 33 TFLOPS; 115 TOPS | `kvb-gemm_peak` (cuBLASLt) |
-| Decode ceiling | about 200 tokens/s (weights 2.07 GB read once per token) | `python -m kvbound.perfmodel` |
-| **kvbound decode** | **136 tokens/s, 68% of the ceiling** (7.3 ms per token; 123 tokens/s without CUDA graphs) | `python -m kvbound.bench` |
-| kvbound time to first token | 20 ms for a 128-token prompt, 511 ms for 1,024 tokens | `python -m kvbound.bench` |
-| Hugging Face Transformers decode | 17 to 33 tokens/s, depending on where the unlocked GPU clock settles | `python -m kvbound.baselines.hf` |
+| Decode ceiling, batch 1 | about 200 tokens/s (weights 2.07 GB read once per token) | `python -m kvbound.perfmodel` |
+| **kvbound decode, batch 1** | **144 tokens/s, 72% of the ceiling** (6.9 ms per token; 128 tokens/s without CUDA graphs) | `python -m kvbound.bench` |
+| kvbound time to first token | 15 ms for a 128-token prompt, 201 ms for 1,024 tokens | `python -m kvbound.bench` |
+| **kvbound static batching, 8 slots** | 792 tokens/s on equal-length requests, 360 tokens/s on long-tailed lengths (134 to 138 one at a time) | `python -m kvbound.serve` |
+| Hugging Face Transformers decode, batch 1 | 17 to 33 tokens/s, depending on where the unlocked GPU clock settles | `python -m kvbound.baselines.hf` |
 
 Greedy output matches the reference model token for token on every golden prompt, and every intermediate activation
 stays within the FP16 limits in the golden manifest (`make test-real`).
 
-Where a decode step's GPU time goes (Nsight Systems, `results/profiles/`): 89% in cuBLAS streaming the weights, 4% in
+Where a decode step's GPU time goes (Nsight Systems, `results/profiles/`): 90% in cuBLAS streaming the weights, 3% in
 attention, 7% in the small kernels (norms, RoPE, residual adds). Launching the step's 357 kernels one by one costs about
-1.5 ms of CPU time; replaying them from a CUDA graph costs 0.11 ms.
+1.5 ms of CPU time; replaying them from a CUDA graph costs 0.13 ms.
 
-Known gap: prefill attention is the naive per-query kernel, so long prompts are slow (511 ms against a 36 ms bound).
+### What the static memory design costs
+
+The static design preallocates the whole KV cache (8 slots of 1,024 tokens, 176 MiB) and gives every admitted sequence
+a full slot until its batch ends.
+
+| Workload (48 requests) | Tokens/s | Reserved KV memory holding tokens | Slots busy |
+| --- | --- | --- | --- |
+| `fixed`: 256-token prompts, 128-token outputs | 792 | 29% | 99% |
+| `uniform`: prompts 32 to 512, outputs 16 to 256 | 599 | 32% | 71% |
+| `longtail`: lognormal, median prompt 64 and output 48 | 360 | 16% | 37% |
+
+![KV memory under static batching](reports/rtx3060ti/static_memory.png)
+
+Two more results from this phase:
+
+- **KV layout.** Three orderings of the cache's dimensions were benchmarked with the engine's own kernels. Which
+  dimension is outermost changes attention time by under 10%. What matters is how many memory requests a warp issues:
+  reading each 128-byte key as eight 16-byte loads instead of 64 two-byte loads is 2.9 times faster, and only layouts
+  that keep a key's dimensions adjacent allow it. Figure: `reports/rtx3060ti/kv_layout.png`.
+- **Activation memory.** The forward pass has 225 intermediate tensors. Side by side they would need 1,039 MiB for
+  1,024-token steps; placed by lifetime in one arena they share 30 MiB, which is also the lower bound. Figure:
+  `reports/rtx3060ti/arena.png`.
+
+Known gaps: prefill attention is still the simple per-query kernel (201 ms for 1,024 tokens against a 36 ms bound), and
+cuBLAS is slower per token at batch 8 than at batch 1.
 
 These runs come from Windows (WDDM), where GPU clocks cannot be locked, so every record is tagged `os=windows`, and
 `clock_varied` when the clock moved during the run. Numbers meant for publication come from native Ubuntu with locked
@@ -40,17 +66,17 @@ clocks. Exact values are in `results/raw/` and the figures in `reports/`.
 
 | Path | What lives there |
 | --- | --- |
-| `engine/` | the C++ side. `kvbound` (CPU only): safetensors and JSON loaders, the op program, the activation memory planner, the sampler, cache bookkeeping. `kvbound_cuda`: kernels, device weights, KV pool, the engine |
+| `engine/` | the C++ side. `kvbound` (CPU only): safetensors and JSON loaders, the op program, the activation memory planner, the scheduler, the sampler, cache bookkeeping. `kvbound_cuda`: kernels, device weights, KV pool, the engine |
 | `engine/kernels/` | CUDA kernels: embedding, RMSNorm, RoPE, SwiGLU gate, residual add, attention over the KV cache, argmax; cuBLAS for matrix products |
-| `apps/kvb-bench` | runs a trace of requests and prints raw token timestamps |
+| `apps/` | `kvb-bench` runs a trace of requests through the scheduler and prints raw timings; `kvb-kv_layout` times attention on each KV layout |
 | `bindings/` | `_kvb`, the engine and each kernel as a Python extension, for tests |
 | `microbench/` | standalone CUDA binaries that measure bandwidth, latency and GEMM peaks |
 | `python/kvbound/ref/` | from-scratch PyTorch reference model (RMSNorm, RoPE, grouped-query attention, SwiGLU) |
 | `python/kvbound/` | golden tensors, tolerance metrics, result records, fingerprint, baselines, perf model, bench and profile wrappers, plots |
 | `fixtures/tiny-llama/` | committed 2-layer random model with goldens and thresholds; what CI tests against |
-| `tests/cpp/` | GoogleTest, CPU only: parser, loader, fixture contract, op program, memory plan, sampler, allocator |
+| `tests/cpp/` | GoogleTest, CPU only: parser, loader, fixture contract, op program, memory plan, scheduler, sampler, allocator |
 | `tests/py/` | pytest: reference vs Hugging Face; under the `gpu` marker, each kernel vs torch and the engine vs the goldens |
-| `configs/` | model and device descriptions |
+| `configs/` | model, device and workload descriptions |
 | `results/raw/<device>/` | one JSON record per benchmark run, written only by `kvbound.record` |
 | `results/profiles/` | Nsight Systems summaries (CSV) of decode runs |
 | `reports/<device>/` | figures generated from the records |
@@ -76,8 +102,9 @@ make fetch MODEL=tinyllama-1.1b      # pinned checkpoint into data/models/
 make golden MODEL=tinyllama-1.1b     # golden tensors into data/golden/ (manifest is committed)
 make test-real                       # reference vs Hugging Face, engine vs reference, on the real checkpoint
 make bench-hf MODEL=tinyllama-1.1b   # Hugging Face baseline records
-make microbench                      # hardware ceilings; builds the cuda preset first
-make bench MODEL=tinyllama-1.1b      # kvbound engine records
+make microbench                      # hardware ceilings and the KV layout benchmark; builds the cuda preset first
+make bench MODEL=tinyllama-1.1b      # kvbound engine records, one request at a time
+make serve MODEL=tinyllama-1.1b      # static batching on the three workloads
 make profile MODEL=tinyllama-1.1b    # Nsight Systems decode profiles
 make report MODEL=tinyllama-1.1b DEVICE=rtx3060ti   # figures into reports/
 make predict MODEL=llama-3.2-1b DEVICE=rtx3060ti

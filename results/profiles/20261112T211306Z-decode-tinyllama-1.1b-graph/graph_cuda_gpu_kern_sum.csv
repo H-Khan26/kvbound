@@ -1,3 +1,0 @@
-Time (%),Total Time (ns),Instances,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
-50.3,13612784,201,67725.3,51744.0,1120,798662,94644.4,"kvb::kernels::<unnamed>::bf16_to_f16_kernel(unsigned short *, unsigned long long)"
-49.7,13445144,1,13445144.0,13445144.0,13445144,13445144,0.0,"kvb::kernels::<unnamed>::count_non_finite_kernel(const unsigned short *, unsigned long long, unsigned long long *)"

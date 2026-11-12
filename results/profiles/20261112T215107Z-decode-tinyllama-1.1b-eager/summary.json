@@ -2,70 +2,70 @@
   "steps": 256,
   "gpu_ms_per_step": {
     "cublas gemv": {
-      "ms": 4.189862121093751,
+      "ms": 4.194563707031251,
       "launches": 133.0
     },
     "cublas gemm": {
-      "ms": 1.46625751171875,
+      "ms": 1.45176930859375,
       "launches": 22.0
     },
     "attention": {
-      "ms": 0.2709058984375,
+      "ms": 0.18105876171875,
       "launches": 22.0
     },
     "rms_norm": {
-      "ms": 0.18227561328125,
+      "ms": 0.18074896875,
       "launches": 45.0
     },
     "rope": {
-      "ms": 0.067632234375,
+      "ms": 0.06781126953125,
       "launches": 44.0
     },
     "add": {
-      "ms": 0.0604663125,
+      "ms": 0.0607861171875,
       "launches": 44.0
     },
-    "other": {
-      "ms": 0.0431730390625,
+    "silu_mul": {
+      "ms": 0.0426279453125,
       "launches": 22.0
     },
-    "silu_mul": {
-      "ms": 0.04240387109375,
+    "other": {
+      "ms": 0.0424539453125,
       "launches": 22.0
     },
     "kv_write": {
-      "ms": 0.03341136328125,
+      "ms": 0.03313980859375,
       "launches": 22.0
     },
     "argmax": {
-      "ms": 0.005986796875,
+      "ms": 0.0058997734375,
       "launches": 1.0
     },
     "embedding": {
-      "ms": 0.001600140625,
+      "ms": 0.00160138671875,
       "launches": 1.0
     },
     "gather_rows": {
-      "ms": 0.00137912890625,
+      "ms": 0.00136687890625,
       "launches": 1.0
     }
   },
-  "gpu_ms_per_step_total": 6.365354031250001,
+  "gpu_ms_per_step_total": 6.263827871093751,
   "api_per_step": {
     "cudaStreamSynchronize": {
-      "ms": 5.098311671875,
+      "ms": 5.21269633984375,
       "calls": 1.0078125,
-      "median_us": 5435.2
+      "median_us": 5329.5545
     },
     "cudaLaunchKernel": {
-      "ms": 1.57097025,
+      "ms": 1.36709461328125,
       "calls": 357.7890625,
-      "median_us": 3.317
+      "median_us": 3.297
     },
     "cuLaunchKernel": {
-      "ms": 0.1099839609375,
+      "ms": 0.1086144921875,
       "calls": 22.0,
-      "median_us": 3.4255
+      "median_us": 3.416
     }
   }
 }
