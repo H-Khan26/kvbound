@@ -143,10 +143,15 @@ void LlamaModel::run(const StepRow* rows, const std::int32_t* out_rows, int n_to
         kernels::kv_write(value<f16>(op.in0), value<f16>(op.in1), rows, kv.layer_view(op.layer),
                           n_tokens, n_kv_heads, head_dim, stream);
         break;
-      case OpKind::Attention:
-        kernels::attention(value<f16>(op.in0), value<f16>(op.out), rows, kv.layer_view(op.layer),
-                           n_tokens, n_heads, n_kv_heads, head_dim, limits_.max_ctx, stream);
+      case OpKind::Attention: {
+        const KvView view = kv.layer_view(op.layer);
+        kernels::attention(value<f16>(op.in0), value<f16>(op.out), rows, view, n_tokens, n_heads,
+                           n_kv_heads, head_dim, limits_.max_ctx,
+                           limits_.wide_key_loads ? kernels::widest_key_loads(view, head_dim)
+                                                  : kernels::KeyLoads::Scalar,
+                           stream);
         break;
+      }
       case OpKind::SiluMul:
         kernels::silu_mul(value<f16>(op.in0), value<f16>(op.in1),
                           static_cast<std::size_t>(n_rows) * in0->cols, stream);

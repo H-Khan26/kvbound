@@ -17,6 +17,7 @@
 #include "kvbound/cuda/engine.h"
 #include "kvbound/cuda/generate.h"
 #include "kvbound/cuda/kernels.h"
+#include "kvbound/cuda/serve.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -157,7 +158,7 @@ nb::object linear(In<f16> weight, In<f16> x, const std::string& accumulate, bool
 Out<f16> kv_attention(In<f16> q, In<f16> k, In<f16> v, In<std::int32_t> positions,
                       In<std::int32_t> seqs, In<std::int32_t> kv_slots,
                       In<std::int32_t> block_table, int block_size, int n_blocks,
-                      const std::string& layout, int query_from) {
+                      const std::string& layout, int query_from, bool wide_key_loads) {
   const int n_tokens = static_cast<int>(q.shape(0)), n_heads = static_cast<int>(q.shape(1));
   const int head_dim = static_cast<int>(q.shape(2)), n_kv_heads = static_cast<int>(k.shape(1));
   const int blocks_per_seq = static_cast<int>(block_table.shape(1));
@@ -190,7 +191,10 @@ Out<f16> kv_attention(In<f16> q, In<f16> k, In<f16> v, In<std::int32_t> position
   const int n_query = n_tokens - query_from;
   kvb::kernels::attention(dq.as<f16>() + static_cast<std::size_t>(query_from) * n_heads * head_dim,
                           out.as<f16>(), dr.as<StepRow>() + query_from, view, n_query, n_heads,
-                          n_kv_heads, head_dim, max_ctx, nullptr);
+                          n_kv_heads, head_dim, max_ctx,
+                          wide_key_loads ? kvb::kernels::widest_key_loads(view, head_dim)
+                                         : kvb::kernels::KeyLoads::Scalar,
+                          nullptr);
   return download<f16>(out.as(), {static_cast<std::size_t>(n_query), q.shape(1), q.shape(2)});
 }
 
@@ -203,7 +207,7 @@ class PyEngine {
  public:
   PyEngine(const std::string& model_dir, int max_ctx, int max_seqs, int max_step_tokens,
            int kv_block_size, const std::string& kv_layout, const std::string& gemm, bool graph,
-           const std::string& plan)
+           const std::string& plan, bool wide_key_loads)
       : engine_(model_dir, kvb::cuda::EngineConfig{
                                .max_ctx = max_ctx,
                                .max_seqs = max_seqs,
@@ -213,6 +217,7 @@ class PyEngine {
                                .plan = plan == "naive" ? kvb::PlanStrategy::Naive
                                                        : kvb::PlanStrategy::GreedyBySize,
                                .gemm = accumulate_from(gemm),
+                               .wide_key_loads = wide_key_loads,
                                .use_graph = graph,
                            }) {}
 
@@ -257,6 +262,25 @@ class PyEngine {
          .eos_token_id = eos_token_id});
   }
 
+  // Serves the prompts with static batching over the engine's max_seqs slots; returns each
+  // request's new tokens, in request order.
+  std::vector<std::vector<std::int32_t>> serve(
+      const std::vector<std::vector<std::int32_t>>& prompts,
+      const std::vector<int>& max_new_tokens) {
+    if (prompts.size() != max_new_tokens.size()) throw kvb::Error("one length per prompt");
+    std::vector<kvb::cuda::ServeRequest> requests;
+    for (std::size_t i = 0; i < prompts.size(); ++i) {
+      requests.push_back({static_cast<int>(i), prompts[i], max_new_tokens[i]});
+    }
+    std::vector<std::vector<std::int32_t>> tokens(prompts.size());
+    kvb::cuda::serve(engine_, requests, [&](const kvb::cuda::ServeStep& step) {
+      for (const kvb::StepResult::Token& token : step.result.tokens) {
+        tokens[token.seq].push_back(token.token);
+      }
+    });
+    return tokens;
+  }
+
  private:
   kvb::cuda::Engine engine_;
 };
@@ -274,15 +298,16 @@ NB_MODULE(_kvb, m) {
   m.def("linear", &linear, "weight"_a, "x"_a, "accumulate"_a = "fp32", "f32_out"_a = false);
   m.def("kv_attention", &kv_attention, "q"_a, "k"_a, "v"_a, "positions"_a, "seqs"_a, "kv_slots"_a,
         "block_table"_a, "block_size"_a, "n_blocks"_a, "layout"_a = "head_major",
-        "query_from"_a = 0);
+        "query_from"_a = 0, "wide_key_loads"_a = true);
 
   nb::class_<PyEngine>(m, "Engine")
       .def(nb::init<const std::string&, int, int, int, int, const std::string&, const std::string&,
-                    bool, const std::string&>(),
+                    bool, const std::string&, bool>(),
            "model_dir"_a, "max_ctx"_a = 2048, "max_seqs"_a = 1, "max_step_tokens"_a = 0,
            "kv_block_size"_a = 0, "kv_layout"_a = "head_major", "gemm"_a = "fp32", "graph"_a = true,
-           "plan"_a = "greedy")
+           "plan"_a = "greedy", "wide_key_loads"_a = true)
       .def("feed", &PyEngine::feed, "ids"_a, "start"_a = 0, "seq"_a = 0, "capture"_a = false)
       .def("generate", &PyEngine::generate, "prompt"_a, "max_new_tokens"_a, "temperature"_a = 0.0f,
-           "top_k"_a = 0, "top_p"_a = 1.0f, "seed"_a = 0, "eos_token_id"_a = -1);
+           "top_k"_a = 0, "top_p"_a = 1.0f, "seed"_a = 0, "eos_token_id"_a = -1)
+      .def("serve", &PyEngine::serve, "prompts"_a, "max_new_tokens"_a);
 }

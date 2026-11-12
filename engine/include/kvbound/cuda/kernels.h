@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 #include "kvbound/kv_layout.h"
 #include "kvbound/step.h"
@@ -45,11 +46,22 @@ void argmax(const float* logits, std::int32_t* out, int n_rows, int n_cols, cuda
 void kv_write(const f16* k, const f16* v, const StepRow* rows, const KvView& kv, int n_tokens,
               int n_kv_heads, int head_dim, cudaStream_t stream);
 
+// How attention() reads a cached key when it computes scores.
+enum class KeyLoads : std::uint8_t {
+  Scalar,  // one FP16 element per load: works with every layout
+  Wide,    // 16 bytes per load: needs adjacent dimensions (dim_stride 1) and head_dim % 8 == 0
+};
+
+std::string_view key_loads_name(KeyLoads loads) noexcept;
+// Wide when the layout and head_dim allow it, else Scalar.
+KeyLoads widest_key_loads(const KvView& kv, int head_dim) noexcept;
+
 // Causal attention of each row's queries q [n_tokens, n_heads, head_dim] over the cached keys
 // and values of its sequence, positions 0..row.position. Query head h reads KV head
 // h / (n_heads / n_kv_heads). Scores and the softmax are FP32. max_ctx bounds row.position + 1.
 void attention(const f16* q, f16* out, const StepRow* rows, const KvView& kv, int n_tokens,
-               int n_heads, int n_kv_heads, int head_dim, int max_ctx, cudaStream_t stream);
+               int n_heads, int n_kv_heads, int head_dim, int max_ctx, KeyLoads loads,
+               cudaStream_t stream);
 
 // Largest max_ctx attention() accepts for this head_dim (its scores live in shared memory);
 // 0 when head_dim itself is unsupported.

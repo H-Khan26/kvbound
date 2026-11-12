@@ -129,10 +129,11 @@ def reference_attention(q, k, v, positions, seqs, n_rep, query_from=0):
     return out
 
 
+@pytest.mark.parametrize("wide", [True, False])
 @pytest.mark.parametrize("layout", ["head_major", "token_major", "dim_major"])
 @pytest.mark.parametrize("block_size", [4, 64])
 @pytest.mark.parametrize("head_dim", [16, 64])
-def test_attention_over_interleaved_sequences(kvb, gen, head_dim, block_size, layout):
+def test_attention_over_interleaved_sequences(kvb, gen, head_dim, block_size, layout, wide):
     """Three sequences of different lengths, tokens shuffled, blocks assigned out of order."""
     n_heads, n_kv_heads, lengths = 4, 2, [1, 23, 50]
     blocks_per_seq = math.ceil(max(lengths) / block_size)
@@ -154,14 +155,16 @@ def test_attention_over_interleaved_sequences(kvb, gen, head_dim, block_size, la
         kvb.kv_attention(
             bits(q), bits(k), bits(v), positions.numpy(), seqs.numpy(), slots.numpy(),
             physical.to(torch.int32).numpy(), block_size, n_blocks, layout,
+            wide_key_loads=wide,
         )
     )  # fmt: skip
     expected = reference_attention(q, k, v, positions, seqs, n_heads // n_kv_heads)
     assert tolerance.rel_rms(actual, expected) < 2 * F16_ROUNDING
 
 
+@pytest.mark.parametrize("wide", [True, False])
 @pytest.mark.parametrize("layout", ["head_major", "token_major", "dim_major"])
-def test_attention_long_context_single_query(kvb, gen, layout):
+def test_attention_long_context_single_query(kvb, gen, layout, wide):
     """One query over 1,500 cached positions: the decode shape, with several keys per thread."""
     n_heads, n_kv_heads, head_dim, ctx = 4, 2, 64, 1500
     q, k, v = (rand_f16(gen, ctx, h, head_dim) for h in (n_heads, n_kv_heads, n_kv_heads))
@@ -171,7 +174,7 @@ def test_attention_long_context_single_query(kvb, gen, layout):
     actual = from_bits(
         kvb.kv_attention(
             bits(q), bits(k), bits(v), positions.numpy(), seqs.numpy(), positions.numpy(),
-            table, ctx, 1, layout, query_from=ctx - 1,
+            table, ctx, 1, layout, query_from=ctx - 1, wide_key_loads=wide,
         )
     )  # fmt: skip
     expected = reference_attention(q, k, v, positions, seqs, n_heads // n_kv_heads, ctx - 1)[-1:]

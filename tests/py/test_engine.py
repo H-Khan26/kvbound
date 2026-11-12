@@ -114,11 +114,28 @@ def test_fixture_greedy_matches_reference(kvb):
         assert engine.generate(prompt, 40) == expected
 
 
+def test_static_batches_match_reference(kvb):
+    """More requests than slots, of different lengths: each still gets the reference's tokens."""
+    model = load_llama(FIXTURE_DIR)
+    prompts = [*fixture_prompts(), [9, 8, 7], [200, 3], list(range(40, 60)), [5]]
+    lengths = [12, 3, 25, 1, 17, 6, 9]
+    expected = [reference_greedy(model, p, n)[0] for p, n in zip(prompts, lengths, strict=True)]
+    for options in ({"max_seqs": 3}, {"max_seqs": 4, "max_step_tokens": 7, "kv_block_size": 8}):
+        engine = kvb.Engine(str(FIXTURE_DIR), max_ctx=64, **options)
+        assert engine.serve(prompts, lengths) == expected
+        assert engine.serve(prompts[:2], lengths[:2]) == expected[:2]  # the engine is reusable
+
+
 def test_generation_is_the_same_on_every_path(kvb):
     """Graphs, chunked prefill, small KV blocks and the CPU sampler all give the greedy tokens."""
     prompt = fixture_prompts()[-1]
     expected = kvb.Engine(str(FIXTURE_DIR), max_ctx=64, graph=False).generate(prompt, 30)
-    for options in ({"graph": True}, {"max_step_tokens": 5}, {"kv_block_size": 4}):
+    for options in (
+        {"graph": True},
+        {"max_step_tokens": 5},
+        {"kv_block_size": 4},
+        {"wide_key_loads": False},
+    ):
         assert kvb.Engine(str(FIXTURE_DIR), max_ctx=64, **options).generate(prompt, 30) == expected
     engine = kvb.Engine(str(FIXTURE_DIR), max_ctx=64)
     # top_k=1 leaves one candidate, so sampling on the CPU must agree with the device argmax.

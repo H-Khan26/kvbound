@@ -38,6 +38,8 @@ struct LlamaModelConfig {
   int max_outputs = 0;      // logit rows of the largest step
   PlanStrategy plan = PlanStrategy::GreedyBySize;
   GemmAccumulate gemm = GemmAccumulate::F32;
+  // Read cached keys 16 bytes at a time where the KV layout allows it.
+  bool wide_key_loads = true;
 };
 
 // A Llama checkpoint on the device plus everything one forward pass needs: the op program, the

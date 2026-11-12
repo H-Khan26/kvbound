@@ -31,6 +31,7 @@ if(KVB_ENABLE_CUDA)
     model/llama/weights.cpp
     runtime/engine.cpp
     runtime/generate.cpp
+    runtime/serve.cpp
   )
   add_library(kvbound::cuda ALIAS kvbound_cuda)
   target_link_libraries(kvbound_cuda PUBLIC kvbound CUDA::cudart CUDA::cublas PRIVATE kvb_warnings)

@@ -4,7 +4,7 @@ The C++/CUDA binaries under build/<preset>/bin print raw JSON; this wrapper samp
 they run, reduces the raw points to the handful of ceilings the perf model needs, and writes the
 result record.
 
-Usage: python -m kvbound.microbench [bandwidth_sweep pointer_chase gemm_peak]
+Usage: python -m kvbound.microbench [bandwidth_sweep pointer_chase gemm_peak kv_layout]
 """
 
 import argparse
@@ -73,10 +73,27 @@ def summarize_gemm(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def summarize_kv_layout(raw: dict[str, Any]) -> dict[str, Any]:
+    """Attention milliseconds per step for each layout and key-load width.
+
+    Decode entries are at the longest context, keyed by batch size; prefill is one prompt.
+    """
+    longest = max(p["ctx"] for p in raw["points"] if p["shape"] == "decode")
+    metrics: dict[str, Any] = {"decode_ctx": longest, "attention_ms": {}}
+    for p in raw["points"]:
+        variant = metrics["attention_ms"].setdefault(f"{p['layout']}/{p['key_loads']}", {})
+        if p["shape"] == "prefill":
+            variant["prefill"] = p["attention_ms"]
+        elif p["ctx"] == longest:
+            variant[f"decode_batch{p['batch']}"] = p["attention_ms"]
+    return metrics
+
+
 SUMMARIZERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "bandwidth_sweep": summarize_bandwidth,
     "pointer_chase": summarize_pointer_chase,
     "gemm_peak": summarize_gemm,
+    "kv_layout": summarize_kv_layout,
 }
 
 

@@ -29,6 +29,8 @@ struct EngineConfig {
   KvLayout kv_layout = KvLayout::HeadMajor;
   PlanStrategy plan = PlanStrategy::GreedyBySize;
   GemmAccumulate gemm = GemmAccumulate::F32;
+  // Read cached keys 16 bytes at a time where the KV layout allows it.
+  bool wide_key_loads = true;
   // Replays decode-shaped steps from a captured CUDA graph instead of launching each kernel.
   bool use_graph = true;
 };
@@ -63,6 +65,9 @@ class Engine {
   const EngineConfig& config() const noexcept { return config_; }
   const Program& program() const noexcept { return model_->program(); }
   EngineMemory memory() const;
+  // Where each program value lives in the activation arena, and its size at the largest step.
+  const MemoryPlan& memory_plan() const noexcept { return model_->memory_plan(); }
+  const std::vector<std::size_t>& value_sizes() const noexcept { return model_->value_sizes(); }
   int kv_block_size() const noexcept { return static_cast<int>(kv_->dims().block_size); }
   int kv_free_blocks() const noexcept { return blocks_.n_free(); }
 

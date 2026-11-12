@@ -1,6 +1,10 @@
-// Runs a trace of generation requests through the engine and prints raw timings as one JSON
-// object on stdout. It computes no metrics and writes no files: the Python wrapper
-// (kvbound.bench) derives TTFT/TPOT, adds the machine fingerprint and writes the result record.
+// Runs a trace of generation requests through the scheduler and the engine and prints raw
+// timings as one JSON object on stdout. It computes no metrics and writes no files: the Python
+// wrapper (kvbound.bench) derives TTFT/TPOT and memory use, adds the machine fingerprint and
+// writes the result record.
+//
+// Every request is queued at time zero. With --slots 1 they run one after another; with more
+// slots they run in static batches.
 //
 // Trace file: {"requests": [{"id": 0, "prompt": [1, 2, ...], "max_new_tokens": 64}, ...]}
 
@@ -13,7 +17,7 @@
 #include <vector>
 
 #include "kvbound/cuda/engine.h"
-#include "kvbound/cuda/generate.h"
+#include "kvbound/cuda/serve.h"
 #include "kvbound/json.h"
 #include "kvbound/mapped_file.h"
 
@@ -27,11 +31,7 @@ double seconds_since(Clock::time_point start) {
   return std::chrono::duration<double>(Clock::now() - start).count();
 }
 
-struct Request {
-  int id = 0;
-  std::vector<std::int32_t> prompt;
-  int max_new_tokens = 0;
-};
+using Request = kvb::cuda::ServeRequest;
 
 std::vector<Request> load_trace(const std::string& path) {
   const kvb::MappedFile file{path};
@@ -54,22 +54,21 @@ std::vector<Request> load_trace(const std::string& path) {
 class Args {
  public:
   Args(int argc, char** argv) {
+    if (argc % 2 == 0) throw kvb::Error("every option needs a value");
     for (int i = 1; i + 1 < argc; i += 2) {
       const std::string key = argv[i];
       if (key.rfind("--", 0) != 0) throw kvb::Error("expected --option, got " + key);
       values_[key.substr(2)] = argv[i + 1];
     }
-    if (argc % 2 == 0) throw kvb::Error("every option needs a value");
   }
-  std::string str(const std::string& key, const std::string& fallback = {}) {
+  std::string required(const std::string& key) {
     const auto it = values_.find(key);
-    if (it == values_.end()) {
-      if (fallback.empty()) throw kvb::Error("missing --" + key);
-      return fallback;
-    }
-    const std::string value = it->second;
-    values_.erase(it);
-    return value;
+    if (it == values_.end()) throw kvb::Error("missing --" + key);
+    return take(it);
+  }
+  std::string str(const std::string& key, const std::string& fallback) {
+    const auto it = values_.find(key);
+    return it == values_.end() ? fallback : take(it);
   }
   int integer(const std::string& key, int fallback) {
     return std::atoi(str(key, std::to_string(fallback)).c_str());
@@ -79,6 +78,11 @@ class Args {
   }
 
  private:
+  std::string take(std::map<std::string, std::string>::iterator it) {
+    std::string value = std::move(it->second);
+    values_.erase(it);
+    return value;
+  }
   std::map<std::string, std::string> values_;
 };
 
@@ -105,31 +109,97 @@ void print_op_times(const char* name, const OpTimes& times, int steps) {
   std::printf("}}");
 }
 
-// One request alone on the engine. Token times are seconds from submission.
-struct Timed {
-  std::vector<double> token_times;
-  std::vector<std::int32_t> tokens;
+// Synchronized per-op times, split by whether a step processed a prompt chunk.
+struct OpProfile {
+  OpTimes prefill, decode;
+  int prefill_steps = 0, decode_steps = 0;
 };
 
-Timed run_request(Engine& engine, const Request& request) {
-  Timed timed;
+// One pass over the trace. Times are seconds from the start of the pass.
+struct Pass {
+  double total_s = 0.0;
+  // Per step: when it finished, the rows it processed, and cache occupancy after it.
+  std::vector<double> step_end_s;
+  std::vector<int> step_rows, step_running;
+  std::vector<long long> step_reserved, step_used;
+  // Per request, in trace order.
+  std::vector<std::vector<double>> token_times;
+  std::vector<std::vector<std::int32_t>> tokens;
+};
+
+Pass run_trace(Engine& engine, const std::vector<Request>& requests, OpProfile* profile) {
+  std::map<int, std::size_t> index;
+  for (std::size_t i = 0; i < requests.size(); ++i) index[requests[i].id] = i;
+
+  Pass pass;
+  pass.token_times.resize(requests.size());
+  pass.tokens.resize(requests.size());
+  OpTimes times;
+  if (profile != nullptr) engine.set_op_times(&times);
   const Clock::time_point start = Clock::now();
-  timed.tokens = kvb::cuda::generate(
-      engine, request.prompt,
-      {.max_new_tokens = request.max_new_tokens,
-       .on_token = [&](std::int32_t) { timed.token_times.push_back(seconds_since(start)); }});
-  return timed;
+  kvb::cuda::serve(engine, requests, [&](const kvb::cuda::ServeStep& step) {
+    const double now = seconds_since(start);
+    int rows = 0;
+    for (const kvb::StepPlan::Run& run : step.plan.run) rows += run.n_tokens;
+    for (const kvb::StepResult::Token& token : step.result.tokens) {
+      pass.token_times[index.at(token.seq)].push_back(now);
+      pass.tokens[index.at(token.seq)].push_back(token.token);
+    }
+    pass.step_end_s.push_back(now);
+    pass.step_rows.push_back(rows);
+    pass.step_running.push_back(step.usage.running);
+    pass.step_reserved.push_back(step.usage.reserved);
+    pass.step_used.push_back(step.usage.used);
+
+    if (profile != nullptr) {
+      const bool prefill = rows > static_cast<int>(step.plan.run.size());
+      OpTimes& into = prefill ? profile->prefill : profile->decode;
+      (prefill ? profile->prefill_steps : profile->decode_steps) += 1;
+      for (int kind = 0; kind < kvb::kOpKindCount; ++kind) {
+        into.seconds[kind] += times.seconds[kind];
+        into.calls[kind] += times.calls[kind];
+      }
+      times = OpTimes{};
+    }
+  });
+  pass.total_s = seconds_since(start);
+  engine.set_op_times(nullptr);
+  return pass;
+}
+
+void print_pass(const Pass& pass, const std::vector<Request>& requests, bool last) {
+  std::printf("    {\"total_s\": %.9f,\n     \"steps\": {", pass.total_s);
+  print_array("end_s", pass.step_end_s, [](double t) { std::printf("%.6f", t); });
+  std::printf(", ");
+  print_array("rows", pass.step_rows, [](int n) { std::printf("%d", n); });
+  std::printf(", ");
+  print_array("running", pass.step_running, [](int n) { std::printf("%d", n); });
+  std::printf(", ");
+  print_array("reserved_tokens", pass.step_reserved, [](long long n) { std::printf("%lld", n); });
+  std::printf(", ");
+  print_array("used_tokens", pass.step_used, [](long long n) { std::printf("%lld", n); });
+  std::printf("},\n     \"requests\": [\n");
+  for (std::size_t r = 0; r < requests.size(); ++r) {
+    std::printf("      {\"id\": %d, \"n_prompt\": %zu, ", requests[r].id,
+                requests[r].prompt.size());
+    print_array("token_times_s", pass.token_times[r], [](double t) { std::printf("%.9f", t); });
+    std::printf(", ");
+    print_array("tokens", pass.tokens[r], [](std::int32_t t) { std::printf("%d", t); });
+    std::printf("}%s\n", r + 1 < requests.size() ? "," : "");
+  }
+  std::printf("    ]}%s\n", last ? "" : ",");
 }
 
 int run(int argc, char** argv) {
   Args args(argc, argv);
-  const std::string model_dir = args.str("model");
-  const std::vector<Request> requests = load_trace(args.str("trace"));
+  const std::string model_dir = args.required("model");
+  const std::vector<Request> requests = load_trace(args.required("trace"));
   const int warmup = args.integer("warmup", 1);
   const int iters = args.integer("iters", 3);
   const bool profile_ops = args.integer("profile-ops", 0) != 0;
 
   kvb::cuda::EngineConfig config;
+  config.max_seqs = args.integer("slots", 1);
   config.max_ctx = args.integer("max-ctx", 2048);
   config.max_step_tokens = args.integer("max-step-tokens", 0);
   config.use_graph = args.integer("graph", 1) != 0;
@@ -160,40 +230,15 @@ int run(int argc, char** argv) {
   const double load_s = seconds_since(load_start);
   KVB_CUDA(cudaMemGetInfo(&free_after, &total));
 
-  for (int i = 0; i < warmup; ++i) {
-    for (const Request& request : requests) run_request(engine, request);
-  }
-  std::vector<std::vector<Timed>> iterations;
-  for (int i = 0; i < iters; ++i) {
-    std::vector<Timed>& runs = iterations.emplace_back();
-    for (const Request& request : requests) runs.push_back(run_request(engine, request));
-  }
-
-  // One more pass with every op synchronized and timed, split at the first token.
-  OpTimes prefill, decode;
-  int decode_steps = 0;
-  if (profile_ops) {
-    for (const Request& request : requests) {
-      OpTimes times;
-      engine.set_op_times(&times);
-      bool first = true;
-      kvb::cuda::generate(engine, request.prompt,
-                          {.max_new_tokens = request.max_new_tokens, .on_token = [&](std::int32_t) {
-                             OpTimes& into = first ? prefill : decode;
-                             for (int kind = 0; kind < kvb::kOpKindCount; ++kind) {
-                               into.seconds[kind] += times.seconds[kind];
-                               into.calls[kind] += times.calls[kind];
-                             }
-                             decode_steps += first ? 0 : 1;
-                             first = false;
-                             times = OpTimes{};
-                           }});
-      engine.set_op_times(nullptr);
-    }
-  }
+  const kvb::cuda::EngineConfig& resolved = engine.config();
+  for (int i = 0; i < warmup; ++i) run_trace(engine, requests, nullptr);
+  std::vector<Pass> passes;
+  for (int i = 0; i < iters; ++i) passes.push_back(run_trace(engine, requests, nullptr));
+  // One more pass with every op synchronized and timed.
+  OpProfile profile;
+  if (profile_ops) run_trace(engine, requests, &profile);
 
   const kvb::ModelConfig& model = engine.model_config();
-  const kvb::cuda::EngineConfig& resolved = engine.config();
   const kvb::cuda::EngineMemory memory = engine.memory();
   std::printf("{\n");
   std::printf(
@@ -201,11 +246,11 @@ int run(int argc, char** argv) {
       "\"total_memory_bytes\": %zu},\n",
       prop.name, prop.major, prop.minor, prop.totalGlobalMem);
   std::printf(
-      "  \"config\": {\"max_ctx\": %d, \"max_seqs\": %d, \"max_step_tokens\": %d, "
+      "  \"config\": {\"slots\": %d, \"max_ctx\": %d, \"max_step_tokens\": %d, "
       "\"kv_block_size\": %d, \"kv_blocks\": %d, \"kv_layout\": \"%s\", "
       "\"gemm_accumulate\": \"%s\", \"graph\": %s, \"plan\": \"%s\", \"warmup\": %d, "
       "\"iters\": %d},\n",
-      resolved.max_ctx, resolved.max_seqs, resolved.max_step_tokens, resolved.kv_block_size,
+      resolved.max_seqs, resolved.max_ctx, resolved.max_step_tokens, resolved.kv_block_size,
       resolved.kv_blocks, layout.c_str(), gemm.c_str(), resolved.use_graph ? "true" : "false",
       plan.c_str(), warmup, iters);
   std::printf(
@@ -217,31 +262,35 @@ int run(int argc, char** argv) {
   std::printf("  \"program\": {\"ops\": %zu, \"values\": %zu},\n", engine.program().ops.size(),
               engine.program().values.size());
   std::printf(
-      "  \"memory\": {\"weights_bytes\": %zu, \"kv_pool_bytes\": %zu, \"arena_bytes\": %zu, "
-      "\"arena_naive_bytes\": %zu, \"arena_peak_live_bytes\": %zu, \"device_bytes\": %zu},\n",
-      memory.weights, memory.kv_pool, memory.arena, memory.arena_naive, memory.arena_peak_live,
-      free_before - free_after);
+      "  \"memory\": {\"weights_bytes\": %zu, \"kv_pool_bytes\": %zu, "
+      "\"kv_bytes_per_token\": %zu, \"arena_bytes\": %zu, \"arena_naive_bytes\": %zu, "
+      "\"arena_peak_live_bytes\": %zu, \"device_bytes\": %zu},\n",
+      memory.weights, memory.kv_pool,
+      kvb::kv_bytes_per_token(model.n_layers, model.n_kv_heads, model.head_dim(), 2), memory.arena,
+      memory.arena_naive, memory.arena_peak_live, free_before - free_after);
   std::printf("  \"load_s\": %.6f,\n", load_s);
+  // The activation plan: one entry per program value, in the order values are first written.
+  const std::vector<kvb::Lifetime> lifetimes = kvb::value_lifetimes(engine.program());
+  std::printf("  \"plan\": [\n");
+  for (std::size_t v = 0; v < lifetimes.size(); ++v) {
+    std::printf(
+        "    {\"name\": \"%s\", \"bytes\": %zu, \"offset\": %zu, \"first_op\": %d, "
+        "\"last_op\": %d}%s\n",
+        engine.program().values[v].name.c_str(), engine.value_sizes()[v],
+        engine.memory_plan().offsets[v], lifetimes[v].first, lifetimes[v].last,
+        v + 1 < lifetimes.size() ? "," : "");
+  }
+  std::printf("  ],\n");
   std::printf("  \"iterations\": [\n");
-  for (std::size_t i = 0; i < iterations.size(); ++i) {
-    std::printf("    {\"requests\": [\n");
-    for (std::size_t r = 0; r < requests.size(); ++r) {
-      const Timed& timed = iterations[i][r];
-      std::printf("      {\"id\": %d, \"n_prompt\": %zu, ", requests[r].id,
-                  requests[r].prompt.size());
-      print_array("token_times_s", timed.token_times, [](double t) { std::printf("%.9f", t); });
-      std::printf(", ");
-      print_array("tokens", timed.tokens, [](std::int32_t t) { std::printf("%d", t); });
-      std::printf("}%s\n", r + 1 < requests.size() ? "," : "");
-    }
-    std::printf("    ]}%s\n", i + 1 < iterations.size() ? "," : "");
+  for (std::size_t i = 0; i < passes.size(); ++i) {
+    print_pass(passes[i], requests, i + 1 == passes.size());
   }
   std::printf("  ]");
   if (profile_ops) {
     std::printf(",\n  \"op_profile\": {\n");
-    print_op_times("prefill", prefill, static_cast<int>(requests.size()));
+    print_op_times("prefill", profile.prefill, profile.prefill_steps);
     std::printf(",\n");
-    print_op_times("decode", decode, decode_steps);
+    print_op_times("decode", profile.decode, profile.decode_steps);
     std::printf("\n  }");
   }
   std::printf("\n}\n");

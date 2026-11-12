@@ -42,7 +42,8 @@ Engine::Engine(const std::filesystem::path& model_dir, const EngineConfig& confi
                                                          .max_step_tokens = config_.max_step_tokens,
                                                          .max_outputs = config_.max_step_tokens,
                                                          .plan = config_.plan,
-                                                         .gemm = config_.gemm},
+                                                         .gemm = config_.gemm,
+                                                         .wide_key_loads = config_.wide_key_loads},
                                         stream_);
   const ModelConfig& cfg = model_->config();
   const int blocks_per_seq = (config_.max_ctx + config_.kv_block_size - 1) / config_.kv_block_size;

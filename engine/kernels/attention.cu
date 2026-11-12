@@ -72,6 +72,25 @@ __device__ inline float key_dot(const float* query, const __half* key, std::int6
   return dot;
 }
 
+__device__ inline float f16_bits_to_float(unsigned bits) {
+  return __half2float(__ushort_as_half(static_cast<unsigned short>(bits)));
+}
+
+// The same dot product for a key whose dimensions are adjacent in memory: each load brings in
+// eight of them, so a 64-dimension key takes 8 loads instead of 64.
+__device__ inline float key_dot_wide(const float* query, const __half* key, int head_dim) {
+  const uint4* words = reinterpret_cast<const uint4*>(key);
+  float dot = 0.0f;
+  for (int d = 0; d < head_dim; d += 8) {
+    const uint4 w = words[d / 8];
+    dot += query[d + 0] * f16_bits_to_float(w.x) + query[d + 1] * f16_bits_to_float(w.x >> 16) +
+           query[d + 2] * f16_bits_to_float(w.y) + query[d + 3] * f16_bits_to_float(w.y >> 16) +
+           query[d + 4] * f16_bits_to_float(w.z) + query[d + 5] * f16_bits_to_float(w.z >> 16) +
+           query[d + 6] * f16_bits_to_float(w.w) + query[d + 7] * f16_bits_to_float(w.w >> 16);
+  }
+  return dot;
+}
+
 __global__ void kv_write_kernel(const __half* k, const __half* v, const StepRow* rows, KvView kv,
                                 int n_kv_heads, int head_dim, std::size_t n) {
   const std::size_t i = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -94,11 +113,13 @@ __global__ void kv_write_kernel(const __half* k, const __half* v, const StepRow*
 //   [.., +warps)         per-warp reduction scratch
 //   [.., +max_ctx)       one score, then one softmax weight, per cached position
 //
-// Pass 1, scores: one thread per cached position computes that key's dot product.
+// Pass 1, scores: one thread per cached position computes that key's dot product, reading the
+// key element by element or, with kWideKeys, 16 bytes at a time.
 // Pass 2, softmax: subtracting the largest score before exp() keeps every exponent <= 0.
 // Pass 3, values: threads are split into groups of head_dim. Group g handles positions
 // g, g + n_groups, ... and thread d of a group accumulates dimension d, so adjacent threads read
 // adjacent elements of one value vector.
+template <bool kWideKeys>
 __global__ void attention_kernel(const __half* q, __half* out, const StepRow* rows, KvView kv,
                                  int n_heads, int n_rep, int head_dim) {
   extern __shared__ float smem[];
@@ -123,7 +144,10 @@ __global__ void attention_kernel(const __half* q, __half* out, const StepRow* ro
   const float scale = rsqrtf(static_cast<float>(head_dim));
   float max_score = -CUDART_INF_F;
   for (int pos = tid; pos < ctx; pos += n_threads) {
-    const float score = key_dot(query, keys + cache.offset(pos), kv.dim_stride, head_dim) * scale;
+    const __half* key = keys + cache.offset(pos);
+    const float score = (kWideKeys ? key_dot_wide(query, key, head_dim)
+                                   : key_dot(query, key, kv.dim_stride, head_dim)) *
+                        scale;
     scores[pos] = score;
     max_score = fmaxf(max_score, score);
   }
@@ -182,6 +206,14 @@ void kv_write(const f16* k, const f16* v, const StepRow* rows, const KvView& kv,
   KVB_CUDA(cudaGetLastError());
 }
 
+std::string_view key_loads_name(KeyLoads loads) noexcept {
+  return loads == KeyLoads::Wide ? "wide" : "scalar";
+}
+
+KeyLoads widest_key_loads(const KvView& kv, int head_dim) noexcept {
+  return kv.dim_stride == 1 && head_dim % 8 == 0 ? KeyLoads::Wide : KeyLoads::Scalar;
+}
+
 int attention_max_positions(int head_dim) {
   if (head_dim > kAttnMinThreads) return 0;
   // The largest block size leaves the least room for scores.
@@ -190,7 +222,11 @@ int attention_max_positions(int head_dim) {
 }
 
 void attention(const f16* q, f16* out, const StepRow* rows, const KvView& kv, int n_tokens,
-               int n_heads, int n_kv_heads, int head_dim, int max_ctx, cudaStream_t stream) {
+               int n_heads, int n_kv_heads, int head_dim, int max_ctx, KeyLoads loads,
+               cudaStream_t stream) {
+  if (loads == KeyLoads::Wide && widest_key_loads(kv, head_dim) != KeyLoads::Wide) {
+    throw Error("wide key loads need adjacent dimensions and head_dim divisible by 8");
+  }
   // Threads the device runs at once: larger blocks only help while they all fit.
   static const std::int64_t device_threads = [] {
     int device = 0;
@@ -208,8 +244,14 @@ void attention(const f16* q, f16* out, const StepRow* rows, const KvView& kv, in
   }
   const std::size_t shared_bytes = attention_shared_bytes(head_dim, threads, max_ctx);
   const dim3 grid(n_heads, n_tokens);
-  attention_kernel<<<grid, threads, shared_bytes, stream>>>(
-      as_half(q), as_half(out), rows, kv, n_heads, n_heads / n_kv_heads, head_dim);
+  const int n_rep = n_heads / n_kv_heads;
+  if (loads == KeyLoads::Wide) {
+    attention_kernel<true><<<grid, threads, shared_bytes, stream>>>(as_half(q), as_half(out), rows,
+                                                                    kv, n_heads, n_rep, head_dim);
+  } else {
+    attention_kernel<false><<<grid, threads, shared_bytes, stream>>>(as_half(q), as_half(out), rows,
+                                                                     kv, n_heads, n_rep, head_dim);
+  }
   KVB_CUDA(cudaGetLastError());
 }
 

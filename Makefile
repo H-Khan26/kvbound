@@ -1,4 +1,4 @@
-.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench profile microbench report predict lint format typecheck clean
+.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve profile microbench report predict lint format typecheck clean
 
 # torch wheel: cu128 on GPU machines, cpu in CI and on machines without a GPU
 TORCH ?= cu128
@@ -66,12 +66,18 @@ bench:            ## kvbound engine: batch 1 decode and a long prompt, like benc
 	uv run python -m kvbound.bench --model $(MODEL) --prompt-len 128 --no-graph
 	uv run python -m kvbound.bench --model $(MODEL) --prompt-len 1024
 
+serve:            ## static batching on the three workloads, 1 and 8 slots (MODEL=...)
+	$(MAKE) build PRESET=cuda
+	for w in fixed uniform longtail; do for s in 1 8; do \
+	  uv run python -m kvbound.serve --model $(MODEL) --workload $$w --slots $$s || exit 1; \
+	done; done
+
 profile:          ## Nsight Systems decode profile, with and without CUDA graphs (MODEL=...)
 	$(MAKE) build PRESET=cuda
 	uv run python -m kvbound.profile --model $(MODEL) --no-graph
 	uv run python -m kvbound.profile --model $(MODEL)
 
-microbench:       ## build the cuda preset, then run bandwidth, latency and GEMM microbenchmarks
+microbench:       ## build the cuda preset, then run bandwidth, latency, GEMM and KV-layout microbenchmarks
 	$(MAKE) build PRESET=cuda
 	uv run python -m kvbound.microbench --preset cuda
 

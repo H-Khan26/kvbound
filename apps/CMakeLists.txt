@@ -1,3 +1,5 @@
-add_executable(kvb-bench kvb-bench.cpp)
-target_link_libraries(kvb-bench PRIVATE kvbound::cuda kvb_warnings)
-set_target_properties(kvb-bench PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+foreach(name bench kv_layout)
+  add_executable(kvb-${name} kvb-${name}.cpp)
+  target_link_libraries(kvb-${name} PRIVATE kvbound::cuda kvb_warnings)
+  set_target_properties(kvb-${name} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+endforeach()

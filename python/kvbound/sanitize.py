@@ -2,7 +2,8 @@
 
 memcheck finds out-of-bounds and misaligned device accesses, racecheck finds shared-memory races
 between the threads of a block, initcheck finds reads of device memory that was never written.
-The run covers chunked prefill and decode, with and without CUDA graphs.
+The run covers chunked prefill and decode, with and without CUDA graphs, one request at a time
+and as a static batch.
 
 Usage: python -m kvbound.sanitize
 """
@@ -48,18 +49,20 @@ def main() -> None:
         trace_path = Path(tmp) / "trace.json"
         trace_path.write_text(json.dumps(trace), encoding="utf-8")
         for tool in TOOLS:
-            for graph in (0, 1):
+            # Eager and graph replay one request at a time, then both requests as one batch.
+            for graph, slots in ((0, 1), (1, 1), (1, 2)):
                 command = [
                     sanitizer, "--tool", tool, "--error-exitcode", "1",
                     str(binary("bench", args.preset)), "--model", str(FIXTURE_DIR),
                     "--trace", str(trace_path), "--max-ctx", "64", "--max-step-tokens", "16",
-                    "--warmup", "0", "--iters", "1", "--graph", str(graph),
+                    "--warmup", "0", "--iters", "1", "--graph", str(graph), "--slots", str(slots),
                 ]  # fmt: skip
                 done = subprocess.run(command, capture_output=True, text=True, check=False)
                 summary = [line for line in done.stdout.splitlines() if "SUMMARY" in line]
                 ok = done.returncode == 0
                 failed = failed or not ok
-                print(f"{tool:<10} graph={graph}  {'ok  ' if ok else 'FAIL'}  {' '.join(summary)}")
+                status = "ok  " if ok else "FAIL"
+                print(f"{tool:<10} graph={graph} slots={slots}  {status}  {' '.join(summary)}")
                 if not ok:
                     print(done.stdout[-4000:], done.stderr[-2000:])
     raise SystemExit(1 if failed else 0)
