@@ -165,19 +165,24 @@ def bandwidth(device: str, records: dict[str, dict[str, Any]]) -> Figure:
     l2 = rec["samples"]["device"]["l2_cache_bytes"]
     fig, ax = _figure(
         f"Memory bandwidth vs working set: {rec['fingerprint']['gpu']['name']}",
-        f"Past the caches every mode settles near {metrics['dram_read_gbs']:.0f} GB/s, "
+        f"Past the caches reads settle near {metrics['dram_read_gbs']:.0f} GB/s, "
         f"{metrics['dram_read_gbs'] / spec['memory_bandwidth_gbs']:.0%} of the "
-        f"{spec['memory_bandwidth_gbs']} GB/s spec. That plateau is the decode ceiling.",
+        f"{spec['memory_bandwidth_gbs']} GB/s spec: the decode ceiling.\n"
+        f"Launches of 0.1 s average {metrics['dram_read_sustained_gbs']:.0f} GB/s (thin line) "
+        "because other programs take turns on the GPU.",
     )
     sizes = [p["working_set_bytes"] for p in points]
     for mode, color in zip(("read", "write", "copy"), SERIES, strict=True):
         series = [p for p in points if p["mode"] == mode]
-        ax.plot([p["working_set_bytes"] for p in series], [p["best_gbs"] for p in series],
-                color=color, lw=2, label=mode)  # fmt: skip
+        ax.plot([p["working_set_bytes"] for p in series], [p["burst_gbs"] for p in series],
+                color=color, lw=2, label=f"{mode}, best 2 ms burst")  # fmt: skip
         # Labels sit inside the cache region, where the three lines are apart.
         in_cache = [p for p in series if p["working_set_bytes"] <= l2 // 4][-1]
-        ax.annotate(mode, (in_cache["working_set_bytes"], in_cache["best_gbs"]), (0, 9),
+        ax.annotate(mode, (in_cache["working_set_bytes"], in_cache["burst_gbs"]), (0, 9),
                     textcoords="offset points", fontsize=8.5, color=INK_2, ha="center")  # fmt: skip
+    reads = [p for p in points if p["mode"] == "read"]
+    ax.plot([p["working_set_bytes"] for p in reads], [p["best_gbs"] for p in reads],
+            color=SERIES[0], lw=1, label="read, sustained 0.1 s")  # fmt: skip
     ax.axhline(spec["memory_bandwidth_gbs"], color=MUTED, lw=1, ls=(0, (4, 3)))
     ax.text(min(sizes), spec["memory_bandwidth_gbs"] * 1.08,
             f"spec {spec['memory_bandwidth_gbs']} GB/s", fontsize=8, color=INK_2)  # fmt: skip

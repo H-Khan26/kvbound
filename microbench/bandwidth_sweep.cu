@@ -11,6 +11,11 @@
 // another. A consequence: each SM re-reads the same 1/sm_count share of the buffer every pass, so
 // working sets up to sm_count times the L1 size are served by the L1s, and the drop to the DRAM
 // rate appears at max(L2 size, sm_count * L1 size). pointer_chase isolates the L2 size itself.
+//
+// Each point is measured two ways. The sustained rate times launches of about 0.1 s; it is what
+// a long-running workload gets, including time lost to whatever else uses the GPU (a desktop
+// compositor, a browser). The burst rate is the best of many 2 ms launches, short enough that
+// some finish without being interrupted; it is what the hardware delivers.
 
 #include <cstdint>
 #include <cstring>
@@ -23,6 +28,8 @@ constexpr int kBlockThreads = 256;
 constexpr int kBlocksPerSm = 6;  // 6 * 256 threads fills an SM's 1536 thread slots
 constexpr double kTargetSeconds = 0.1;
 constexpr int kRepeats = 5;
+constexpr double kBurstSeconds = 0.002;
+constexpr int kBursts = 40;
 
 // Thread `tid` owns the elements congruent to tid modulo the thread count.
 __device__ inline std::size_t thread_id() {
@@ -82,8 +89,9 @@ const char* mode_name(Mode m) {
 struct Point {
   std::size_t working_set_bytes;
   int threads;
-  double best_gbs;
-  double median_gbs;
+  double best_gbs;    // sustained
+  double median_gbs;  // sustained
+  double burst_gbs;
 };
 
 // Measures one (mode, size). `working_set` is the total bytes touched per pass: one buffer for
@@ -129,8 +137,14 @@ Point measure(Mode mode, std::size_t working_set, int max_blocks, uint4* a, uint
     const double t = kvb::bench::time_gpu([&] { launch(passes); });
     rates.push_back(bytes_per_pass * passes / t / 1e9);
   }
+  const int burst_passes = std::max(1, static_cast<int>(passes * kBurstSeconds / kTargetSeconds));
+  double burst = 0.0;
+  for (int r = 0; r < kBursts; ++r) {
+    const double t = kvb::bench::time_gpu([&] { launch(burst_passes); });
+    burst = std::max(burst, bytes_per_pass * burst_passes / t / 1e9);
+  }
   return {static_cast<std::size_t>(bytes_per_pass), static_cast<int>(n_threads),
-          *std::max_element(rates.begin(), rates.end()), kvb::bench::median(rates)};
+          *std::max_element(rates.begin(), rates.end()), kvb::bench::median(rates), burst};
 }
 
 }  // namespace
@@ -157,8 +171,9 @@ int main(int argc, char** argv) {
   kvb::bench::print_device_json(prop);
   std::printf(
       "  \"params\": {\"element_bytes\": 16, \"block_threads\": %d, \"max_blocks\": %d, "
-      "\"target_seconds\": %.2f, \"repeats\": %d},\n  \"points\": [",
-      kBlockThreads, max_blocks, kTargetSeconds, kRepeats);
+      "\"target_seconds\": %.2f, \"repeats\": %d, \"burst_seconds\": %.3f, \"bursts\": %d},\n"
+      "  \"points\": [",
+      kBlockThreads, max_blocks, kTargetSeconds, kRepeats, kBurstSeconds, kBursts);
 
   bool first = true;
   // Four sizes per octave from 16 KiB: 1, 1.19, 1.41, 1.68 times each power of two.
@@ -168,9 +183,9 @@ int main(int argc, char** argv) {
       const Point p = measure(mode, working_set, max_blocks, a, b, sink);
       std::printf(
           "%s\n    {\"mode\": \"%s\", \"working_set_bytes\": %zu, \"threads\": %d, "
-          "\"best_gbs\": %.2f, \"median_gbs\": %.2f}",
+          "\"best_gbs\": %.2f, \"median_gbs\": %.2f, \"burst_gbs\": %.2f}",
           first ? "" : ",", mode_name(mode), p.working_set_bytes, p.threads, p.best_gbs,
-          p.median_gbs);
+          p.median_gbs, p.burst_gbs);
       first = false;
     }
   }

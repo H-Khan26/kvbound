@@ -26,13 +26,19 @@ DRAM_MIN_BYTES = 256 * MIB
 
 
 def summarize_bandwidth(raw: dict[str, Any]) -> dict[str, float]:
-    """DRAM plateau (median rate over the large working sets) and the best in-cache rate."""
+    """DRAM plateau (median over the large working sets) and the best in-cache rate.
+
+    dram_<mode>_gbs is the burst rate, what the hardware delivers undisturbed and so the ceiling
+    the perf model uses. dram_<mode>_sustained_gbs is what a long run got on this machine,
+    including time lost to other GPU clients.
+    """
     metrics = {}
     for mode in ("read", "write", "copy"):
         points = [p for p in raw["points"] if p["mode"] == mode]
-        plateau = [p["best_gbs"] for p in points if p["working_set_bytes"] >= DRAM_MIN_BYTES]
-        metrics[f"dram_{mode}_gbs"] = statistics.median(plateau)
-        metrics[f"cache_peak_{mode}_gbs"] = max(p["best_gbs"] for p in points)
+        plateau = [p for p in points if p["working_set_bytes"] >= DRAM_MIN_BYTES]
+        metrics[f"dram_{mode}_gbs"] = statistics.median(p["burst_gbs"] for p in plateau)
+        metrics[f"dram_{mode}_sustained_gbs"] = statistics.median(p["best_gbs"] for p in plateau)
+        metrics[f"cache_peak_{mode}_gbs"] = max(p["burst_gbs"] for p in points)
     return metrics
 
 
