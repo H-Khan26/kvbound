@@ -78,6 +78,8 @@ def op_profile_ms(raw: dict[str, Any]) -> dict[str, Any]:
     profile = {}
     for phase, data in raw["op_profile"].items():
         steps = data["steps"]
+        if steps == 0:
+            continue  # a trace of one-token outputs has no decode step
         profile[phase] = {
             "steps": steps,
             "ms_per_step": {

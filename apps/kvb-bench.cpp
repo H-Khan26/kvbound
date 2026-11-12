@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <exception>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -109,7 +110,7 @@ void print_op_times(const char* name, const OpTimes& times, int steps) {
   std::printf("}}");
 }
 
-// Synchronized per-op times, split by whether a step processed a prompt chunk.
+// Synchronized per-op times, split by whether a step processed any prompt tokens.
 struct OpProfile {
   OpTimes prefill, decode;
   int prefill_steps = 0, decode_steps = 0;
@@ -135,13 +136,16 @@ Pass run_trace(Engine& engine, const std::vector<Request>& requests, OpProfile* 
   pass.token_times.resize(requests.size());
   pass.tokens.resize(requests.size());
   OpTimes times;
+  std::set<int> emitted;  // sequences that have produced a token: they are decoding
   if (profile != nullptr) engine.set_op_times(&times);
   const Clock::time_point start = Clock::now();
   kvb::cuda::serve(engine, requests, [&](const kvb::cuda::ServeStep& step) {
     const double now = seconds_since(start);
+    std::vector<int> emitted_now;
     int rows = 0;
     for (const kvb::StepPlan::Run& run : step.plan.run) rows += run.n_tokens;
     for (const kvb::StepResult::Token& token : step.result.tokens) {
+      emitted_now.push_back(token.seq);
       pass.token_times[index.at(token.seq)].push_back(now);
       pass.tokens[index.at(token.seq)].push_back(token.token);
     }
@@ -152,7 +156,10 @@ Pass run_trace(Engine& engine, const std::vector<Request>& requests, OpProfile* 
     pass.step_used.push_back(step.usage.used);
 
     if (profile != nullptr) {
-      const bool prefill = rows > static_cast<int>(step.plan.run.size());
+      bool prefill = false;
+      for (const kvb::StepPlan::Run& run : step.plan.run) {
+        prefill = prefill || !emitted.contains(run.seq);
+      }
       OpTimes& into = prefill ? profile->prefill : profile->decode;
       (prefill ? profile->prefill_steps : profile->decode_steps) += 1;
       for (int kind = 0; kind < kvb::kOpKindCount; ++kind) {
@@ -161,6 +168,7 @@ Pass run_trace(Engine& engine, const std::vector<Request>& requests, OpProfile* 
       }
       times = OpTimes{};
     }
+    emitted.insert(emitted_now.begin(), emitted_now.end());
   });
   pass.total_s = seconds_since(start);
   engine.set_op_times(nullptr);

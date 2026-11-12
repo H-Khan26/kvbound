@@ -84,6 +84,9 @@ def test_engine_recovers_after_a_failed_request(kvb):
     with pytest.raises(RuntimeError):
         engine.generate([10_000], 8)  # token id beyond the vocabulary
     assert engine.generate(prompt, 8) == expected
+    with pytest.raises(RuntimeError):
+        engine.serve([prompt, [10_000]], [4, 4])  # fails after the first request was admitted
+    assert engine.serve([prompt], [8]) == [expected]
     # feed() and generate() can share an engine.
     logits = engine.feed(prompt)["logits"]
     assert int(logits[-1].argmax()) == expected[0]

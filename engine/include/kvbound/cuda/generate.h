@@ -18,8 +18,8 @@ struct GenerateOptions {
   std::function<void(std::int32_t)> on_token;
 };
 
-// Generates from one prompt on an otherwise idle engine: prefill in chunks of at most
-// max_step_tokens, then one token per step. Returns the new tokens only.
+// Generates from one prompt on an idle engine, as a one-request serve(): prefill in chunks of
+// at most max_step_tokens, then one token per step. Returns the new tokens only.
 std::vector<std::int32_t> generate(Engine& engine, std::span<const std::int32_t> prompt,
                                    const GenerateOptions& options);
 

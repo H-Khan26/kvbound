@@ -20,7 +20,7 @@ The RTX 4070 Ti runs are pending.
 | Decode ceiling, batch 1 | about 200 tokens/s (weights 2.07 GB read once per token) | `python -m kvbound.perfmodel` |
 | **kvbound decode, batch 1** | **144 tokens/s, 72% of the ceiling** (6.9 ms per token; 128 tokens/s without CUDA graphs) | `python -m kvbound.bench` |
 | kvbound time to first token | 15 ms for a 128-token prompt, 201 ms for 1,024 tokens | `python -m kvbound.bench` |
-| **kvbound static batching, 8 slots** | 792 tokens/s on equal-length requests, 360 tokens/s on long-tailed lengths (134 to 138 one at a time) | `python -m kvbound.serve` |
+| **kvbound static batching, 8 slots** | 792 tokens/s on equal-length requests, 360 tokens/s on long-tailed lengths (133 to 138 one at a time) | `python -m kvbound.serve` |
 | Hugging Face Transformers decode, batch 1 | 17 to 33 tokens/s, depending on where the unlocked GPU clock settles | `python -m kvbound.baselines.hf` |
 
 Greedy output matches the reference model token for token on every golden prompt, and every intermediate activation
@@ -45,10 +45,11 @@ a full slot until its batch ends.
 
 Two more results from this phase:
 
-- **KV layout.** Three orderings of the cache's dimensions were benchmarked with the engine's own kernels. Which
-  dimension is outermost changes attention time by under 10%. What matters is how many memory requests a warp issues:
-  reading each 128-byte key as eight 16-byte loads instead of 64 two-byte loads is 2.9 times faster, and only layouts
-  that keep a key's dimensions adjacent allow it. Figure: `reports/rtx3060ti/kv_layout.png`.
+- **KV layout.** Three orderings of the cache's dimensions were benchmarked with the engine's own kernels. Between
+  the two layouts that keep a key's dimensions adjacent, which dimension is outermost changes attention time by 2% at
+  batch 1 and 11% at batch 8. What matters more is how many memory requests a warp issues: reading each 128-byte key
+  as eight 16-byte loads instead of 64 two-byte loads is 2.9 times faster (3.4 at batch 8), and only those two layouts
+  allow it. Figure: `reports/rtx3060ti/kv_layout.png`.
 - **Activation memory.** The forward pass has 225 intermediate tensors. Side by side they would need 1,039 MiB for
   1,024-token steps; placed by lifetime in one arena they share 30 MiB, which is also the lower bound. Figure:
   `reports/rtx3060ti/arena.png`.

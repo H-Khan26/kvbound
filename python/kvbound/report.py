@@ -248,7 +248,7 @@ def kv_layout(records: dict[str, dict[str, Any]]) -> Figure:
     fig.text(
         0.07, 0.9,
         f"Reading a key as 16-byte loads is {speedup:.1f}x faster than 2-byte loads. Which "
-        "dimension is outermost changes little.\n"
+        "dimension is outermost matters far less.\n"
         f"{params['n_layers']} layers, {params['n_heads']} query heads over "
         f"{params['n_kv_heads']} KV heads of {params['head_dim']} dimensions, FP16.",
         fontsize=9.5, color=INK_2, va="top",
@@ -304,7 +304,8 @@ def static_memory(serve: dict[tuple[str, int], dict[str, Any]], slots: int) -> F
     per_token = first["metrics"]["memory"]["kv_bytes_per_token"]
     pool = first["params"]["kv_blocks"] * first["params"]["kv_block_size"]
     to_mib = per_token / 2**20
-    fig, axes = plt.subplots(1, len(runs), figsize=(9, 5.2), dpi=160, sharey=True)
+    fig, grid = plt.subplots(1, len(runs), figsize=(9, 5.2), dpi=160, sharey=True, squeeze=False)
+    axes = grid[0]
     fig.patch.set_facecolor(SURFACE)
     fig.suptitle(
         f"KV cache memory under static batching, {slots} slots",

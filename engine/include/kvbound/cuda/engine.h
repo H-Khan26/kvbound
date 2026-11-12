@@ -98,6 +98,7 @@ class Engine {
   // Applies one plan: frees, allocations, then a forward step over the planned tokens. Each
   // sequence whose known tokens are all processed gets a sampled token appended.
   StepResult execute(const StepPlan& plan);
+  bool has_sequence(int seq) const noexcept { return sequences_.contains(seq); }
   // Prompt plus generated tokens of a live sequence.
   const std::vector<std::int32_t>& tokens(int seq) const;
   // While set, execute() synchronizes after every op and adds its time here.

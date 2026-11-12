@@ -13,6 +13,10 @@ EngineConfig resolved(EngineConfig config) {
   if (config.max_ctx <= 0 || config.max_seqs <= 0) throw Error("max_ctx and max_seqs must be > 0");
   if (config.max_step_tokens <= 0) config.max_step_tokens = config.max_ctx;
   if (config.max_outputs <= 0) config.max_outputs = config.max_seqs;
+  // One step must be able to decode a token for every cached sequence.
+  if (config.max_step_tokens < config.max_seqs || config.max_outputs < config.max_seqs) {
+    throw Error("max_step_tokens and max_outputs must be at least max_seqs");
+  }
   config.max_outputs = std::min(config.max_outputs, config.max_step_tokens);
   if (config.kv_block_size <= 0) config.kv_block_size = config.max_ctx;
   if (config.kv_block_size > config.max_ctx) throw Error("kv_block_size exceeds max_ctx");
@@ -256,7 +260,8 @@ StepResult Engine::execute(const StepPlan& plan) {
   }
 
   forward(rows, out_rows, {.times = op_times_});
-  // Sequence state advances only now, so a step that throws leaves every sequence as it was.
+  // Cached counts advance only now, so a step that throws can be planned again. The plan's
+  // frees and allocations above are not undone.
   for (std::size_t i = 0; i < plan.run.size(); ++i) {
     sequence(plan.run[i].seq).n_cached = cached_after[i];
   }
