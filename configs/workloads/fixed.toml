@@ -1,0 +1,15 @@
+# Every request has the same shape: the case static batching is built for.
+name = "fixed"
+description = "every request: 256 prompt tokens, 128 output tokens"
+n_requests = 48
+seed = 0
+
+[prompt]
+dist = "fixed"
+min = 256
+max = 256
+
+[output]
+dist = "fixed"
+min = 128
+max = 128

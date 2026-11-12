@@ -16,6 +16,13 @@ namespace {
 // GPU is already full and smaller blocks waste fewer idle threads.
 constexpr int kAttnMinThreads = 256;
 constexpr int kAttnMaxThreads = 1024;
+// Shared memory a block gets without opting in to more.
+constexpr std::size_t kSharedBytes = 48 * 1024;
+
+std::size_t attention_shared_bytes(int head_dim, int threads, int max_ctx) {
+  return sizeof(float) *
+         (static_cast<std::size_t>(head_dim) + threads + threads / kWarpSize + max_ctx);
+}
 
 // Maps positions of one sequence and KV head to pool offsets. The offset is of the vector's
 // first element; its dimensions are dim_stride apart.
@@ -175,6 +182,13 @@ void kv_write(const f16* k, const f16* v, const StepRow* rows, const KvView& kv,
   KVB_CUDA(cudaGetLastError());
 }
 
+int attention_max_positions(int head_dim) {
+  if (head_dim > kAttnMinThreads) return 0;
+  // The largest block size leaves the least room for scores.
+  return static_cast<int>((kSharedBytes - attention_shared_bytes(head_dim, kAttnMaxThreads, 0)) /
+                          sizeof(float));
+}
+
 void attention(const f16* q, f16* out, const StepRow* rows, const KvView& kv, int n_tokens,
                int n_heads, int n_kv_heads, int head_dim, int max_ctx, cudaStream_t stream) {
   // Threads the device runs at once: larger blocks only help while they all fit.
@@ -189,12 +203,10 @@ void attention(const f16* q, f16* out, const StepRow* rows, const KvView& kv, in
   int threads = kAttnMaxThreads;
   while (threads > kAttnMinThreads && n_blocks * threads > device_threads) threads /= 2;
 
-  const std::size_t shared_bytes = sizeof(float) * (static_cast<std::size_t>(head_dim) + threads +
-                                                    threads / kWarpSize + max_ctx);
-  // 48 KiB is the shared memory a block gets without opting in to more.
-  if (head_dim > kAttnMinThreads || shared_bytes > 48 * 1024) {
+  if (max_ctx > attention_max_positions(head_dim)) {
     throw Error("attention supports head_dim up to 256 and about 11,000 positions");
   }
+  const std::size_t shared_bytes = attention_shared_bytes(head_dim, threads, max_ctx);
   const dim3 grid(n_heads, n_tokens);
   attention_kernel<<<grid, threads, shared_bytes, stream>>>(
       as_half(q), as_half(out), rows, kv, n_heads, n_heads / n_kv_heads, head_dim);

@@ -15,8 +15,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from kvbound import bench
 from kvbound.fixture import FIXTURE_DIR
+from kvbound.paths import binary
 
 TOOLS = ("memcheck", "racecheck", "initcheck")
 
@@ -51,7 +51,7 @@ def main() -> None:
             for graph in (0, 1):
                 command = [
                     sanitizer, "--tool", tool, "--error-exitcode", "1",
-                    str(bench.binary(args.preset)), "--model", str(FIXTURE_DIR),
+                    str(binary("bench", args.preset)), "--model", str(FIXTURE_DIR),
                     "--trace", str(trace_path), "--max-ctx", "64", "--max-step-tokens", "16",
                     "--warmup", "0", "--iters", "1", "--graph", str(graph),
                 ]  # fmt: skip

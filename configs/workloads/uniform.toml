@@ -1,0 +1,15 @@
+# Lengths spread evenly over a wide range.
+name = "uniform"
+description = "prompts 32 to 512 tokens, outputs 16 to 256 tokens, uniform"
+n_requests = 48
+seed = 0
+
+[prompt]
+dist = "uniform"
+min = 32
+max = 512
+
+[output]
+dist = "uniform"
+min = 16
+max = 256

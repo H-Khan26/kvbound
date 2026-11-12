@@ -36,15 +36,19 @@ std::int32_t Sampler::sample(std::span<const float> logits) {
   };
   candidates_.resize(logits.size());
   std::iota(candidates_.begin(), candidates_.end(), 0);
-  if (config_.top_k > 0 && static_cast<std::size_t>(config_.top_k) < candidates_.size()) {
+  const bool top_k = config_.top_k > 0 && static_cast<std::size_t>(config_.top_k) < logits.size();
+  if (top_k) {
     std::nth_element(candidates_.begin(), candidates_.begin() + config_.top_k - 1,
                      candidates_.end(), by_logit);
     candidates_.resize(config_.top_k);
   }
-  std::sort(candidates_.begin(), candidates_.end(), by_logit);
+  // The nucleus needs the candidates largest first, and sorting also fixes the order
+  // nth_element leaves unspecified. Plain temperature sampling keeps token order and skips the
+  // sort of the whole vocabulary.
+  if (top_k || config_.top_p < 1.0f) std::sort(candidates_.begin(), candidates_.end(), by_logit);
 
-  // Softmax over the candidates, largest first. Subtracting the top logit keeps exp() in range.
-  const double top = logits[candidates_.front()];
+  // Softmax over the candidates. Subtracting the top logit keeps exp() in range.
+  const double top = logits[*std::min_element(candidates_.begin(), candidates_.end(), by_logit)];
   probs_.resize(candidates_.size());
   double total = 0.0;
   for (std::size_t i = 0; i < candidates_.size(); ++i) {

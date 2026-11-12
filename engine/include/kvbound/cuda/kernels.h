@@ -51,6 +51,10 @@ void kv_write(const f16* k, const f16* v, const StepRow* rows, const KvView& kv,
 void attention(const f16* q, f16* out, const StepRow* rows, const KvView& kv, int n_tokens,
                int n_heads, int n_kv_heads, int head_dim, int max_ctx, cudaStream_t stream);
 
+// Largest max_ctx attention() accepts for this head_dim (its scores live in shared memory);
+// 0 when head_dim itself is unsupported.
+int attention_max_positions(int head_dim);
+
 // Weight conversion to FP16 at load time, rounding to nearest even.
 void bf16_to_f16(f16* data, std::size_t n, cudaStream_t stream);  // in place
 void f32_to_f16(const float* src, f16* dst, std::size_t n, cudaStream_t stream);

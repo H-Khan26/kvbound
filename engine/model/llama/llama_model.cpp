@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <numbers>
+#include <string>
 
 #include "kvbound/cuda/kernels.h"
 
@@ -48,16 +49,53 @@ std::vector<float> rope_cos_sin(const ModelConfig& cfg, int max_positions) {
   return table;
 }
 
+LlamaModelConfig checked(const LlamaModelConfig& limits, const ModelConfig& cfg) {
+  const int max_positions = kernels::attention_max_positions(static_cast<int>(cfg.head_dim()));
+  if (limits.max_ctx <= 0 || limits.max_ctx > max_positions) {
+    throw Error("max_ctx must be between 1 and " + std::to_string(max_positions) +
+                " for head_dim " + std::to_string(cfg.head_dim()));
+  }
+  return limits;
+}
+
+// Opens the checkpoint and checks every tensor the program reads against the shape the program
+// will use it with, so a config that does not match its weights fails here and not as an
+// out-of-bounds read on the device.
+DeviceWeights load_weights(const std::filesystem::path& model_dir, const Program& program,
+                           const ModelConfig& cfg, cudaStream_t stream) {
+  const SafetensorsFile file(model_dir / "model.safetensors");
+  for (const Op& op : program.ops) {
+    if (op.weight < 0) continue;
+    const std::int64_t out_cols = program.values[op.out].cols;
+    std::vector<std::int64_t> expected;
+    switch (op.kind) {
+      case OpKind::Embed:
+        expected = {cfg.vocab_size, out_cols};
+        break;
+      case OpKind::RmsNorm:
+        expected = {out_cols};
+        break;
+      default:
+        expected = {out_cols, program.values[op.in0].cols};
+    }
+    const std::string& name = program.weights[op.weight];
+    if (file.at(name).shape != expected) {
+      throw Error(name + ": shape does not match config.json");
+    }
+  }
+  return DeviceWeights(file, program.weights, stream);
+}
+
 }  // namespace
 
 LlamaModel::LlamaModel(const std::filesystem::path& model_dir, const LlamaModelConfig& limits,
                        cudaStream_t stream)
     : config_(load_model_config(model_dir / "config.json")),
-      limits_(limits),
+      limits_(checked(limits, config_)),
       program_(build_llama_program(config_)),
       value_bytes_(value_bytes(program_, limits.max_step_tokens, limits.max_outputs)),
       plan_(plan_memory(value_bytes_, value_lifetimes(program_), limits.plan)),
-      weights_(SafetensorsFile(model_dir / "model.safetensors"), program_.weights, stream),
+      weights_(load_weights(model_dir, program_, config_, stream)),
       arena_(plan_.arena_bytes),
       blas_(stream, limits.gemm) {
   const std::vector<float> table = rope_cos_sin(config_, limits.max_ctx);

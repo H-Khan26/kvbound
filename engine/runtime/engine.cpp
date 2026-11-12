@@ -197,7 +197,7 @@ void Engine::add_sequence(int seq, std::span<const std::int32_t> prompt,
                           const SamplerConfig& sampler) {
   if (prompt.empty()) throw Error("a sequence needs at least one prompt token");
   if (sequences_.contains(seq)) throw Error("sequence " + std::to_string(seq) + " already exists");
-  sequences_.emplace(seq, Sequence{.row = rows_.allocate(),
+  sequences_.emplace(seq, Sequence{.row = -1,
                                    .blocks = {},
                                    .tokens = {prompt.begin(), prompt.end()},
                                    .n_cached = 0,
@@ -208,11 +208,12 @@ StepResult Engine::execute(const StepPlan& plan) {
   for (const int seq : plan.free) {
     Sequence& s = sequence(seq);
     for (const int block : s.blocks) blocks_.free(block);
-    rows_.free(s.row);
+    if (s.row >= 0) rows_.free(s.row);
     sequences_.erase(seq);
   }
   for (const StepPlan::Alloc& alloc : plan.alloc) {
     Sequence& s = sequence(alloc.seq);
+    if (s.row < 0) s.row = rows_.allocate();
     for (int i = 0; i < alloc.n_blocks; ++i) s.blocks.push_back(blocks_.allocate());
     set_blocks(s.row, s.blocks);
   }
@@ -223,7 +224,8 @@ StepResult Engine::execute(const StepPlan& plan) {
   const int block_size = kv_block_size();
   std::vector<StepRow> rows;
   std::vector<std::int32_t> out_rows;
-  std::vector<int> emitting;  // sequence ids, parallel to out_rows
+  std::vector<int> emitting;      // sequence ids, parallel to out_rows
+  std::vector<int> cached_after;  // per plan.run entry: the sequence's n_cached once the step ran
   bool all_greedy = true;
   for (const StepPlan::Run& run : plan.run) {
     Sequence& s = sequence(run.seq);
@@ -240,7 +242,7 @@ StepResult Engine::execute(const StepPlan& plan) {
                       .seq = s.row,
                       .kv_slot = s.blocks[pos / block_size] * block_size + pos % block_size});
     }
-    s.n_cached = end;
+    cached_after.push_back(end);
     if (end == static_cast<int>(s.tokens.size())) {
       out_rows.push_back(static_cast<std::int32_t>(rows.size()) - 1);
       emitting.push_back(run.seq);
@@ -249,6 +251,10 @@ StepResult Engine::execute(const StepPlan& plan) {
   }
 
   forward(rows, out_rows, {.times = op_times_});
+  // Sequence state advances only now, so a step that throws leaves every sequence as it was.
+  for (std::size_t i = 0; i < plan.run.size(); ++i) {
+    sequence(plan.run[i].seq).n_cached = cached_after[i];
+  }
   const std::span<const std::int32_t> greedy = next_ids();
   const std::vector<float> host_logits = all_greedy ? std::vector<float>{} : logits();
   const std::size_t vocab = static_cast<std::size_t>(model_->config().vocab_size);

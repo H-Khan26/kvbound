@@ -13,7 +13,6 @@ Usage: python -m kvbound.bench --model tinyllama-1.1b --prompt-len 128 --new-tok
 import argparse
 import itertools
 import json
-import platform
 import statistics
 import subprocess
 import tempfile
@@ -25,17 +24,9 @@ import torch
 from kvbound import fingerprint, record
 from kvbound.models import load_spec
 from kvbound.nvml_sampler import NvmlSampler
-from kvbound.paths import BUILD
+from kvbound.paths import binary
 from kvbound.perfmodel import hardware
 from kvbound.perfmodel.model import Arch, Precision, predict
-
-
-def binary(preset: str) -> Path:
-    suffix = ".exe" if platform.system() == "Windows" else ""
-    path = BUILD / preset / "bin" / f"kvb-bench{suffix}"
-    if not path.exists():
-        raise SystemExit(f"{path} not found; run `make build PRESET={preset}` first")
-    return path
 
 
 def random_prompt(vocab_size: int, prompt_len: int, seed: int) -> list[int]:
@@ -51,7 +42,13 @@ def run_kvb_bench(
     with tempfile.TemporaryDirectory() as tmp:
         trace_path = Path(tmp) / "trace.json"
         trace_path.write_text(json.dumps(trace), encoding="utf-8")
-        command = [str(binary(preset)), "--model", str(model_dir), "--trace", str(trace_path)]
+        command = [
+            str(binary("bench", preset)),
+            "--model",
+            str(model_dir),
+            "--trace",
+            str(trace_path),
+        ]
         for name, value in options.items():
             command += [f"--{name}", str(int(value) if isinstance(value, bool) else value)]
         with NvmlSampler() as sampler:
@@ -91,6 +88,16 @@ def op_profile_ms(raw: dict[str, Any]) -> dict[str, Any]:
     return profile
 
 
+def measured_ceilings() -> hardware.Ceilings | None:
+    """Ceilings of this machine's GPU, or None when it has no microbenchmark records yet."""
+    config = fingerprint.device_config(fingerprint.gpu_info()["name"])
+    if config is None:
+        return None
+    if {"bandwidth_sweep", "gemm_peak"} - set(hardware.latest_records(config[0])):
+        return None
+    return hardware.load(config[0])
+
+
 def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     spec = load_spec(args.model)
     arch = Arch.from_table(spec.arch)
@@ -113,6 +120,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
         "iters": args.iters,
         "profile-ops": args.profile_ops,
     }
+    hw = measured_ceilings() if args.gemm == "fp32" else None
     raw, nvml = run_kvb_bench(args.preset, spec.checkpoint_dir, trace, options)
 
     runs = [request_metrics(it["requests"][0]["token_times_s"]) for it in raw["iterations"]]
@@ -125,10 +133,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
         metrics["op_profile"] = op_profile_ms(raw)
 
     # The ceiling for this decode: the perf model's bound at the middle of the generated span.
-    gpu = fingerprint.gpu_info()
-    config = fingerprint.device_config(gpu["name"])
-    if config is not None and args.gemm == "fp32":
-        hw = hardware.load(config[0])
+    if hw is not None:
         context = args.prompt_len + args.new_tokens // 2
         bound = predict(arch, hw, Precision.named("fp16", "fp16"), 1, args.prompt_len, context)
         metrics["ceiling"] = {

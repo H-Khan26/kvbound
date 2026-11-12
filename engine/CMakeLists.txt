@@ -11,6 +11,7 @@ add_library(kvbound STATIC
   memory/planner.cpp
   model/llama/program.cpp
   runtime/sampler.cpp
+  sched/scheduler.cpp
 )
 add_library(kvbound::kvbound ALIAS kvbound)
 target_include_directories(kvbound PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

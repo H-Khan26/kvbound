@@ -9,7 +9,6 @@ Usage: python -m kvbound.microbench [bandwidth_sweep pointer_chase gemm_peak]
 
 import argparse
 import json
-import platform
 import statistics
 import subprocess
 from collections.abc import Callable
@@ -18,7 +17,7 @@ from typing import Any
 
 from kvbound import record
 from kvbound.nvml_sampler import NvmlSampler
-from kvbound.paths import BUILD
+from kvbound.paths import binary
 
 MIB = 1 << 20
 # Working sets at least this large are far beyond any cache on either card.
@@ -79,14 +78,6 @@ SUMMARIZERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "pointer_chase": summarize_pointer_chase,
     "gemm_peak": summarize_gemm,
 }
-
-
-def binary(name: str, preset: str) -> Path:
-    suffix = ".exe" if platform.system() == "Windows" else ""
-    path = BUILD / preset / "bin" / f"kvb-{name}{suffix}"
-    if not path.exists():
-        raise SystemExit(f"{path} not found; run `make build PRESET={preset}` first")
-    return path
 
 
 def run(name: str, preset: str) -> Path:

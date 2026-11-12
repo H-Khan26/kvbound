@@ -198,7 +198,7 @@ Out<f16> kv_attention(In<f16> q, In<f16> k, In<f16> v, In<std::int32_t> position
 // ---------------------------------------------------------------------------------------
 
 // The engine with a teacher-forcing entry point: feed tokens of one sequence and read back every
-// capture site. Blocks are assigned to rows in order, so row r owns blocks r * blocks_per_seq...
+// capture site. feed() gives row r the blocks r * blocks_per_seq... in order.
 class PyEngine {
  public:
   PyEngine(const std::string& model_dir, int max_ctx, int max_seqs, int max_step_tokens,
@@ -214,15 +214,7 @@ class PyEngine {
                                                        : kvb::PlanStrategy::GreedyBySize,
                                .gemm = accumulate_from(gemm),
                                .use_graph = graph,
-                           }) {
-    const int block_size = engine_.kv_block_size();
-    const int blocks_per_seq = (engine_.config().max_ctx + block_size - 1) / block_size;
-    for (int seq = 0; seq < engine_.config().max_seqs; ++seq) {
-      std::vector<int> blocks;
-      for (int i = 0; i < blocks_per_seq; ++i) blocks.push_back(seq * blocks_per_seq + i);
-      engine_.set_blocks(seq, blocks);
-    }
-  }
+                           }) {}
 
   // Processes `ids` as positions start, start + 1, ... of block-table row `seq`, with every row
   // an output. Returns logits [n, vocab] and, when capture is set, every capture site.
@@ -230,6 +222,11 @@ class PyEngine {
                                          bool capture) {
     const int block_size = engine_.kv_block_size();
     const int blocks_per_seq = (engine_.config().max_ctx + block_size - 1) / block_size;
+    // generate() leaves the row pointing at whatever blocks its sequence was given.
+    std::vector<int> blocks;
+    for (int i = 0; i < blocks_per_seq; ++i) blocks.push_back(seq * blocks_per_seq + i);
+    engine_.set_blocks(seq, blocks);
+
     std::vector<StepRow> rows;
     std::vector<std::int32_t> out_rows;
     for (int i = 0; i < static_cast<int>(ids.size()); ++i) {
@@ -250,11 +247,6 @@ class PyEngine {
     return result;
   }
 
-  std::vector<std::int32_t> last_argmax() const {
-    const auto ids = engine_.next_ids();
-    return {ids.begin(), ids.end()};
-  }
-
   std::vector<std::int32_t> generate(const std::vector<std::int32_t>& prompt, int max_new_tokens,
                                      float temperature, int top_k, float top_p, std::uint64_t seed,
                                      std::int32_t eos_token_id) {
@@ -263,15 +255,6 @@ class PyEngine {
         {.max_new_tokens = max_new_tokens,
          .sampler = {.temperature = temperature, .top_k = top_k, .top_p = top_p, .seed = seed},
          .eos_token_id = eos_token_id});
-  }
-
-  std::map<std::string, std::size_t> memory() const {
-    const kvb::cuda::EngineMemory m = engine_.memory();
-    return {{"weights", m.weights},
-            {"kv_pool", m.kv_pool},
-            {"arena", m.arena},
-            {"arena_naive", m.arena_naive},
-            {"arena_peak_live", m.arena_peak_live}};
   }
 
  private:
@@ -300,8 +283,6 @@ NB_MODULE(_kvb, m) {
            "kv_block_size"_a = 0, "kv_layout"_a = "head_major", "gemm"_a = "fp32", "graph"_a = true,
            "plan"_a = "greedy")
       .def("feed", &PyEngine::feed, "ids"_a, "start"_a = 0, "seq"_a = 0, "capture"_a = false)
-      .def("last_argmax", &PyEngine::last_argmax)
       .def("generate", &PyEngine::generate, "prompt"_a, "max_new_tokens"_a, "temperature"_a = 0.0f,
-           "top_k"_a = 0, "top_p"_a = 1.0f, "seed"_a = 0, "eos_token_id"_a = -1)
-      .def("memory", &PyEngine::memory);
+           "top_k"_a = 0, "top_p"_a = 1.0f, "seed"_a = 0, "eos_token_id"_a = -1);
 }

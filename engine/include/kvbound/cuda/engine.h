@@ -83,7 +83,8 @@ class Engine {
 
   // --- Sequences --------------------------------------------------------------------------------
 
-  // Registers a sequence with its prompt. It holds no cache blocks until a plan allocates them.
+  // Registers a sequence with its prompt. It holds no block-table row and no cache blocks until
+  // a plan allocates them, so more sequences can be registered than fit in the cache at once.
   void add_sequence(int seq, std::span<const std::int32_t> prompt,
                     const SamplerConfig& sampler = {});
   // Applies one plan: frees, allocations, then a forward step over the planned tokens. Each
@@ -96,7 +97,7 @@ class Engine {
 
  private:
   struct Sequence {
-    int row = 0;              // block-table row
+    int row = -1;             // block-table row, -1 until blocks are allocated
     std::vector<int> blocks;  // physical blocks, in logical order
     std::vector<std::int32_t> tokens;
     int n_cached = 0;  // tokens whose keys and values are in the cache

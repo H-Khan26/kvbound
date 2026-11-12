@@ -50,7 +50,6 @@ SPLITS = (lambda n: n, lambda n: 1, lambda n: max(1, n // 2))
     "options",
     [
         {},
-        {"graph": False},
         {"plan": "naive"},
         {"kv_block_size": 4},
         {"kv_layout": "token_major"},
@@ -61,6 +60,33 @@ SPLITS = (lambda n: n, lambda n: 1, lambda n: max(1, n // 2))
 def test_fixture_sites_match_goldens(kvb, options):
     engine = kvb.Engine(str(FIXTURE_DIR), max_ctx=64, **options)
     assert_matches_goldens(engine, FIXTURE_DIR, SPLITS)
+
+
+def test_graph_replay_matches_goldens(kvb):
+    """Capturing sites turns graphs off, so the graph path is checked through its logits."""
+    manifest, tensors = golden.load(FIXTURE_DIR)
+    limit = manifest["thresholds"]["fp16"]["rel_rms_max"]["logits"]
+    engine = kvb.Engine(str(FIXTURE_DIR), max_ctx=64, graph=True)
+    for prompt in manifest["prompts"]:
+        ids = tensors[f"{prompt['id']}/input_ids"].tolist()
+        # One-token steps are decode-shaped: the first captures a graph, the rest replay it.
+        steps = [engine.feed([t], start=i)["logits"] for i, t in enumerate(ids)]
+        logits = torch.from_numpy(np.concatenate(steps))
+        assert tolerance.rel_rms(logits, tensors[f"{prompt['id']}/logits"]) <= limit
+
+
+def test_engine_recovers_after_a_failed_request(kvb):
+    engine = kvb.Engine(str(FIXTURE_DIR), max_ctx=64)
+    prompt = fixture_prompts()[1]
+    expected = engine.generate(prompt, 8)
+    with pytest.raises(RuntimeError):
+        engine.generate(prompt, 8, top_p=0.0)  # rejected by the sampler
+    with pytest.raises(RuntimeError):
+        engine.generate([10_000], 8)  # token id beyond the vocabulary
+    assert engine.generate(prompt, 8) == expected
+    # feed() and generate() can share an engine.
+    logits = engine.feed(prompt)["logits"]
+    assert int(logits[-1].argmax()) == expected[0]
 
 
 def reference_greedy(model, prompt, n_new):

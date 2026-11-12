@@ -13,16 +13,19 @@ import json
 import re
 import shutil
 import subprocess
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from kvbound import bench
 from kvbound.models import load_spec
-from kvbound.paths import REPO_ROOT
+from kvbound.paths import REPO_ROOT, binary
 from kvbound.perfmodel.model import Arch
 
 PROFILES = REPO_ROOT / "results" / "profiles"
+# Kernels that run once per weight tensor while the model loads, not in a decode step.
+LOAD_KERNELS = {"bf16_to_f16", "f32_to_f16", "count_non_finite"}
 
 
 def find_nsys() -> str:
@@ -60,9 +63,10 @@ def summarize(out: Path, stem: str, steps: int) -> dict[str, Any]:
     """
     kernels: dict[str, dict[str, float]] = {}
     for row in read_csv(out / f"{stem}_cuda_gpu_kern_sum.csv"):
-        if int(row["Instances"]) < steps:
-            continue  # weight conversion at load time, not part of a step
-        entry = kernels.setdefault(kernel_family(row["Name"]), {"ms": 0.0, "launches": 0.0})
+        family = kernel_family(row["Name"])
+        if family in LOAD_KERNELS:
+            continue
+        entry = kernels.setdefault(family, {"ms": 0.0, "launches": 0.0})
         entry["ms"] += float(row["Total Time (ns)"]) / 1e6 / steps
         entry["launches"] += int(row["Instances"]) / steps
     api = {
@@ -82,6 +86,12 @@ def summarize(out: Path, stem: str, steps: int) -> dict[str, Any]:
     }
 
 
+def run(command: list[str]) -> None:
+    done = subprocess.run(command, capture_output=True, text=True, check=False)
+    if done.returncode != 0:
+        raise SystemExit(f"{Path(command[0]).name} failed:\n{done.stdout}\n{done.stderr}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True)
@@ -91,10 +101,8 @@ def main() -> None:
     args = parser.parse_args()
 
     spec = load_spec(args.model)
-    stamp = f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}"
+    nsys = find_nsys()
     stem = "graph" if args.graph else "eager"
-    out = PROFILES / f"{stamp}-decode-{spec.name}-{stem}"
-    out.mkdir(parents=True)
     # A one-token prompt makes every step decode-shaped, so per-step averages mean something.
     trace = {
         "requests": [
@@ -105,31 +113,32 @@ def main() -> None:
             }
         ]
     }
-    trace_path = out / "trace.json"
-    trace_path.write_text(json.dumps(trace), encoding="utf-8")
 
-    nsys = find_nsys()
-    report = out / f"{stem}.nsys-rep"
-    command = [
-        nsys, "profile", "--trace", "cuda", "--output", str(report), "--force-overwrite", "true",
-        str(bench.binary(args.preset)), "--model", str(spec.checkpoint_dir),
-        "--trace", str(trace_path), "--max-ctx", str(args.new_tokens + 1),
-        "--warmup", "0", "--iters", "1", "--graph", str(int(args.graph)),
-    ]  # fmt: skip
-    subprocess.run(command, check=True, capture_output=True)
-    subprocess.run(
-        [
+    # Everything is produced in a scratch directory; results/profiles/ gains a directory only
+    # once the profile succeeded.
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp) / "profile"
+        work.mkdir()
+        trace_path = Path(tmp) / "trace.json"
+        trace_path.write_text(json.dumps(trace), encoding="utf-8")
+        report = work / f"{stem}.nsys-rep"
+        run([
+            nsys, "profile", "--trace", "cuda", "--output", str(report),
+            "--force-overwrite", "true",
+            str(binary("bench", args.preset)), "--model", str(spec.checkpoint_dir),
+            "--trace", str(trace_path), "--max-ctx", str(args.new_tokens + 1),
+            "--warmup", "0", "--iters", "1", "--graph", str(int(args.graph)),
+        ])  # fmt: skip
+        run([
             nsys, "stats", "--report", "cuda_gpu_kern_sum,cuda_api_sum", "--format", "csv",
-            "--output", str(out / stem), "--force-export", "true", str(report),
-        ],
-        check=True,
-        capture_output=True,
-    )  # fmt: skip
-    trace_path.unlink()
+            "--output", str(work / stem), "--force-export", "true", str(report),
+        ])  # fmt: skip
+        summary = summarize(work, stem, args.new_tokens)
+        with (work / "summary.json").open("w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(summary, indent=2) + "\n")
+        out = PROFILES / f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-decode-{spec.name}-{stem}"
+        shutil.copytree(work, out)
 
-    summary = summarize(out, stem, args.new_tokens)
-    with (out / "summary.json").open("w", encoding="utf-8", newline="\n") as f:
-        f.write(json.dumps(summary, indent=2) + "\n")
     print(f"{spec.name}, {args.new_tokens} decode steps, graph={args.graph}")
     print(f"GPU time in kernels: {summary['gpu_ms_per_step_total']:.2f} ms per step")
     for family, k in summary["gpu_ms_per_step"].items():

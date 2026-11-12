@@ -16,25 +16,30 @@ std::vector<std::int32_t> generate(Engine& engine, std::span<const std::int32_t>
   StepPlan plan;
   plan.alloc.push_back({kSeq, (total + block_size - 1) / block_size});
 
-  std::vector<std::int32_t> generated;
-  int pending = static_cast<int>(prompt.size());  // known tokens not yet in the cache
-  while (static_cast<int>(generated.size()) < options.max_new_tokens) {
-    const int n = std::min(pending, engine.config().max_step_tokens);
-    plan.run.assign(1, {kSeq, n});
-    const StepResult result = engine.execute(plan);
-    plan.alloc.clear();
-    pending -= n;
-    if (result.tokens.empty()) continue;  // a prompt chunk that was not the last
-
-    const std::int32_t token = result.tokens.front().token;
-    generated.push_back(token);
-    pending = 1;
-    if (options.on_token) options.on_token(token);
-    if (token == options.eos_token_id) break;
-  }
-
   StepPlan release;
   release.free.push_back(kSeq);
+  std::vector<std::int32_t> generated;
+  try {
+    int pending = static_cast<int>(prompt.size());  // known tokens not yet in the cache
+    while (static_cast<int>(generated.size()) < options.max_new_tokens) {
+      const int n = std::min(pending, engine.config().max_step_tokens);
+      plan.run.assign(1, {kSeq, n});
+      const StepResult result = engine.execute(plan);
+      plan.alloc.clear();
+      pending -= n;
+      if (result.tokens.empty()) continue;  // a prompt chunk that was not the last
+
+      const std::int32_t token = result.tokens.front().token;
+      generated.push_back(token);
+      pending = 1;
+      if (options.on_token) options.on_token(token);
+      if (token == options.eos_token_id) break;
+    }
+  } catch (...) {
+    // The engine stays usable after a failed request.
+    engine.execute(release);
+    throw;
+  }
   engine.execute(release);
   return generated;
 }

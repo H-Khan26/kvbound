@@ -1,0 +1,20 @@
+# Mostly short requests with a few long ones, as chat traffic tends to look. One long output
+# keeps a whole static batch alive.
+name = "longtail"
+description = "lognormal lengths: median prompt 64, median output 48, a few several times longer"
+n_requests = 48
+seed = 0
+
+[prompt]
+dist = "lognormal"
+median = 64
+sigma = 1.0
+min = 8
+max = 640
+
+[output]
+dist = "lognormal"
+median = 48
+sigma = 1.0
+min = 4
+max = 384

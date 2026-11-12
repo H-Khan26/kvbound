@@ -18,24 +18,19 @@ class DeviceWeights {
  public:
   // Copies the named tensors from the mapped file to the device. BF16 and FP32 tensors are
   // converted to FP16 on the GPU. Throws kvb::Error if a tensor is missing, has another dtype,
-  // or holds a value outside the FP16 range.
+  // or holds a value outside the FP16 range. Shapes are the caller's to check.
   DeviceWeights(const SafetensorsFile& file, std::span<const std::string> names,
                 cudaStream_t stream);
 
-  // Device pointer and shape of names[index].
+  // Device pointer of names[index].
   const std::uint16_t* data(int index) const noexcept {
-    return arena_.as<std::uint16_t>() + entries_[index].offset;
+    return arena_.as<std::uint16_t>() + offsets_[index];
   }
-  const std::vector<std::int64_t>& shape(int index) const noexcept { return entries_[index].shape; }
   std::size_t bytes() const noexcept { return arena_.bytes(); }
 
  private:
-  struct Entry {
-    std::size_t offset = 0;  // in FP16 elements
-    std::vector<std::int64_t> shape;
-  };
   DeviceBuffer arena_;
-  std::vector<Entry> entries_;
+  std::vector<std::size_t> offsets_;  // per name, in FP16 elements
 };
 
 }  // namespace kvb::cuda

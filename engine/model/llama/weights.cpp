@@ -25,7 +25,7 @@ DeviceWeights::DeviceWeights(const SafetensorsFile& file, std::span<const std::s
       total += (tensor.numel() + kAlignElements - 1) / kAlignElements * kAlignElements;
       if (tensor.dtype == DType::F32) largest_f32 = std::max(largest_f32, tensor.nbytes);
     }
-    entries_.push_back({it->second, tensor.shape});
+    offsets_.push_back(it->second);
   }
 
   arena_ = DeviceBuffer(total * sizeof(std::uint16_t));
