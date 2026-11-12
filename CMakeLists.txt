@@ -6,6 +6,8 @@ option(KVB_ENABLE_CUDA "Build CUDA kernels and the GPU runtime" OFF)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+# The static libraries are linked into the Python extension, a shared object.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 if(KVB_ENABLE_CUDA)
   if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
@@ -32,6 +34,8 @@ include(CTest)
 
 add_subdirectory(engine)
 if(KVB_ENABLE_CUDA)
+  add_subdirectory(apps)
+  add_subdirectory(bindings)
   add_subdirectory(microbench)
 endif()
 
