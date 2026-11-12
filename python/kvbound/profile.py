@@ -128,7 +128,8 @@ def main() -> None:
     trace_path.unlink()
 
     summary = summarize(out, stem, args.new_tokens)
-    (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    with (out / "summary.json").open("w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(summary, indent=2) + "\n")
     print(f"{spec.name}, {args.new_tokens} decode steps, graph={args.graph}")
     print(f"GPU time in kernels: {summary['gpu_ms_per_step_total']:.2f} ms per step")
     for family, k in summary["gpu_ms_per_step"].items():

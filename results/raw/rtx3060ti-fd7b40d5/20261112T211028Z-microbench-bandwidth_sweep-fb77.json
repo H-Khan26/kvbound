@@ -1,0 +1,1771 @@
+{
+  "schema_version": 1,
+  "run_id": "20261112T211028Z-microbench-bandwidth_sweep-fb77",
+  "kind": "microbench.bandwidth_sweep",
+  "created_utc": "2026-11-12T21:10:28+00:00",
+  "tags": [
+    "os=windows",
+    "clock_varied"
+  ],
+  "engine": {
+    "name": "kvb-bandwidth_sweep.exe",
+    "preset": "cuda"
+  },
+  "model": null,
+  "params": {
+    "element_bytes": 16,
+    "block_threads": 256,
+    "max_blocks": 228,
+    "target_seconds": 0.1,
+    "repeats": 5,
+    "burst_seconds": 0.002,
+    "bursts": 40
+  },
+  "metrics": {
+    "dram_read_gbs": 415.35,
+    "dram_read_sustained_gbs": 366.61,
+    "cache_peak_read_gbs": 6296.48,
+    "dram_write_gbs": 415.76,
+    "dram_write_sustained_gbs": 364.44,
+    "cache_peak_write_gbs": 1144.48,
+    "dram_copy_gbs": 406.19500000000005,
+    "dram_copy_sustained_gbs": 352.57500000000005,
+    "cache_peak_copy_gbs": 2282.77
+  },
+  "samples": {
+    "device": {
+      "name": "NVIDIA GeForce RTX 3060 Ti",
+      "compute_capability": "8.6",
+      "sm_count": 38,
+      "l2_cache_bytes": 3145728,
+      "total_memory_bytes": 8589410304
+    },
+    "points": [
+      {
+        "mode": "read",
+        "working_set_bytes": 16384,
+        "threads": 1024,
+        "best_gbs": 233.53,
+        "median_gbs": 231.34,
+        "burst_gbs": 249.43
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 16384,
+        "threads": 1024,
+        "best_gbs": 229.19,
+        "median_gbs": 229.11,
+        "burst_gbs": 248.58
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 16384,
+        "threads": 512,
+        "best_gbs": 206.83,
+        "median_gbs": 206.52,
+        "burst_gbs": 222.5
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 16384,
+        "threads": 1024,
+        "best_gbs": 232.35,
+        "median_gbs": 231.87,
+        "burst_gbs": 247.22
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 16384,
+        "threads": 1024,
+        "best_gbs": 229.57,
+        "median_gbs": 229.12,
+        "burst_gbs": 244.11
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 16384,
+        "threads": 512,
+        "best_gbs": 206.78,
+        "median_gbs": 206.36,
+        "burst_gbs": 224.44
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 20480,
+        "threads": 1280,
+        "best_gbs": 290.0,
+        "median_gbs": 289.9,
+        "burst_gbs": 309.72
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 20480,
+        "threads": 1280,
+        "best_gbs": 286.06,
+        "median_gbs": 285.95,
+        "burst_gbs": 308.72
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 16384,
+        "threads": 512,
+        "best_gbs": 206.55,
+        "median_gbs": 206.04,
+        "burst_gbs": 224.56
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 24576,
+        "threads": 1536,
+        "best_gbs": 348.76,
+        "median_gbs": 347.86,
+        "burst_gbs": 375.07
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 24576,
+        "threads": 1536,
+        "best_gbs": 343.19,
+        "median_gbs": 341.25,
+        "burst_gbs": 370.36
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 24576,
+        "threads": 768,
+        "best_gbs": 307.24,
+        "median_gbs": 307.12,
+        "burst_gbs": 332.94
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 28672,
+        "threads": 1792,
+        "best_gbs": 403.02,
+        "median_gbs": 402.83,
+        "burst_gbs": 426.94
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 28672,
+        "threads": 1792,
+        "best_gbs": 398.14,
+        "median_gbs": 398.04,
+        "burst_gbs": 429.44
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 24576,
+        "threads": 768,
+        "best_gbs": 308.64,
+        "median_gbs": 307.23,
+        "burst_gbs": 331.46
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 36864,
+        "threads": 2304,
+        "best_gbs": 518.22,
+        "median_gbs": 517.76,
+        "burst_gbs": 558.32
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 36864,
+        "threads": 2304,
+        "best_gbs": 511.75,
+        "median_gbs": 511.6,
+        "burst_gbs": 546.97
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 32768,
+        "threads": 1024,
+        "best_gbs": 410.65,
+        "median_gbs": 409.93,
+        "burst_gbs": 437.47
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 45056,
+        "threads": 2816,
+        "best_gbs": 633.6,
+        "median_gbs": 632.86,
+        "burst_gbs": 675.52
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 45056,
+        "threads": 2816,
+        "best_gbs": 617.87,
+        "median_gbs": 616.03,
+        "burst_gbs": 664.84
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 40960,
+        "threads": 1280,
+        "best_gbs": 513.33,
+        "median_gbs": 512.92,
+        "burst_gbs": 546.37
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 53248,
+        "threads": 3328,
+        "best_gbs": 750.22,
+        "median_gbs": 748.93,
+        "burst_gbs": 796.95
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 53248,
+        "threads": 3328,
+        "best_gbs": 704.17,
+        "median_gbs": 699.67,
+        "burst_gbs": 759.42
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 49152,
+        "threads": 1536,
+        "best_gbs": 616.29,
+        "median_gbs": 614.39,
+        "burst_gbs": 661.78
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 61440,
+        "threads": 3840,
+        "best_gbs": 865.52,
+        "median_gbs": 863.89,
+        "burst_gbs": 912.03
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 61440,
+        "threads": 3840,
+        "best_gbs": 762.46,
+        "median_gbs": 759.26,
+        "burst_gbs": 815.43
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 57344,
+        "threads": 1792,
+        "best_gbs": 717.19,
+        "median_gbs": 716.83,
+        "burst_gbs": 761.49
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 77824,
+        "threads": 4864,
+        "best_gbs": 1094.7,
+        "median_gbs": 1093.67,
+        "burst_gbs": 1169.57
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 77824,
+        "threads": 4864,
+        "best_gbs": 965.74,
+        "median_gbs": 964.65,
+        "burst_gbs": 1026.08
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 73728,
+        "threads": 2304,
+        "best_gbs": 930.26,
+        "median_gbs": 929.35,
+        "burst_gbs": 991.95
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 90112,
+        "threads": 5632,
+        "best_gbs": 1278.65,
+        "median_gbs": 1273.14,
+        "burst_gbs": 1360.65
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 90112,
+        "threads": 5632,
+        "best_gbs": 616.8,
+        "median_gbs": 616.06,
+        "burst_gbs": 655.12
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 90112,
+        "threads": 2816,
+        "best_gbs": 1138.6,
+        "median_gbs": 1136.19,
+        "burst_gbs": 1204.85
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 106496,
+        "threads": 6656,
+        "best_gbs": 1510.65,
+        "median_gbs": 1508.24,
+        "burst_gbs": 1602.28
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 106496,
+        "threads": 6656,
+        "best_gbs": 725.1,
+        "median_gbs": 724.93,
+        "burst_gbs": 773.85
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 106496,
+        "threads": 3328,
+        "best_gbs": 1343.91,
+        "median_gbs": 1342.79,
+        "burst_gbs": 1448.97
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 126976,
+        "threads": 7936,
+        "best_gbs": 1798.17,
+        "median_gbs": 1796.7,
+        "burst_gbs": 1941.47
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 126976,
+        "threads": 7936,
+        "best_gbs": 868.54,
+        "median_gbs": 865.51,
+        "burst_gbs": 939.16
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 122880,
+        "threads": 3840,
+        "best_gbs": 1549.96,
+        "median_gbs": 1548.63,
+        "burst_gbs": 1644.08
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 155648,
+        "threads": 9728,
+        "best_gbs": 2210.09,
+        "median_gbs": 2203.08,
+        "burst_gbs": 2360.48
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 155648,
+        "threads": 9728,
+        "best_gbs": 1068.75,
+        "median_gbs": 1062.87,
+        "burst_gbs": 1144.48
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 155648,
+        "threads": 4864,
+        "best_gbs": 1965.42,
+        "median_gbs": 1955.99,
+        "burst_gbs": 2103.5
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 184320,
+        "threads": 11520,
+        "best_gbs": 2247.8,
+        "median_gbs": 2245.17,
+        "burst_gbs": 2430.11
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 184320,
+        "threads": 11520,
+        "best_gbs": 840.65,
+        "median_gbs": 840.45,
+        "burst_gbs": 899.96
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 180224,
+        "threads": 5632,
+        "best_gbs": 1259.99,
+        "median_gbs": 1258.76,
+        "burst_gbs": 1341.64
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 217088,
+        "threads": 13568,
+        "best_gbs": 2652.55,
+        "median_gbs": 2641.54,
+        "burst_gbs": 2846.2
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 217088,
+        "threads": 13568,
+        "best_gbs": 979.92,
+        "median_gbs": 979.26,
+        "burst_gbs": 1060.16
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 212992,
+        "threads": 6656,
+        "best_gbs": 1453.98,
+        "median_gbs": 1447.87,
+        "burst_gbs": 1551.57
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 258048,
+        "threads": 16128,
+        "best_gbs": 3108.99,
+        "median_gbs": 3107.79,
+        "burst_gbs": 3371.28
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 258048,
+        "threads": 16128,
+        "best_gbs": 884.24,
+        "median_gbs": 884.03,
+        "burst_gbs": 943.28
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 253952,
+        "threads": 7936,
+        "best_gbs": 1735.28,
+        "median_gbs": 1723.87,
+        "burst_gbs": 1874.28
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 311296,
+        "threads": 19456,
+        "best_gbs": 3738.9,
+        "median_gbs": 3735.61,
+        "burst_gbs": 4006.77
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 311296,
+        "threads": 19456,
+        "best_gbs": 1049.3,
+        "median_gbs": 1048.86,
+        "burst_gbs": 1139.8
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 311296,
+        "threads": 9728,
+        "best_gbs": 2024.76,
+        "median_gbs": 2021.19,
+        "burst_gbs": 2186.6
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 368640,
+        "threads": 23040,
+        "best_gbs": 3210.48,
+        "median_gbs": 3202.51,
+        "burst_gbs": 3516.98
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 368640,
+        "threads": 23040,
+        "best_gbs": 1000.43,
+        "median_gbs": 997.49,
+        "burst_gbs": 1089.28
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 368640,
+        "threads": 11520,
+        "best_gbs": 1656.92,
+        "median_gbs": 1652.43,
+        "burst_gbs": 1790.54
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 438272,
+        "threads": 27392,
+        "best_gbs": 3787.63,
+        "median_gbs": 3773.03,
+        "burst_gbs": 4157.75
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 438272,
+        "threads": 27392,
+        "best_gbs": 1001.58,
+        "median_gbs": 993.93,
+        "burst_gbs": 1081.1
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 434176,
+        "threads": 13568,
+        "best_gbs": 1940.45,
+        "median_gbs": 1936.36,
+        "burst_gbs": 2073.01
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 520192,
+        "threads": 32512,
+        "best_gbs": 3294.62,
+        "median_gbs": 3290.32,
+        "burst_gbs": 3613.87
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 520192,
+        "threads": 32512,
+        "best_gbs": 1005.49,
+        "median_gbs": 1004.54,
+        "burst_gbs": 1104.25
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 516096,
+        "threads": 16128,
+        "best_gbs": 1777.37,
+        "median_gbs": 1773.17,
+        "burst_gbs": 1906.72
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 622592,
+        "threads": 38912,
+        "best_gbs": 3895.11,
+        "median_gbs": 3856.37,
+        "burst_gbs": 4261.23
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 622592,
+        "threads": 38912,
+        "best_gbs": 1015.16,
+        "median_gbs": 1014.29,
+        "burst_gbs": 1115.82
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 622592,
+        "threads": 19456,
+        "best_gbs": 2066.14,
+        "median_gbs": 2062.5,
+        "burst_gbs": 2233.33
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 741376,
+        "threads": 46336,
+        "best_gbs": 3872.95,
+        "median_gbs": 3860.01,
+        "burst_gbs": 4321.27
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 741376,
+        "threads": 46336,
+        "best_gbs": 986.55,
+        "median_gbs": 985.59,
+        "burst_gbs": 1089.2
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 737280,
+        "threads": 23040,
+        "best_gbs": 1976.33,
+        "median_gbs": 1974.72,
+        "burst_gbs": 2132.45
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 880640,
+        "threads": 55040,
+        "best_gbs": 3915.66,
+        "median_gbs": 3914.95,
+        "burst_gbs": 4311.04
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 880640,
+        "threads": 55040,
+        "best_gbs": 978.24,
+        "median_gbs": 976.58,
+        "burst_gbs": 1066.14
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 876544,
+        "threads": 27392,
+        "best_gbs": 1980.95,
+        "median_gbs": 1973.13,
+        "burst_gbs": 2121.97
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 933888,
+        "threads": 58368,
+        "best_gbs": 4162.36,
+        "median_gbs": 4143.35,
+        "burst_gbs": 4625.91
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 933888,
+        "threads": 58368,
+        "best_gbs": 1024.11,
+        "median_gbs": 1023.1,
+        "burst_gbs": 1139.05
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 1040384,
+        "threads": 32512,
+        "best_gbs": 1992.88,
+        "median_gbs": 1981.55,
+        "burst_gbs": 2153.11
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 933888,
+        "threads": 58368,
+        "best_gbs": 4129.51,
+        "median_gbs": 4126.34,
+        "burst_gbs": 4587.91
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 933888,
+        "threads": 58368,
+        "best_gbs": 1025.69,
+        "median_gbs": 1021.29,
+        "burst_gbs": 1139.96
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 1245184,
+        "threads": 38912,
+        "best_gbs": 2065.53,
+        "median_gbs": 2056.43,
+        "burst_gbs": 2282.77
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 933888,
+        "threads": 58368,
+        "best_gbs": 4127.29,
+        "median_gbs": 4122.67,
+        "burst_gbs": 4655.04
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 933888,
+        "threads": 58368,
+        "best_gbs": 979.11,
+        "median_gbs": 947.77,
+        "burst_gbs": 1138.99
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 1482752,
+        "threads": 46336,
+        "best_gbs": 1967.64,
+        "median_gbs": 1956.91,
+        "burst_gbs": 2146.32
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 933888,
+        "threads": 58368,
+        "best_gbs": 4143.81,
+        "median_gbs": 4121.46,
+        "burst_gbs": 4670.76
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 933888,
+        "threads": 58368,
+        "best_gbs": 1020.51,
+        "median_gbs": 946.2,
+        "burst_gbs": 1140.98
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 1761280,
+        "threads": 55040,
+        "best_gbs": 1944.65,
+        "median_gbs": 1941.36,
+        "burst_gbs": 2168.21
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 1867776,
+        "threads": 58368,
+        "best_gbs": 4726.14,
+        "median_gbs": 4654.58,
+        "burst_gbs": 5785.16
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 1867776,
+        "threads": 58368,
+        "best_gbs": 1023.07,
+        "median_gbs": 1012.57,
+        "burst_gbs": 1137.44
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 1867776,
+        "threads": 58368,
+        "best_gbs": 2012.4,
+        "median_gbs": 1989.02,
+        "burst_gbs": 2257.15
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 1867776,
+        "threads": 58368,
+        "best_gbs": 4998.27,
+        "median_gbs": 4521.42,
+        "burst_gbs": 5728.05
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 1867776,
+        "threads": 58368,
+        "best_gbs": 985.4,
+        "median_gbs": 974.64,
+        "burst_gbs": 1134.27
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 1867776,
+        "threads": 58368,
+        "best_gbs": 1992.29,
+        "median_gbs": 1919.21,
+        "burst_gbs": 2246.25
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 2801664,
+        "threads": 58368,
+        "best_gbs": 5235.36,
+        "median_gbs": 4982.19,
+        "burst_gbs": 6201.41
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 2801664,
+        "threads": 58368,
+        "best_gbs": 1014.78,
+        "median_gbs": 1006.5,
+        "burst_gbs": 1140.99
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 1867776,
+        "threads": 58368,
+        "best_gbs": 1923.19,
+        "median_gbs": 1842.26,
+        "burst_gbs": 2238.2
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 2801664,
+        "threads": 58368,
+        "best_gbs": 5003.71,
+        "median_gbs": 4850.42,
+        "burst_gbs": 6251.14
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 2801664,
+        "threads": 58368,
+        "best_gbs": 979.31,
+        "median_gbs": 971.93,
+        "burst_gbs": 1140.27
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 1867776,
+        "threads": 58368,
+        "best_gbs": 1973.15,
+        "median_gbs": 1970.7,
+        "burst_gbs": 2249.41
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 3735552,
+        "threads": 58368,
+        "best_gbs": 5050.96,
+        "median_gbs": 4981.08,
+        "burst_gbs": 6296.48
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 3735552,
+        "threads": 58368,
+        "best_gbs": 958.16,
+        "median_gbs": 954.33,
+        "burst_gbs": 1128.96
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 3735552,
+        "threads": 58368,
+        "best_gbs": 1921.15,
+        "median_gbs": 1888.95,
+        "burst_gbs": 2190.39
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 4669440,
+        "threads": 58368,
+        "best_gbs": 4521.89,
+        "median_gbs": 4470.3,
+        "burst_gbs": 5512.68
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 4669440,
+        "threads": 58368,
+        "best_gbs": 780.5,
+        "median_gbs": 777.06,
+        "burst_gbs": 885.89
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 3735552,
+        "threads": 58368,
+        "best_gbs": 1898.97,
+        "median_gbs": 1791.01,
+        "burst_gbs": 2196.5
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 5603328,
+        "threads": 58368,
+        "best_gbs": 4165.9,
+        "median_gbs": 3998.93,
+        "burst_gbs": 5131.12
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 5603328,
+        "threads": 58368,
+        "best_gbs": 439.09,
+        "median_gbs": 423.75,
+        "burst_gbs": 503.08
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 5603328,
+        "threads": 58368,
+        "best_gbs": 673.42,
+        "median_gbs": 667.85,
+        "burst_gbs": 828.4
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 6537216,
+        "threads": 58368,
+        "best_gbs": 4042.08,
+        "median_gbs": 3860.17,
+        "burst_gbs": 4757.79
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 6537216,
+        "threads": 58368,
+        "best_gbs": 390.13,
+        "median_gbs": 388.67,
+        "burst_gbs": 437.16
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 5603328,
+        "threads": 58368,
+        "best_gbs": 673.88,
+        "median_gbs": 661.03,
+        "burst_gbs": 815.9
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 7471104,
+        "threads": 58368,
+        "best_gbs": 3706.75,
+        "median_gbs": 3614.48,
+        "burst_gbs": 4493.11
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 7471104,
+        "threads": 58368,
+        "best_gbs": 376.52,
+        "median_gbs": 346.98,
+        "burst_gbs": 425.22
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 7471104,
+        "threads": 58368,
+        "best_gbs": 469.71,
+        "median_gbs": 428.72,
+        "burst_gbs": 574.7
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 9338880,
+        "threads": 58368,
+        "best_gbs": 3322.73,
+        "median_gbs": 3000.51,
+        "burst_gbs": 1235.27
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 9338880,
+        "threads": 58368,
+        "best_gbs": 342.69,
+        "median_gbs": 335.28,
+        "burst_gbs": 416.33
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 9338880,
+        "threads": 58368,
+        "best_gbs": 371.85,
+        "median_gbs": 365.95,
+        "burst_gbs": 486.05
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 11206656,
+        "threads": 58368,
+        "best_gbs": 383.15,
+        "median_gbs": 363.61,
+        "burst_gbs": 421.88
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 11206656,
+        "threads": 58368,
+        "best_gbs": 361.81,
+        "median_gbs": 359.69,
+        "burst_gbs": 418.01
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 11206656,
+        "threads": 58368,
+        "best_gbs": 370.89,
+        "median_gbs": 367.83,
+        "burst_gbs": 436.83
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 14008320,
+        "threads": 58368,
+        "best_gbs": 364.76,
+        "median_gbs": 362.97,
+        "burst_gbs": 413.93
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 14008320,
+        "threads": 58368,
+        "best_gbs": 359.64,
+        "median_gbs": 359.4,
+        "burst_gbs": 412.13
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 13074432,
+        "threads": 58368,
+        "best_gbs": 362.09,
+        "median_gbs": 361.07,
+        "burst_gbs": 418.71
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 15876096,
+        "threads": 58368,
+        "best_gbs": 365.14,
+        "median_gbs": 364.21,
+        "burst_gbs": 413.72
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 15876096,
+        "threads": 58368,
+        "best_gbs": 365.69,
+        "median_gbs": 365.35,
+        "burst_gbs": 416.72
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 14942208,
+        "threads": 58368,
+        "best_gbs": 361.84,
+        "median_gbs": 361.63,
+        "burst_gbs": 402.53
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 19611648,
+        "threads": 58368,
+        "best_gbs": 373.06,
+        "median_gbs": 369.82,
+        "burst_gbs": 414.74
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 19611648,
+        "threads": 58368,
+        "best_gbs": 361.12,
+        "median_gbs": 314.57,
+        "burst_gbs": 412.76
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 18677760,
+        "threads": 58368,
+        "best_gbs": 361.82,
+        "median_gbs": 353.56,
+        "burst_gbs": 406.25
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 23347200,
+        "threads": 58368,
+        "best_gbs": 366.17,
+        "median_gbs": 359.8,
+        "burst_gbs": 414.77
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 23347200,
+        "threads": 58368,
+        "best_gbs": 358.4,
+        "median_gbs": 357.66,
+        "burst_gbs": 415.46
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 22413312,
+        "threads": 58368,
+        "best_gbs": 355.62,
+        "median_gbs": 352.88,
+        "burst_gbs": 409.07
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 28016640,
+        "threads": 58368,
+        "best_gbs": 366.76,
+        "median_gbs": 363.94,
+        "burst_gbs": 414.86
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 28016640,
+        "threads": 58368,
+        "best_gbs": 363.57,
+        "median_gbs": 358.8,
+        "burst_gbs": 417.34
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 28016640,
+        "threads": 58368,
+        "best_gbs": 355.12,
+        "median_gbs": 353.56,
+        "burst_gbs": 406.2
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 32686080,
+        "threads": 58368,
+        "best_gbs": 364.57,
+        "median_gbs": 362.54,
+        "burst_gbs": 413.53
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 32686080,
+        "threads": 58368,
+        "best_gbs": 361.09,
+        "median_gbs": 360.24,
+        "burst_gbs": 414.2
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 31752192,
+        "threads": 58368,
+        "best_gbs": 354.71,
+        "median_gbs": 354.7,
+        "burst_gbs": 408.56
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 39223296,
+        "threads": 58368,
+        "best_gbs": 364.57,
+        "median_gbs": 363.37,
+        "burst_gbs": 415.6
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 39223296,
+        "threads": 58368,
+        "best_gbs": 361.25,
+        "median_gbs": 359.64,
+        "burst_gbs": 416.02
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 39223296,
+        "threads": 58368,
+        "best_gbs": 354.18,
+        "median_gbs": 353.85,
+        "burst_gbs": 406.53
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 46694400,
+        "threads": 58368,
+        "best_gbs": 368.23,
+        "median_gbs": 364.05,
+        "burst_gbs": 411.79
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 46694400,
+        "threads": 58368,
+        "best_gbs": 360.33,
+        "median_gbs": 360.13,
+        "burst_gbs": 414.57
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 46694400,
+        "threads": 58368,
+        "best_gbs": 353.68,
+        "median_gbs": 353.51,
+        "burst_gbs": 408.29
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 56033280,
+        "threads": 58368,
+        "best_gbs": 365.39,
+        "median_gbs": 365.01,
+        "burst_gbs": 413.76
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 56033280,
+        "threads": 58368,
+        "best_gbs": 363.13,
+        "median_gbs": 359.69,
+        "burst_gbs": 412.64
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 56033280,
+        "threads": 58368,
+        "best_gbs": 354.52,
+        "median_gbs": 353.67,
+        "burst_gbs": 405.82
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 66306048,
+        "threads": 58368,
+        "best_gbs": 367.04,
+        "median_gbs": 363.58,
+        "burst_gbs": 412.4
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 66306048,
+        "threads": 58368,
+        "best_gbs": 365.64,
+        "median_gbs": 363.94,
+        "burst_gbs": 414.98
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 65372160,
+        "threads": 58368,
+        "best_gbs": 355.87,
+        "median_gbs": 354.13,
+        "burst_gbs": 405.76
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 79380480,
+        "threads": 58368,
+        "best_gbs": 364.85,
+        "median_gbs": 363.2,
+        "burst_gbs": 416.04
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 79380480,
+        "threads": 58368,
+        "best_gbs": 363.27,
+        "median_gbs": 362.32,
+        "burst_gbs": 416.28
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 78446592,
+        "threads": 58368,
+        "best_gbs": 356.4,
+        "median_gbs": 353.57,
+        "burst_gbs": 407.44
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 94322688,
+        "threads": 58368,
+        "best_gbs": 364.57,
+        "median_gbs": 364.33,
+        "burst_gbs": 412.58
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 94322688,
+        "threads": 58368,
+        "best_gbs": 364.47,
+        "median_gbs": 362.48,
+        "burst_gbs": 415.23
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 93388800,
+        "threads": 58368,
+        "best_gbs": 353.0,
+        "median_gbs": 351.07,
+        "burst_gbs": 403.51
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 112066560,
+        "threads": 58368,
+        "best_gbs": 365.45,
+        "median_gbs": 364.54,
+        "burst_gbs": 409.35
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 112066560,
+        "threads": 58368,
+        "best_gbs": 365.2,
+        "median_gbs": 364.78,
+        "burst_gbs": 414.86
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 112066560,
+        "threads": 58368,
+        "best_gbs": 352.4,
+        "median_gbs": 350.45,
+        "burst_gbs": 397.99
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 133545984,
+        "threads": 58368,
+        "best_gbs": 364.52,
+        "median_gbs": 364.5,
+        "burst_gbs": 404.91
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 133545984,
+        "threads": 58368,
+        "best_gbs": 366.57,
+        "median_gbs": 362.31,
+        "burst_gbs": 412.33
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 132612096,
+        "threads": 58368,
+        "best_gbs": 352.86,
+        "median_gbs": 349.75,
+        "burst_gbs": 403.98
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 158760960,
+        "threads": 58368,
+        "best_gbs": 364.34,
+        "median_gbs": 364.02,
+        "burst_gbs": 414.36
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 158760960,
+        "threads": 58368,
+        "best_gbs": 365.03,
+        "median_gbs": 362.29,
+        "burst_gbs": 413.36
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 158760960,
+        "threads": 58368,
+        "best_gbs": 352.14,
+        "median_gbs": 349.1,
+        "burst_gbs": 405.55
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 189579264,
+        "threads": 58368,
+        "best_gbs": 363.77,
+        "median_gbs": 362.46,
+        "burst_gbs": 409.87
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 189579264,
+        "threads": 58368,
+        "best_gbs": 363.88,
+        "median_gbs": 361.22,
+        "burst_gbs": 413.03
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 188645376,
+        "threads": 58368,
+        "best_gbs": 351.51,
+        "median_gbs": 349.56,
+        "burst_gbs": 403.92
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 225067008,
+        "threads": 58368,
+        "best_gbs": 365.37,
+        "median_gbs": 363.79,
+        "burst_gbs": 414.41
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 225067008,
+        "threads": 58368,
+        "best_gbs": 365.5,
+        "median_gbs": 361.61,
+        "burst_gbs": 414.59
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 224133120,
+        "threads": 58368,
+        "best_gbs": 350.55,
+        "median_gbs": 350.07,
+        "burst_gbs": 404.65
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 268025856,
+        "threads": 58368,
+        "best_gbs": 366.25,
+        "median_gbs": 364.98,
+        "burst_gbs": 408.45
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 268025856,
+        "threads": 58368,
+        "best_gbs": 361.74,
+        "median_gbs": 361.2,
+        "burst_gbs": 415.06
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 267091968,
+        "threads": 58368,
+        "best_gbs": 351.86,
+        "median_gbs": 349.55,
+        "burst_gbs": 405.88
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 318455808,
+        "threads": 58368,
+        "best_gbs": 365.82,
+        "median_gbs": 364.14,
+        "burst_gbs": 411.52
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 318455808,
+        "threads": 58368,
+        "best_gbs": 361.74,
+        "median_gbs": 361.2,
+        "burst_gbs": 413.63
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 317521920,
+        "threads": 58368,
+        "best_gbs": 346.08,
+        "median_gbs": 344.51,
+        "burst_gbs": 404.51
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 379158528,
+        "threads": 58368,
+        "best_gbs": 365.41,
+        "median_gbs": 363.93,
+        "burst_gbs": 405.21
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 379158528,
+        "threads": 58368,
+        "best_gbs": 364.57,
+        "median_gbs": 360.51,
+        "burst_gbs": 409.86
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 379158528,
+        "threads": 58368,
+        "best_gbs": 352.8,
+        "median_gbs": 349.58,
+        "burst_gbs": 399.91
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 451067904,
+        "threads": 58368,
+        "best_gbs": 366.92,
+        "median_gbs": 364.1,
+        "burst_gbs": 406.15
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 451067904,
+        "threads": 58368,
+        "best_gbs": 361.21,
+        "median_gbs": 360.1,
+        "burst_gbs": 413.9
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 450134016,
+        "threads": 58368,
+        "best_gbs": 351.65,
+        "median_gbs": 349.6,
+        "burst_gbs": 402.05
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 536051712,
+        "threads": 58368,
+        "best_gbs": 365.34,
+        "median_gbs": 362.61,
+        "burst_gbs": 408.67
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 536051712,
+        "threads": 58368,
+        "best_gbs": 361.93,
+        "median_gbs": 361.8,
+        "burst_gbs": 403.5
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 536051712,
+        "threads": 58368,
+        "best_gbs": 352.05,
+        "median_gbs": 349.1,
+        "burst_gbs": 402.68
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 637845504,
+        "threads": 58368,
+        "best_gbs": 365.08,
+        "median_gbs": 362.77,
+        "burst_gbs": 410.03
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 637845504,
+        "threads": 58368,
+        "best_gbs": 365.24,
+        "median_gbs": 359.89,
+        "burst_gbs": 406.06
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 636911616,
+        "threads": 58368,
+        "best_gbs": 354.21,
+        "median_gbs": 353.17,
+        "burst_gbs": 406.17
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 758317056,
+        "threads": 58368,
+        "best_gbs": 367.4,
+        "median_gbs": 362.91,
+        "burst_gbs": 415.72
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 758317056,
+        "threads": 58368,
+        "best_gbs": 361.52,
+        "median_gbs": 361.28,
+        "burst_gbs": 415.06
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 758317056,
+        "threads": 58368,
+        "best_gbs": 351.39,
+        "median_gbs": 351.18,
+        "burst_gbs": 405.37
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 902135808,
+        "threads": 58368,
+        "best_gbs": 366.33,
+        "median_gbs": 363.62,
+        "burst_gbs": 414.98
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 902135808,
+        "threads": 58368,
+        "best_gbs": 360.95,
+        "median_gbs": 360.38,
+        "burst_gbs": 416.46
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 902135808,
+        "threads": 58368,
+        "best_gbs": 352.35,
+        "median_gbs": 350.02,
+        "burst_gbs": 406.22
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 1073037312,
+        "threads": 58368,
+        "best_gbs": 366.89,
+        "median_gbs": 362.67,
+        "burst_gbs": 418.75
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 1073037312,
+        "threads": 58368,
+        "best_gbs": 364.31,
+        "median_gbs": 319.11,
+        "burst_gbs": 416.6
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 1072103424,
+        "threads": 58368,
+        "best_gbs": 347.83,
+        "median_gbs": 314.19,
+        "burst_gbs": 407.24
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 1276624896,
+        "threads": 58368,
+        "best_gbs": 325.57,
+        "median_gbs": 320.9,
+        "burst_gbs": 418.85
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 1276624896,
+        "threads": 58368,
+        "best_gbs": 365.84,
+        "median_gbs": 365.23,
+        "burst_gbs": 417.48
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 1275691008,
+        "threads": 58368,
+        "best_gbs": 358.1,
+        "median_gbs": 356.97,
+        "burst_gbs": 408.21
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 1517568000,
+        "threads": 58368,
+        "best_gbs": 372.59,
+        "median_gbs": 368.49,
+        "burst_gbs": 416.66
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 1517568000,
+        "threads": 58368,
+        "best_gbs": 367.04,
+        "median_gbs": 365.1,
+        "burst_gbs": 418.19
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 1516634112,
+        "threads": 58368,
+        "best_gbs": 359.39,
+        "median_gbs": 355.95,
+        "burst_gbs": 408.97
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 1805205504,
+        "threads": 58368,
+        "best_gbs": 370.26,
+        "median_gbs": 368.2,
+        "burst_gbs": 421.66
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 1805205504,
+        "threads": 58368,
+        "best_gbs": 369.43,
+        "median_gbs": 365.15,
+        "burst_gbs": 418.99
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 1804271616,
+        "threads": 58368,
+        "best_gbs": 358.94,
+        "median_gbs": 356.92,
+        "burst_gbs": 408.16
+      },
+      {
+        "mode": "read",
+        "working_set_bytes": 2147008512,
+        "threads": 58368,
+        "best_gbs": 372.78,
+        "median_gbs": 368.92,
+        "burst_gbs": 422.08
+      },
+      {
+        "mode": "write",
+        "working_set_bytes": 2147008512,
+        "threads": 58368,
+        "best_gbs": 366.05,
+        "median_gbs": 365.69,
+        "burst_gbs": 417.96
+      },
+      {
+        "mode": "copy",
+        "working_set_bytes": 2146074624,
+        "threads": 58368,
+        "best_gbs": 358.94,
+        "median_gbs": 355.13,
+        "burst_gbs": 406.29
+      }
+    ]
+  },
+  "nvml": {
+    "interval_s": 1.0,
+    "n_samples": 139,
+    "sm_clock_mhz": {
+      "min": 210,
+      "mean": 1940.3956834532373,
+      "max": 1980
+    },
+    "mem_clock_mhz": {
+      "min": 405,
+      "mean": 6753.992805755395,
+      "max": 6800
+    },
+    "temp_c": {
+      "min": 28,
+      "mean": 28.0,
+      "max": 28
+    },
+    "power_w": {
+      "min": 20.949,
+      "mean": 155.55002158273382,
+      "max": 213.978
+    },
+    "util_pct": {
+      "min": 18,
+      "mean": 98.9568345323741,
+      "max": 100
+    },
+    "mem_used_mib": {
+      "min": 1251,
+      "mean": 4481.280575539568,
+      "max": 4807
+    },
+    "sm_clock_mhz_busy": {
+      "min": 1875,
+      "max": 1980,
+      "n": 138
+    }
+  },
+  "fingerprint": {
+    "device_id": "rtx3060ti-fd7b40d5",
+    "device_config": "rtx3060ti",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3060 Ti",
+      "uuid": "GPU-fd7b40d5-161e-fadf-f3ad-10e7ae835d42",
+      "compute_capability": "8.6",
+      "memory_total_mib": 8192,
+      "driver_version": "576.02",
+      "sm_clock_max_mhz": 2100,
+      "pcie_gen_max": 3,
+      "pcie_width_max": 16,
+      "power_limit_w": 220.0,
+      "persistence_mode": null
+    },
+    "software": {
+      "os_class": "windows",
+      "os": "Windows 10 (10.0.19045)",
+      "cpu": "Intel64 Family 6 Model 165 Stepping 5, GenuineIntel",
+      "python": "3.12.14",
+      "torch": "2.11.0+cu128",
+      "torch_cuda": "12.8",
+      "nvcc": "12.9",
+      "cmake": "4.4.4"
+    },
+    "git": {
+      "sha": "b30521a7082f485c127cd71a9cdd2171528c44b5",
+      "dirty": false
+    }
+  }
+}

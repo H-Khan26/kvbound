@@ -2,70 +2,70 @@
   "steps": 256,
   "gpu_ms_per_step": {
     "cublas gemv": {
-      "ms": 4.1977343437500005,
+      "ms": 4.189862121093751,
       "launches": 133.0
     },
     "cublas gemm": {
-      "ms": 1.47159276953125,
+      "ms": 1.46625751171875,
       "launches": 22.0
     },
     "attention": {
-      "ms": 0.27275504296875,
+      "ms": 0.2709058984375,
       "launches": 22.0
     },
     "rms_norm": {
-      "ms": 0.18207976171875,
+      "ms": 0.18227561328125,
       "launches": 45.0
     },
     "rope": {
-      "ms": 0.06763884375,
+      "ms": 0.067632234375,
       "launches": 44.0
     },
     "add": {
-      "ms": 0.0612193671875,
+      "ms": 0.0604663125,
       "launches": 44.0
     },
     "other": {
-      "ms": 0.04341915234375,
+      "ms": 0.0431730390625,
       "launches": 22.0
     },
     "silu_mul": {
-      "ms": 0.043100171875,
+      "ms": 0.04240387109375,
       "launches": 22.0
     },
     "kv_write": {
-      "ms": 0.0333863671875,
+      "ms": 0.03341136328125,
       "launches": 22.0
     },
     "argmax": {
-      "ms": 0.00592028125,
+      "ms": 0.005986796875,
       "launches": 1.0
     },
     "embedding": {
-      "ms": 0.001622765625,
+      "ms": 0.001600140625,
       "launches": 1.0
     },
     "gather_rows": {
-      "ms": 0.00138837890625,
+      "ms": 0.00137912890625,
       "launches": 1.0
     }
   },
-  "gpu_ms_per_step_total": 6.381857246093751,
+  "gpu_ms_per_step_total": 6.365354031250001,
   "api_per_step": {
     "cudaStreamSynchronize": {
-      "ms": 5.27989926171875,
+      "ms": 5.098311671875,
       "calls": 1.0078125,
-      "median_us": 5478.6685
+      "median_us": 5435.2
     },
     "cudaLaunchKernel": {
-      "ms": 1.41378665234375,
+      "ms": 1.57097025,
       "calls": 357.7890625,
-      "median_us": 3.297
+      "median_us": 3.317
     },
     "cuLaunchKernel": {
-      "ms": 0.11037865234375,
+      "ms": 0.1099839609375,
       "calls": 22.0,
-      "median_us": 3.427
+      "median_us": 3.4255
     }
   }
 }
