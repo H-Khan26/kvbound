@@ -247,12 +247,13 @@ int run(int argc, char** argv) {
       prop.name, prop.major, prop.minor, prop.totalGlobalMem);
   std::printf(
       "  \"config\": {\"slots\": %d, \"max_ctx\": %d, \"max_step_tokens\": %d, "
+      "\"max_outputs\": %d, "
       "\"kv_block_size\": %d, \"kv_blocks\": %d, \"kv_layout\": \"%s\", "
       "\"gemm_accumulate\": \"%s\", \"graph\": %s, \"plan\": \"%s\", \"warmup\": %d, "
       "\"iters\": %d},\n",
-      resolved.max_seqs, resolved.max_ctx, resolved.max_step_tokens, resolved.kv_block_size,
-      resolved.kv_blocks, layout.c_str(), gemm.c_str(), resolved.use_graph ? "true" : "false",
-      plan.c_str(), warmup, iters);
+      resolved.max_seqs, resolved.max_ctx, resolved.max_step_tokens, resolved.max_outputs,
+      resolved.kv_block_size, resolved.kv_blocks, layout.c_str(), gemm.c_str(),
+      resolved.use_graph ? "true" : "false", plan.c_str(), warmup, iters);
   std::printf(
       "  \"model\": {\"vocab_size\": %lld, \"hidden_size\": %lld, \"n_layers\": %lld, "
       "\"n_heads\": %lld, \"n_kv_heads\": %lld, \"intermediate_size\": %lld},\n",

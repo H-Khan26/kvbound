@@ -12,6 +12,8 @@ namespace {
 EngineConfig resolved(EngineConfig config) {
   if (config.max_ctx <= 0 || config.max_seqs <= 0) throw Error("max_ctx and max_seqs must be > 0");
   if (config.max_step_tokens <= 0) config.max_step_tokens = config.max_ctx;
+  if (config.max_outputs <= 0) config.max_outputs = config.max_seqs;
+  config.max_outputs = std::min(config.max_outputs, config.max_step_tokens);
   if (config.kv_block_size <= 0) config.kv_block_size = config.max_ctx;
   if (config.kv_block_size > config.max_ctx) throw Error("kv_block_size exceeds max_ctx");
   const int blocks_per_seq = (config.max_ctx + config.kv_block_size - 1) / config.kv_block_size;
@@ -40,7 +42,7 @@ Engine::Engine(const std::filesystem::path& model_dir, const EngineConfig& confi
   model_ = std::make_unique<LlamaModel>(model_dir,
                                         LlamaModelConfig{.max_ctx = config_.max_ctx,
                                                          .max_step_tokens = config_.max_step_tokens,
-                                                         .max_outputs = config_.max_step_tokens,
+                                                         .max_outputs = config_.max_outputs,
                                                          .plan = config_.plan,
                                                          .gemm = config_.gemm,
                                                          .wide_key_loads = config_.wide_key_loads},
@@ -83,9 +85,11 @@ void Engine::forward(std::span<const StepRow> rows, std::span<const std::int32_t
                      const ForwardOptions& options) {
   const int n_tokens = static_cast<int>(rows.size());
   const int n_out = static_cast<int>(out_rows.size());
-  if (n_tokens == 0 || n_tokens > config_.max_step_tokens || n_out > n_tokens) {
+  if (n_tokens == 0 || n_tokens > config_.max_step_tokens || n_out > n_tokens ||
+      n_out > config_.max_outputs) {
     throw Error("step has " + std::to_string(n_tokens) + " rows and " + std::to_string(n_out) +
-                " outputs; the limit is " + std::to_string(config_.max_step_tokens));
+                " outputs; the limits are " + std::to_string(config_.max_step_tokens) + " and " +
+                std::to_string(config_.max_outputs));
   }
   for (const StepRow& row : rows) {
     if (row.position < 0 || row.position >= config_.max_ctx || row.seq < 0 ||

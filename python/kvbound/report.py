@@ -1,6 +1,9 @@
-"""Turns microbenchmark records into the Phase 1 figures: roofline, bandwidth sweep, latency.
+"""Turns result records into figures under reports/<device>/.
 
-Usage: python -m kvbound.report --device rtx3060ti   (writes reports/<device>/*.png)
+Hardware: roofline, bandwidth sweep, latency. Engine: KV layout benchmark, KV memory under static
+batching, and the activation memory plan. Figures whose records do not exist yet are skipped.
+
+Usage: python -m kvbound.report --device rtx3060ti --model tinyllama-1.1b
 """
 
 import argparse
@@ -14,7 +17,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+from matplotlib.patches import Rectangle
 
+from kvbound import record
 from kvbound.models import load_spec
 from kvbound.paths import CONFIGS, REPORTS
 from kvbound.perfmodel import hardware
@@ -221,6 +226,164 @@ def latency(records: dict[str, dict[str, Any]]) -> Figure:
     return fig
 
 
+LAYOUT_LABELS = {
+    "head_major": "head-major",
+    "token_major": "token-major",
+    "dim_major": "dimension-major",
+}
+
+
+def kv_layout(records: dict[str, dict[str, Any]]) -> Figure:
+    rec = records["kv_layout"]
+    points = [p for p in rec["samples"]["points"] if p["shape"] == "decode"]
+    params = rec["params"]
+    best = rec["metrics"]["attention_ms"]
+    speedup = best["head_major/scalar"]["decode_batch1"] / best["head_major/wide"]["decode_batch1"]
+    fig, axes = plt.subplots(1, 2, figsize=(9, 5.2), dpi=160, sharey=True)
+    fig.patch.set_facecolor(SURFACE)
+    fig.suptitle(
+        "Attention time per decode step, by KV layout and load width",
+        x=0.07, y=0.97, ha="left", fontsize=13, fontweight="bold", color=INK,
+    )  # fmt: skip
+    fig.text(
+        0.07, 0.9,
+        f"Reading a key as 16-byte loads is {speedup:.1f}x faster than 2-byte loads. Which "
+        "dimension is outermost changes little.\n"
+        f"{params['n_layers']} layers, {params['n_heads']} query heads over "
+        f"{params['n_kv_heads']} KV heads of {params['head_dim']} dimensions, FP16.",
+        fontsize=9.5, color=INK_2, va="top",
+    )  # fmt: skip
+    for ax, batch in zip(axes, (1, params["slots"]), strict=True):
+        ax.set_facecolor(SURFACE)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        for side in ("left", "bottom"):
+            ax.spines[side].set_color(AXIS)
+        ax.tick_params(colors=MUTED, labelsize=8.5, which="both")
+        ax.grid(True, which="major", color=GRID, linewidth=0.6)
+        ax.set_axisbelow(True)
+        for layout, color in zip(LAYOUT_LABELS, SERIES, strict=True):
+            for loads, style in (("wide", "-"), ("scalar", (0, (4, 2)))):
+                series = [
+                    p for p in points
+                    if (p["layout"], p["key_loads"], p["batch"]) == (layout, loads, batch)
+                ]  # fmt: skip
+                if not series:
+                    continue
+                label = (
+                    f"{LAYOUT_LABELS[layout]}, {'16-byte' if loads == 'wide' else '2-byte'} loads"
+                )
+                ax.plot([p["ctx"] for p in series], [p["attention_ms"] for p in series],
+                        color=color, lw=2, ls=style, marker="o", ms=3.5, label=label)  # fmt: skip
+        ax.set_xscale("log", base=2)
+        ax.set_yscale("log")
+        contexts = sorted({p["ctx"] for p in points})
+        ax.set_xticks(contexts, [str(c) for c in contexts])
+        ax.minorticks_off()
+        ax.set_xlabel("tokens in the cache", color=INK_2, fontsize=9)
+        ax.set_title(f"batch {batch}", loc="left", fontsize=9.5, color=INK_2)
+    ticks = [0.25, 0.5, 1, 2, 4, 8, 16, 32]
+    axes[0].set_yticks(ticks, [f"{t:g}" for t in ticks])
+    axes[0].set_ylabel("milliseconds per step, all layers", color=INK_2, fontsize=9)
+    axes[0].legend(loc="upper left", frameon=False, fontsize=8, labelcolor=INK_2)
+    fig.tight_layout(rect=(0, 0, 1, 0.8))
+    return fig
+
+
+def latest_serve_records(device: str, model: str) -> dict[tuple[str, int], dict[str, Any]]:
+    """Newest serve record per (workload, slots) for a device config and model."""
+    latest = {}
+    for rec in record.load_records("serve"):
+        if rec["fingerprint"]["device_config"] == device and rec["model"]["name"] == model:
+            latest[rec["params"]["workload"], rec["params"]["slots"]] = rec
+    return latest
+
+
+def static_memory(serve: dict[tuple[str, int], dict[str, Any]], slots: int) -> Figure:
+    runs = {workload: rec for (workload, n), rec in serve.items() if n == slots}
+    first = next(iter(runs.values()))
+    per_token = first["metrics"]["memory"]["kv_bytes_per_token"]
+    pool = first["params"]["kv_blocks"] * first["params"]["kv_block_size"]
+    to_mib = per_token / 2**20
+    fig, axes = plt.subplots(1, len(runs), figsize=(9, 5.2), dpi=160, sharey=True)
+    fig.patch.set_facecolor(SURFACE)
+    fig.suptitle(
+        f"KV cache memory under static batching, {slots} slots",
+        x=0.07, y=0.97, ha="left", fontsize=13, fontweight="bold", color=INK,
+    )  # fmt: skip
+    fig.text(
+        0.07, 0.9,
+        f"The whole pool ({pool * to_mib:.0f} MiB) is allocated up front and every admitted "
+        f"sequence holds a full {first['params']['max_ctx']}-token slot.\n"
+        "The filled area is the part that holds tokens; the line is the part reserved for "
+        "admitted sequences.",
+        fontsize=9.5, color=INK_2, va="top",
+    )  # fmt: skip
+    for ax, (workload, rec) in zip(axes, runs.items(), strict=True):
+        steps, m = rec["samples"]["steps"], rec["metrics"]
+        ax.set_facecolor(SURFACE)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        for side in ("left", "bottom"):
+            ax.spines[side].set_color(AXIS)
+        ax.tick_params(colors=MUTED, labelsize=8.5)
+        ax.grid(True, axis="y", color=GRID, linewidth=0.6)
+        ax.set_axisbelow(True)
+        t = steps["end_s"]
+        ax.fill_between(t, [u * to_mib for u in steps["used_tokens"]], step="pre",
+                        color=SERIES[0], alpha=0.85, lw=0, label="holds tokens")  # fmt: skip
+        ax.plot(t, [r * to_mib for r in steps["reserved_tokens"]], drawstyle="steps-pre",
+                color=INK, lw=1.2, label="reserved for sequences")  # fmt: skip
+        ax.set_title(
+            f"{workload}\n{m['throughput_tok_s']['p50']:.0f} tokens/s, "
+            f"{m['kv_used_of_reserved']['p50']:.0%} of reserved in use,\n"
+            f"slots busy {m['slot_occupancy']['p50']:.0%} of the time",
+            loc="left", fontsize=9, color=INK_2,
+        )  # fmt: skip
+        ax.set_xlabel("seconds", color=INK_2, fontsize=9)
+        ax.set_xlim(0, max(t))
+    axes[0].set_ylabel("KV cache (MiB)", color=INK_2, fontsize=9)
+    axes[-1].legend(loc="center right", frameon=False, fontsize=8.5, labelcolor=INK_2)
+    fig.tight_layout(rect=(0, 0, 1, 0.8))
+    return fig
+
+
+def arena(rec: dict[str, Any]) -> Figure:
+    """Each activation as a rectangle: the ops it lives through by the arena bytes it occupies."""
+    plan, memory = rec["samples"]["plan"], rec["metrics"]["memory"]
+    mib = 2**20
+    fig, ax = _figure(
+        f"Activation memory plan: {rec['model']['name']}, "
+        f"{rec['params']['max_step_tokens']}-token steps",
+        f"{len(plan)} intermediate tensors would need {memory['arena_naive_bytes'] / mib:,.0f} "
+        f"MiB side by side. Placed by lifetime they share "
+        f"{memory['arena_bytes'] / mib:,.0f} MiB;\nno plan can use less than "
+        f"{memory['arena_peak_live_bytes'] / mib:,.0f} MiB, the most that is alive at once.",
+    )
+    for value in plan:
+        ax.add_patch(
+            Rectangle(
+                (value["first_op"], value["offset"] / mib),
+                value["last_op"] - value["first_op"] + 1,
+                value["bytes"] / mib,
+                facecolor=SERIES[0], edgecolor=SURFACE, linewidth=0.4, alpha=0.9,
+            )
+        )  # fmt: skip
+    residual = plan[0]
+    ax.text(
+        (residual["first_op"] + residual["last_op"]) / 2,
+        (residual["offset"] + residual["bytes"] / 2) / mib,
+        "residual stream, alive through every layer",
+        fontsize=8.5, color=SURFACE, ha="center", va="center",
+    )  # fmt: skip
+    ax.set_xlim(0, max(v["last_op"] for v in plan) + 1)
+    ax.set_ylim(0, memory["arena_bytes"] / mib * 1.02)
+    ax.set_xlabel("op in the forward pass", color=INK_2, fontsize=9)
+    ax.set_ylabel("offset in the arena (MiB)", color=INK_2, fontsize=9)
+    ax.grid(False)
+    return fig
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", required=True, help="name from configs/devices/")
@@ -236,6 +399,17 @@ def main() -> None:
     print(_save(roofline(args.device, records, arch, args.model), out / "roofline.png"))
     print(_save(bandwidth(args.device, records), out / "bandwidth.png"))
     print(_save(latency(records), out / "latency.png"))
+    if "kv_layout" in records:
+        print(_save(kv_layout(records), out / "kv_layout.png"))
+    serve = latest_serve_records(args.device, args.model)
+    slots = max((n for _, n in serve), default=0)
+    if slots:
+        print(_save(static_memory(serve, slots), out / "static_memory.png"))
+        print(
+            _save(
+                arena(next(rec for (_, n), rec in serve.items() if n == slots)), out / "arena.png"
+            )
+        )
 
 
 if __name__ == "__main__":

@@ -24,8 +24,11 @@ struct EngineConfig {
   int max_ctx = 2048;       // tokens one sequence can hold
   int max_seqs = 1;         // sequences cached at the same time
   int max_step_tokens = 0;  // rows of the largest step; 0 means max_ctx
-  int kv_block_size = 0;    // positions per KV block; 0 means max_ctx, one block per sequence
-  int kv_blocks = 0;        // blocks in the pool; 0 means enough for max_seqs full sequences
+  // Rows of one step that can produce logits; 0 means max_seqs, one per sequence, which is all
+  // that generation needs. Logits are the widest activation, so this sets the arena's size.
+  int max_outputs = 0;
+  int kv_block_size = 0;  // positions per KV block; 0 means max_ctx, one block per sequence
+  int kv_blocks = 0;      // blocks in the pool; 0 means enough for max_seqs full sequences
   KvLayout kv_layout = KvLayout::HeadMajor;
   PlanStrategy plan = PlanStrategy::GreedyBySize;
   GemmAccumulate gemm = GemmAccumulate::F32;

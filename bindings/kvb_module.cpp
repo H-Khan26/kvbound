@@ -212,6 +212,8 @@ class PyEngine {
                                .max_ctx = max_ctx,
                                .max_seqs = max_seqs,
                                .max_step_tokens = max_step_tokens,
+                               // feed() asks for the logits of every row.
+                               .max_outputs = max_step_tokens > 0 ? max_step_tokens : max_ctx,
                                .kv_block_size = kv_block_size,
                                .kv_layout = layout_from(kv_layout),
                                .plan = plan == "naive" ? kvb::PlanStrategy::Naive
