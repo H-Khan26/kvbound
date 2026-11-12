@@ -19,8 +19,11 @@ Scheduler::Scheduler(const SchedulerConfig& config) : config_(config) {
 }
 
 void Scheduler::submit(const Request& request) {
-  if (request.prompt_tokens <= 0 || request.max_new_tokens <= 0 ||
-      request.prompt_tokens + request.max_new_tokens > config_.max_ctx) {
+  if (request.prompt_tokens <= 0 || request.max_new_tokens <= 0) {
+    throw Error("request " + std::to_string(request.id) +
+                " needs at least one prompt token and one new token");
+  }
+  if (request.prompt_tokens + request.max_new_tokens > config_.max_ctx) {
     throw Error("request " + std::to_string(request.id) + " does not fit in max_ctx");
   }
   waiting_.push_back(request);

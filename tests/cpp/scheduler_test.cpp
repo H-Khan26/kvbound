@@ -152,6 +152,7 @@ TEST(StaticScheduler, RejectsWhatCannotRun) {
   Scheduler scheduler({.n_slots = 1, .max_ctx = 8, .block_size = 8, .max_step_tokens = 8});
   EXPECT_THROW(scheduler.submit({0, 6, 3}), kvb::Error);
   EXPECT_THROW(scheduler.submit({0, 0, 3}), kvb::Error);
+  EXPECT_THROW(scheduler.submit({0, 3, 0}), kvb::Error);
   scheduler.submit({0, 4, 4});
   const StepPlan plan = scheduler.next();
   EXPECT_THROW(scheduler.next(), kvb::Error);

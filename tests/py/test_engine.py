@@ -158,6 +158,8 @@ def test_generate_stops_at_eos_and_rejects_overflow(kvb):
     assert stopped == tokens[: tokens.index(tokens[3]) + 1]
     with pytest.raises(RuntimeError, match="max_ctx"):
         engine.generate(prompt, 32)
+    with pytest.raises(RuntimeError, match="at least one prompt token"):
+        engine.generate([], 4)
 
 
 @pytest.mark.slow

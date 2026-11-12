@@ -7,8 +7,6 @@ namespace kvb::cuda {
 std::vector<std::int32_t> generate(Engine& engine, std::span<const std::int32_t> prompt,
                                    const GenerateOptions& options) {
   if (options.max_new_tokens <= 0) return {};
-  const int total = static_cast<int>(prompt.size()) + options.max_new_tokens;
-  if (total > engine.config().max_ctx) throw Error("prompt plus new tokens exceed max_ctx");
 
   // One request through the same scheduler that plans batches.
   const ServeRequest request{.id = 0,

@@ -41,7 +41,7 @@ class Scheduler {
  public:
   explicit Scheduler(const SchedulerConfig& config);
 
-  // Queues a request. Throws kvb::Error if it cannot fit in max_ctx.
+  // Queues a request. Throws kvb::Error if it is empty or cannot fit in max_ctx.
   void submit(const Request& request);
 
   // True when nothing is waiting, running or left to free.
