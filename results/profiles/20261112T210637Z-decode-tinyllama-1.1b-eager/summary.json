@@ -1,0 +1,71 @@
+{
+  "steps": 256,
+  "gpu_ms_per_step": {
+    "cublas gemv": {
+      "ms": 4.1977343437500005,
+      "launches": 133.0
+    },
+    "cublas gemm": {
+      "ms": 1.47159276953125,
+      "launches": 22.0
+    },
+    "attention": {
+      "ms": 0.27275504296875,
+      "launches": 22.0
+    },
+    "rms_norm": {
+      "ms": 0.18207976171875,
+      "launches": 45.0
+    },
+    "rope": {
+      "ms": 0.06763884375,
+      "launches": 44.0
+    },
+    "add": {
+      "ms": 0.0612193671875,
+      "launches": 44.0
+    },
+    "other": {
+      "ms": 0.04341915234375,
+      "launches": 22.0
+    },
+    "silu_mul": {
+      "ms": 0.043100171875,
+      "launches": 22.0
+    },
+    "kv_write": {
+      "ms": 0.0333863671875,
+      "launches": 22.0
+    },
+    "argmax": {
+      "ms": 0.00592028125,
+      "launches": 1.0
+    },
+    "embedding": {
+      "ms": 0.001622765625,
+      "launches": 1.0
+    },
+    "gather_rows": {
+      "ms": 0.00138837890625,
+      "launches": 1.0
+    }
+  },
+  "gpu_ms_per_step_total": 6.381857246093751,
+  "api_per_step": {
+    "cudaStreamSynchronize": {
+      "ms": 5.27989926171875,
+      "calls": 1.0078125,
+      "median_us": 5478.6685
+    },
+    "cudaLaunchKernel": {
+      "ms": 1.41378665234375,
+      "calls": 357.7890625,
+      "median_us": 3.297
+    },
+    "cuLaunchKernel": {
+      "ms": 0.11037865234375,
+      "calls": 22.0,
+      "median_us": 3.427
+    }
+  }
+}

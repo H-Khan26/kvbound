@@ -1,0 +1,69 @@
+"""Runs the engine under compute-sanitizer on the committed fixture.
+
+memcheck finds out-of-bounds and misaligned device accesses, racecheck finds shared-memory races
+between the threads of a block, initcheck finds reads of device memory that was never written.
+The run covers chunked prefill and decode, with and without CUDA graphs.
+
+Usage: python -m kvbound.sanitize
+"""
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+from kvbound import bench
+from kvbound.fixture import FIXTURE_DIR
+
+TOOLS = ("memcheck", "racecheck", "initcheck")
+
+
+def find_sanitizer() -> str:
+    for name in ("compute-sanitizer", "compute-sanitizer.bat"):
+        if found := shutil.which(name):
+            return found
+    candidate = Path(os.environ.get("CUDA_PATH", "")) / "bin" / "compute-sanitizer.bat"
+    if candidate.exists():
+        return str(candidate)
+    raise SystemExit("compute-sanitizer not found; it ships with the CUDA Toolkit")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--preset", default="cuda")
+    args = parser.parse_args()
+
+    sanitizer = find_sanitizer()
+    trace = {
+        "requests": [
+            {"id": 0, "prompt": list(range(3, 40)), "max_new_tokens": 20},
+            {"id": 1, "prompt": [7], "max_new_tokens": 5},
+        ]
+    }
+    failed = False
+    with tempfile.TemporaryDirectory() as tmp:
+        trace_path = Path(tmp) / "trace.json"
+        trace_path.write_text(json.dumps(trace), encoding="utf-8")
+        for tool in TOOLS:
+            for graph in (0, 1):
+                command = [
+                    sanitizer, "--tool", tool, "--error-exitcode", "1",
+                    str(bench.binary(args.preset)), "--model", str(FIXTURE_DIR),
+                    "--trace", str(trace_path), "--max-ctx", "64", "--max-step-tokens", "16",
+                    "--warmup", "0", "--iters", "1", "--graph", str(graph),
+                ]  # fmt: skip
+                done = subprocess.run(command, capture_output=True, text=True, check=False)
+                summary = [line for line in done.stdout.splitlines() if "SUMMARY" in line]
+                ok = done.returncode == 0
+                failed = failed or not ok
+                print(f"{tool:<10} graph={graph}  {'ok  ' if ok else 'FAIL'}  {' '.join(summary)}")
+                if not ok:
+                    print(done.stdout[-4000:], done.stderr[-2000:])
+    raise SystemExit(1 if failed else 0)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,141 @@
+"""The engine end to end: every capture site against the goldens, and greedy generation against
+the reference model token for token."""
+
+import gc
+
+import numpy as np
+import pytest
+import torch
+
+from kvbound import golden, tolerance
+from kvbound.fixture import FIXTURE_DIR
+from kvbound.models import load_spec
+from kvbound.ref import load_llama
+
+pytestmark = pytest.mark.gpu
+
+
+def captured_sites(engine, ids, split):
+    """Feeds ids[:split] in one step, then the rest one token per step, capturing every site."""
+    parts = [engine.feed(ids[:split], start=0, capture=True)]
+    parts += [engine.feed([t], start=i, capture=True) for i, t in enumerate(ids) if i >= split]
+    return {site: np.concatenate([part[site] for part in parts]) for site in parts[0]}
+
+
+def assert_matches_goldens(engine, golden_dir, splits):
+    """Per-site rel-RMS, pooled top-1 mismatches and mean KL within the manifest's FP16 limits."""
+    manifest, tensors = golden.load(golden_dir)
+    limits = manifest["thresholds"]["fp16"]
+    for split_of in splits:
+        mismatches = 0
+        for prompt in manifest["prompts"]:
+            ids = tensors[f"{prompt['id']}/input_ids"].tolist()
+            sites = captured_sites(engine, ids, split_of(len(ids)))
+            for site, value in sites.items():
+                expected = tensors[f"{prompt['id']}/{site}"]
+                assert value.shape == tuple(expected.shape), site
+                error = tolerance.rel_rms(torch.from_numpy(value), expected)
+                assert error <= limits["rel_rms_max"][site], (prompt["id"], site)
+            logits, expected = torch.from_numpy(sites["logits"]), tensors[f"{prompt['id']}/logits"]
+            mismatches += int((logits.argmax(-1) != expected.argmax(-1)).sum())
+            assert tolerance.mean_kl(logits, expected) <= limits["mean_kl_max"], prompt["id"]
+        assert mismatches <= limits["top1_mismatches_max"]
+
+
+# Whole prompt as one prefill step; one token per step; a prefill followed by decode steps.
+SPLITS = (lambda n: n, lambda n: 1, lambda n: max(1, n // 2))
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {},
+        {"graph": False},
+        {"plan": "naive"},
+        {"kv_block_size": 4},
+        {"kv_layout": "token_major"},
+        {"kv_layout": "dim_major", "kv_block_size": 8},
+    ],
+    ids=lambda o: ",".join(f"{k}={v}" for k, v in o.items()) or "default",
+)
+def test_fixture_sites_match_goldens(kvb, options):
+    engine = kvb.Engine(str(FIXTURE_DIR), max_ctx=64, **options)
+    assert_matches_goldens(engine, FIXTURE_DIR, SPLITS)
+
+
+def reference_greedy(model, prompt, n_new):
+    """Greedy continuation by full-sequence forward passes, and the top-2 logit gap per step."""
+    device = model.embed.weight.device
+    ids, gaps = list(prompt), []
+    for _ in range(n_new):
+        logits = model(torch.tensor([ids], device=device))[0, -1].float()
+        top = logits.topk(2)
+        gaps.append(float(top.values[0] - top.values[1]))
+        ids.append(int(top.indices[0]))
+    return ids[len(prompt) :], gaps
+
+
+def fixture_prompts():
+    manifest, tensors = golden.load(FIXTURE_DIR)
+    return [tensors[f"{p['id']}/input_ids"].tolist() for p in manifest["prompts"]]
+
+
+def test_fixture_greedy_matches_reference(kvb):
+    model = load_llama(FIXTURE_DIR)
+    engine = kvb.Engine(str(FIXTURE_DIR), max_ctx=64)
+    for prompt in fixture_prompts():
+        expected, _ = reference_greedy(model, prompt, 40)
+        assert engine.generate(prompt, 40) == expected
+
+
+def test_generation_is_the_same_on_every_path(kvb):
+    """Graphs, chunked prefill, small KV blocks and the CPU sampler all give the greedy tokens."""
+    prompt = fixture_prompts()[-1]
+    expected = kvb.Engine(str(FIXTURE_DIR), max_ctx=64, graph=False).generate(prompt, 30)
+    for options in ({"graph": True}, {"max_step_tokens": 5}, {"kv_block_size": 4}):
+        assert kvb.Engine(str(FIXTURE_DIR), max_ctx=64, **options).generate(prompt, 30) == expected
+    engine = kvb.Engine(str(FIXTURE_DIR), max_ctx=64)
+    # top_k=1 leaves one candidate, so sampling on the CPU must agree with the device argmax.
+    assert engine.generate(prompt, 30, temperature=0.7, top_k=1) == expected
+    # The fixture's distribution is sharply peaked; a high temperature flattens it.
+    hot = {"temperature": 30.0, "top_k": 50, "top_p": 0.95}
+    sampled = engine.generate(prompt, 30, seed=7, **hot)
+    assert sampled == engine.generate(prompt, 30, seed=7, **hot)
+    assert sampled != engine.generate(prompt, 30, seed=8, **hot)
+
+
+def test_generate_stops_at_eos_and_rejects_overflow(kvb):
+    engine = kvb.Engine(str(FIXTURE_DIR), max_ctx=32)
+    prompt = fixture_prompts()[1]
+    tokens = engine.generate(prompt, 20)
+    stopped = engine.generate(prompt, 20, eos_token_id=tokens[3])
+    assert stopped == tokens[: tokens.index(tokens[3]) + 1]
+    with pytest.raises(RuntimeError, match="max_ctx"):
+        engine.generate(prompt, 32)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("name", ["llama-3.2-1b", "tinyllama-1.1b"])
+def test_real_model_matches_goldens_and_reference(kvb, name):
+    spec = load_spec(name)
+    if not (spec.golden_dir / golden.GOLDEN_FILE).exists():
+        pytest.skip(f"{name} has no goldens; run `make fetch golden MODEL={name}`")
+    manifest, tensors = golden.load(spec.golden_dir)
+    prompts = [tensors[f"{p['id']}/input_ids"].tolist() for p in manifest["prompts"]]
+    n_new = 48
+
+    # The FP32 reference and the engine do not fit in 8 GB together, so the reference goes first.
+    model = load_llama(spec.checkpoint_dir).to("cuda")
+    expected = [reference_greedy(model, prompt, n_new) for prompt in prompts]
+    del model
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    engine = kvb.Engine(str(spec.checkpoint_dir), max_ctx=256)
+    assert_matches_goldens(engine, spec.golden_dir, SPLITS[:2])
+    for prompt, (tokens, gaps) in zip(prompts, expected, strict=True):
+        actual = engine.generate(prompt, n_new)
+        if actual != tokens:
+            # FP16 arithmetic may flip a choice only where the reference itself was nearly tied.
+            first = next(i for i, (a, b) in enumerate(zip(actual, tokens, strict=True)) if a != b)
+            pytest.fail(f"diverged at new token {first}, reference top-2 gap {gaps[first]:.4f}")

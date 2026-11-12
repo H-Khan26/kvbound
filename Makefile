@@ -1,4 +1,4 @@
-.PHONY: help setup doctor build test test-real fetch fixture golden bench-hf microbench report predict lint format typecheck clean
+.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench profile microbench report predict lint format typecheck clean
 
 # torch wheel: cu128 on GPU machines, cpu in CI and on machines without a GPU
 TORCH ?= cu128
@@ -35,8 +35,16 @@ test: build       ## C++ tests via ctest, then Python tests via pytest
 	$(VSENV) ctest --preset $(PRESET)
 	uv run pytest; s=$$?; [ $$s -eq 0 ] || [ $$s -eq 5 ]  # 5 = no tests collected
 
-test-real:        ## reference model vs Hugging Face on fetched real checkpoints (minutes)
+test-gpu:         ## build the cuda preset, then kernel and engine tests on the fixture (needs a GPU)
+	$(MAKE) build PRESET=cuda
+	uv run pytest -m "gpu and not slow"
+
+test-real:        ## reference vs Hugging Face and engine vs reference on fetched checkpoints (minutes)
 	uv run pytest -m slow
+
+sanitize:         ## engine under compute-sanitizer (memcheck, racecheck, initcheck) on the fixture
+	$(MAKE) build PRESET=cuda
+	uv run python -m kvbound.sanitize
 
 fetch:            ## download the pinned checkpoint into data/models/ (MODEL=...)
 	uv run python -m kvbound.models fetch $(MODEL)
@@ -51,6 +59,17 @@ bench-hf:         ## Hugging Face baseline: batch 1, batch 8, and a long prompt 
 	uv run python -m kvbound.baselines.hf --model $(MODEL) --batch 1 --prompt-len 128
 	uv run python -m kvbound.baselines.hf --model $(MODEL) --batch 8 --prompt-len 128
 	uv run python -m kvbound.baselines.hf --model $(MODEL) --batch 1 --prompt-len 1024
+
+bench:            ## kvbound engine: batch 1 decode and a long prompt, like bench-hf (MODEL=...)
+	$(MAKE) build PRESET=cuda
+	uv run python -m kvbound.bench --model $(MODEL) --prompt-len 128 --profile-ops
+	uv run python -m kvbound.bench --model $(MODEL) --prompt-len 128 --no-graph
+	uv run python -m kvbound.bench --model $(MODEL) --prompt-len 1024
+
+profile:          ## Nsight Systems decode profile, with and without CUDA graphs (MODEL=...)
+	$(MAKE) build PRESET=cuda
+	uv run python -m kvbound.profile --model $(MODEL) --no-graph
+	uv run python -m kvbound.profile --model $(MODEL)
 
 microbench:       ## build the cuda preset, then run bandwidth, latency and GEMM microbenchmarks
 	$(MAKE) build PRESET=cuda
