@@ -46,14 +46,16 @@ Engine::Engine(const std::filesystem::path& model_dir, const EngineConfig& confi
       next_ids_(config_.max_step_tokens * sizeof(std::int32_t)),
       rows_dev_(rows_host_.bytes()),
       out_rows_dev_(out_rows_host_.bytes()) {
-  model_ = std::make_unique<LlamaModel>(model_dir,
-                                        LlamaModelConfig{.max_ctx = config_.max_ctx,
-                                                         .max_step_tokens = config_.max_step_tokens,
-                                                         .max_outputs = config_.max_outputs,
-                                                         .plan = config_.plan,
-                                                         .gemm = config_.gemm,
-                                                         .wide_key_loads = config_.wide_key_loads},
-                                        stream_);
+  model_ = std::make_unique<LlamaModel>(
+      model_dir,
+      LlamaModelConfig{.max_ctx = config_.max_ctx,
+                       .max_step_tokens = config_.max_step_tokens,
+                       .max_outputs = config_.max_outputs,
+                       .plan = config_.plan,
+                       .gemm = config_.gemm,
+                       .wide_key_loads = config_.wide_key_loads,
+                       .quantized_gemm_rows = config_.quantized_gemm_rows},
+      stream_);
   const ModelConfig& cfg = model_->config();
   const int blocks_per_seq = (config_.max_ctx + config_.kv_block_size - 1) / config_.kv_block_size;
   kv_ = std::make_unique<KvPool>(KvDims{.n_layers = cfg.n_layers,
@@ -61,7 +63,8 @@ Engine::Engine(const std::filesystem::path& model_dir, const EngineConfig& confi
                                         .n_kv_heads = cfg.n_kv_heads,
                                         .block_size = config_.kv_block_size,
                                         .head_dim = cfg.head_dim()},
-                                 config_.kv_layout, config_.max_seqs, blocks_per_seq);
+                                 config_.kv_layout, config_.max_seqs, blocks_per_seq,
+                                 config_.kv_dtype);
   KVB_CUDA(cudaStreamSynchronize(stream_));
 }
 
@@ -80,6 +83,7 @@ EngineMemory Engine::memory() const {
       .arena = model_->memory_plan().arena_bytes,
       .arena_naive = std::accumulate(sizes.begin(), sizes.end(), std::size_t{0}),
       .arena_peak_live = peak_live_bytes(sizes, value_lifetimes(model_->program())),
+      .dequant = model_->dequant_bytes(),
   };
 }
 

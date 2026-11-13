@@ -21,6 +21,16 @@ std::string_view kv_layout_name(KvLayout layout) noexcept {
   return "?";
 }
 
+std::string_view kv_dtype_name(DType dtype) noexcept {
+  return dtype == DType::I8 ? "int8" : "fp16";
+}
+
+std::optional<DType> kv_dtype_from_name(std::string_view name) noexcept {
+  if (name == "fp16") return DType::F16;
+  if (name == "int8") return DType::I8;
+  return std::nullopt;
+}
+
 std::optional<KvLayout> kv_layout_from_name(std::string_view name) noexcept {
   for (const auto& [value, known] : kNames) {
     if (known == name) return value;

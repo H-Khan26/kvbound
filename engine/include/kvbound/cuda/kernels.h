@@ -8,6 +8,7 @@
 
 #include "kvbound/kv_layout.h"
 #include "kvbound/step.h"
+#include "kvbound/weight_format.h"
 
 // The engine's CUDA kernels. Each function launches one kernel on `stream` and returns without
 // waiting for it. Matrices are row-major with one row per token; FP16 data is passed as raw
@@ -66,6 +67,25 @@ void attention(const f16* q, f16* out, const StepRow* rows, const KvView& kv, in
 // Largest max_ctx attention() accepts for this head_dim (its scores live in shared memory);
 // 0 when head_dim itself is unsupported.
 int attention_max_positions(int head_dim);
+
+// --- Quantized weights ---------------------------------------------------------------------
+
+// Rows of x one pass over a quantized matrix serves. More rows mean more passes.
+inline constexpr int kQuantizedLinearMaxRows = 16;
+
+// y [n_rows, n_out] = x [n_rows, n_in] * W^T for a quantized W [n_out, n_in], summed in FP32.
+// y is FP16, or FP32 when f32_out. Meant for decode-shaped steps: every row adds arithmetic
+// per weight but no memory traffic.
+void linear_quantized(const WeightRef& w, const f16* x, void* y, int n_rows, int n_in, int n_out,
+                      bool f32_out, cudaStream_t stream);
+
+// out [n_out, n_in] = W as FP16, for steps wide enough that a tensor-core product on the
+// expanded matrix is faster.
+void dequantize(const WeightRef& w, f16* out, int n_in, int n_out, cudaStream_t stream);
+
+// out[t] = row rows[t].token_id of a quantized table [vocab, dim], as FP16.
+void embedding_quantized(const WeightRef& table, const StepRow* rows, f16* out, int n_tokens,
+                         int dim, cudaStream_t stream);
 
 // Weight conversion to FP16 at load time, rounding to nearest even.
 void bf16_to_f16(f16* data, std::size_t n, cudaStream_t stream);  // in place

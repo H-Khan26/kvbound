@@ -15,6 +15,7 @@ from safetensors import safe_open
 from torch import Tensor, nn
 
 from kvbound.ref.config import Llama3RopeScaling, LlamaConfig
+from kvbound.weight_format import WeightFormat
 
 # Capture sites, in forward order. "layers.{i}.*" repeats per layer.
 LAYER_SITES = ("attn_norm", "attn_out", "resid_mid", "mlp_norm", "mlp_out", "resid_post")
@@ -185,7 +186,11 @@ def hf_weight_names(cfg: LlamaConfig) -> dict[str, str]:
 
 
 def load_llama(checkpoint_dir: Path, weights: WeightPrecision = "fp16") -> Llama:
-    """Builds the FP32 reference model from <dir>/config.json and <dir>/model.safetensors."""
+    """Builds the FP32 reference model from <dir>/config.json and <dir>/model.safetensors.
+
+    A quantized checkpoint (kvbound.weight_format) is dequantized to the exact values the engine
+    uses, whatever `weights` says.
+    """
     checkpoint_dir = Path(checkpoint_dir)
     cfg = LlamaConfig.from_json(checkpoint_dir / "config.json")
     model = Llama(cfg)
@@ -193,17 +198,24 @@ def load_llama(checkpoint_dir: Path, weights: WeightPrecision = "fp16") -> Llama
     params = dict(model.named_parameters())  # a tied lm_head is listed once, as embed.weight
 
     with safe_open(str(checkpoint_dir / "model.safetensors"), framework="pt") as f:
+        fmt = WeightFormat.from_metadata(f.metadata())
+        stored = set(f.keys())
+        if fmt.quantized:
+            # Imported here so plain checkpoints do not load the converter and model registry.
+            from kvbound.quantize import read_tensor, stored_names  # noqa: PLC0415
+
+            stored = set(stored_names(list(stored), fmt))
         # A tied checkpoint may still store the duplicate lm_head tensor.
-        unexpected = set(f.keys()) - set(names.values()) - {"lm_head.weight"}
-        missing = set(names.values()) - set(f.keys())
+        unexpected = stored - set(names.values()) - {"lm_head.weight"}
+        missing = set(names.values()) - stored
         if unexpected or missing or set(params) != set(names):
             raise ValueError(f"checkpoint mismatch: unexpected={unexpected}, missing={missing}")
         with torch.no_grad():
             for ours, theirs in names.items():
-                tensor = f.get_tensor(theirs)
+                tensor = read_tensor(f, theirs, fmt) if fmt.quantized else f.get_tensor(theirs)
                 if tensor.shape != params[ours].shape:
                     raise ValueError(f"{theirs}: shape {tuple(tensor.shape)} does not fit {ours}")
-                if weights == "fp16":
+                if weights == "fp16" and not fmt.quantized:
                     tensor = tensor.to(torch.float16)
                     if not torch.isfinite(tensor).all():
                         raise ValueError(f"{theirs}: values overflow FP16")

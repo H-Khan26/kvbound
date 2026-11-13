@@ -71,6 +71,33 @@ kvb::KvLayout layout_from(const std::string& name) {
   throw kvb::Error("unknown KV layout " + name);
 }
 
+kvb::DType kv_dtype_from(const std::string& name) {
+  if (const auto dtype = kvb::kv_dtype_from_name(name)) return *dtype;
+  throw kvb::Error("unknown KV dtype " + name);
+}
+
+// A quantized matrix on the device: `data` holds int8 values or packed 4-bit pairs.
+struct DeviceWeight {
+  DeviceBuffer data, scale;
+  kvb::WeightRef ref;
+
+  DeviceWeight(const std::string& scheme, const In<std::uint8_t>& host_data,
+               const In<f16>& host_scale, int group_size)
+      : data(upload(host_data)), scale(upload(host_scale)) {
+    const auto parsed = kvb::weight_scheme_from_name(scheme);
+    if (!parsed || *parsed == kvb::WeightScheme::F16) {
+      throw kvb::Error("not a quantized scheme: " + scheme);
+    }
+    ref = {
+        .scheme = *parsed, .data = data.as(), .scale = scale.as<f16>(), .group_size = group_size};
+  }
+  // Shape [n_out, n_in] of the matrix a stored [n_out, bytes per row] tensor stands for.
+  int n_in(const In<std::uint8_t>& host_data) const {
+    const int stored = static_cast<int>(host_data.shape(1));
+    return ref.scheme == kvb::WeightScheme::Int4Grouped ? 2 * stored : stored;
+  }
+};
+
 kvb::cuda::GemmAccumulate accumulate_from(const std::string& name) {
   if (const auto mode = kvb::cuda::gemm_accumulate_from_name(name)) return *mode;
   throw kvb::Error("unknown GEMM accumulate mode " + name);
@@ -152,13 +179,52 @@ nb::object linear(In<f16> weight, In<f16> x, const std::string& accumulate, bool
   return nb::cast(download<f16>(out.as(), {x.shape(0), weight.shape(0)}));
 }
 
+// x [rows, n_in] times a quantized matrix stored as `data` [n_out, bytes per row] (int8 values
+// or packed 4-bit pairs, as uint8) with FP16 `scale`. Returns float16 bits, or float32.
+nb::object linear_quantized(const std::string& scheme, In<std::uint8_t> data, In<f16> scale,
+                            In<f16> x, int group_size, bool f32_out) {
+  const DeviceWeight w(scheme, data, scale, group_size);
+  const int n_out = static_cast<int>(data.shape(0)), n_in = w.n_in(data);
+  const int rows = static_cast<int>(x.shape(0));
+  const std::size_t n = static_cast<std::size_t>(rows) * n_out;
+  const DeviceBuffer dx = upload(x), out(n * (f32_out ? sizeof(float) : sizeof(f16)));
+  kvb::kernels::linear_quantized(w.ref, dx.as<f16>(), out.as(), rows, n_in, n_out, f32_out,
+                                 nullptr);
+  if (f32_out) return nb::cast(download<float>(out.as(), {x.shape(0), data.shape(0)}));
+  return nb::cast(download<f16>(out.as(), {x.shape(0), data.shape(0)}));
+}
+
+// The quantized matrix expanded to FP16 [n_out, n_in].
+Out<f16> dequantize(const std::string& scheme, In<std::uint8_t> data, In<f16> scale,
+                    int group_size) {
+  const DeviceWeight w(scheme, data, scale, group_size);
+  const int n_out = static_cast<int>(data.shape(0)), n_in = w.n_in(data);
+  const DeviceBuffer out(static_cast<std::size_t>(n_out) * n_in * sizeof(f16));
+  kvb::kernels::dequantize(w.ref, out.as<f16>(), n_in, n_out, nullptr);
+  return download<f16>(out.as(), {data.shape(0), static_cast<std::size_t>(n_in)});
+}
+
+// Rows `ids` of a quantized table, as FP16.
+Out<f16> embedding_quantized(const std::string& scheme, In<std::uint8_t> data, In<f16> scale,
+                             In<std::int32_t> ids, int group_size) {
+  const DeviceWeight w(scheme, data, scale, group_size);
+  const int dim = w.n_in(data);
+  std::vector<StepRow> rows;
+  for (std::size_t i = 0; i < ids.shape(0); ++i) rows.push_back({.token_id = ids.data()[i]});
+  const DeviceBuffer dr = upload_rows(rows), out(rows.size() * dim * sizeof(f16));
+  kvb::kernels::embedding_quantized(w.ref, dr.as<StepRow>(), out.as<f16>(),
+                                    static_cast<int>(rows.size()), dim, nullptr);
+  return download<f16>(out.as(), {rows.size(), static_cast<std::size_t>(dim)});
+}
+
 // Writes k and v [tokens, kv_heads, head_dim] into a fresh cache at each token's kv_slot, then
 // attends q [tokens, heads, head_dim] over it for the tokens from query_from on.
 // block_table is [sequences, blocks_per_seq].
 Out<f16> kv_attention(In<f16> q, In<f16> k, In<f16> v, In<std::int32_t> positions,
                       In<std::int32_t> seqs, In<std::int32_t> kv_slots,
                       In<std::int32_t> block_table, int block_size, int n_blocks,
-                      const std::string& layout, int query_from, bool wide_key_loads) {
+                      const std::string& layout, int query_from, bool wide_key_loads,
+                      const std::string& kv_dtype) {
   const int n_tokens = static_cast<int>(q.shape(0)), n_heads = static_cast<int>(q.shape(1));
   const int head_dim = static_cast<int>(q.shape(2)), n_kv_heads = static_cast<int>(k.shape(1));
   const int blocks_per_seq = static_cast<int>(block_table.shape(1));
@@ -168,7 +234,7 @@ Out<f16> kv_attention(In<f16> q, In<f16> k, In<f16> v, In<std::int32_t> position
                                      .block_size = block_size,
                                      .head_dim = head_dim},
                          layout_from(layout), static_cast<int>(block_table.shape(0)),
-                         blocks_per_seq);
+                         blocks_per_seq, kv_dtype_from(kv_dtype));
   std::vector<StepRow> rows;
   int max_ctx = 1;
   for (int i = 0; i < n_tokens; ++i) {
@@ -207,7 +273,8 @@ class PyEngine {
  public:
   PyEngine(const std::string& model_dir, int max_ctx, int max_seqs, int max_step_tokens,
            int kv_block_size, const std::string& kv_layout, const std::string& gemm, bool graph,
-           const std::string& plan, bool wide_key_loads, int kv_blocks, int max_graphs)
+           const std::string& plan, bool wide_key_loads, int kv_blocks, int max_graphs,
+           const std::string& kv_dtype, int quantized_gemm_rows)
       : engine_(model_dir, kvb::cuda::EngineConfig{
                                .max_ctx = max_ctx,
                                .max_seqs = max_seqs,
@@ -217,10 +284,12 @@ class PyEngine {
                                .kv_block_size = kv_block_size,
                                .kv_blocks = kv_blocks,
                                .kv_layout = layout_from(kv_layout),
+                               .kv_dtype = kv_dtype_from(kv_dtype),
                                .plan = plan == "naive" ? kvb::PlanStrategy::Naive
                                                        : kvb::PlanStrategy::GreedyBySize,
                                .gemm = accumulate_from(gemm),
                                .wide_key_loads = wide_key_loads,
+                               .quantized_gemm_rows = quantized_gemm_rows,
                                .use_graph = graph,
                                .max_graphs = max_graphs,
                            }) {}
@@ -298,6 +367,17 @@ class PyEngine {
     return tokens;
   }
 
+  // "fp16", "int8_pc" or "int4_g": how the loaded checkpoint stores its matrices.
+  std::string weights() const {
+    return std::string(kvb::weight_scheme_name(engine_.weight_format().scheme));
+  }
+  // Device bytes: weights, kv_pool, arena, dequant.
+  std::map<std::string, std::size_t> memory() const {
+    const kvb::cuda::EngineMemory m = engine_.memory();
+    return {
+        {"weights", m.weights}, {"kv_pool", m.kv_pool}, {"arena", m.arena}, {"dequant", m.dequant}};
+  }
+
   // Counters of the latest serve(): steps, preemptions, max_running.
   std::map<std::string, int> serve_stats() const { return serve_stats_; }
   // Graphs the engine holds launch counters for: replayed, eager, captured, evicted.
@@ -327,19 +407,27 @@ NB_MODULE(_kvb, m) {
   m.def("linear", &linear, "weight"_a, "x"_a, "accumulate"_a = "fp32", "f32_out"_a = false);
   m.def("kv_attention", &kv_attention, "q"_a, "k"_a, "v"_a, "positions"_a, "seqs"_a, "kv_slots"_a,
         "block_table"_a, "block_size"_a, "n_blocks"_a, "layout"_a = "head_major",
-        "query_from"_a = 0, "wide_key_loads"_a = true);
+        "query_from"_a = 0, "wide_key_loads"_a = true, "kv_dtype"_a = "fp16");
+  m.def("linear_quantized", &linear_quantized, "scheme"_a, "data"_a, "scale"_a, "x"_a,
+        "group_size"_a = 0, "f32_out"_a = false);
+  m.def("dequantize", &dequantize, "scheme"_a, "data"_a, "scale"_a, "group_size"_a = 0);
+  m.def("embedding_quantized", &embedding_quantized, "scheme"_a, "data"_a, "scale"_a, "ids"_a,
+        "group_size"_a = 0);
 
   nb::class_<PyEngine>(m, "Engine")
       .def(nb::init<const std::string&, int, int, int, int, const std::string&, const std::string&,
-                    bool, const std::string&, bool, int, int>(),
+                    bool, const std::string&, bool, int, int, const std::string&, int>(),
            "model_dir"_a, "max_ctx"_a = 2048, "max_seqs"_a = 1, "max_step_tokens"_a = 0,
            "kv_block_size"_a = 0, "kv_layout"_a = "head_major", "gemm"_a = "fp32", "graph"_a = true,
-           "plan"_a = "greedy", "wide_key_loads"_a = true, "kv_blocks"_a = 0, "max_graphs"_a = 16)
+           "plan"_a = "greedy", "wide_key_loads"_a = true, "kv_blocks"_a = 0, "max_graphs"_a = 16,
+           "kv_dtype"_a = "fp16", "quantized_gemm_rows"_a = 16)
       .def("feed", &PyEngine::feed, "ids"_a, "start"_a = 0, "seq"_a = 0, "capture"_a = false)
       .def("generate", &PyEngine::generate, "prompt"_a, "max_new_tokens"_a, "temperature"_a = 0.0f,
            "top_k"_a = 0, "top_p"_a = 1.0f, "seed"_a = 0, "eos_token_id"_a = -1)
       .def("serve", &PyEngine::serve, "prompts"_a, "max_new_tokens"_a, "policy"_a = "static",
            "arrivals_s"_a = std::vector<double>{})
+      .def("weights", &PyEngine::weights)
+      .def("memory", &PyEngine::memory)
       .def("serve_stats", &PyEngine::serve_stats)
       .def("graph_stats", &PyEngine::graph_stats);
 }

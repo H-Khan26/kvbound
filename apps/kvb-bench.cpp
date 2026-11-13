@@ -248,6 +248,13 @@ int run(int argc, char** argv) {
   config.use_graph = args.integer("graph", 1) != 0;
   config.max_graphs = args.integer("max-graphs", config.max_graphs);
   const std::string policy = args.str("policy", "static");
+  config.quantized_gemm_rows = args.integer("quantized-gemm-rows", config.quantized_gemm_rows);
+  const std::string kv_dtype = args.str("kv-dtype", "fp16");
+  if (const auto value = kvb::kv_dtype_from_name(kv_dtype)) {
+    config.kv_dtype = *value;
+  } else {
+    throw kvb::Error("unknown --kv-dtype " + kv_dtype);
+  }
   const std::string layout = args.str("kv-layout", "head_major");
   const std::string gemm = args.str("gemm", "fp32");
   const std::string plan = args.str("plan", "greedy");
@@ -301,13 +308,15 @@ int run(int argc, char** argv) {
   std::printf(
       "  \"config\": {\"policy\": \"%s\", \"slots\": %d, \"max_ctx\": %d, "
       "\"max_step_tokens\": %d, \"max_outputs\": %d, "
-      "\"kv_block_size\": %d, \"kv_blocks\": %d, \"kv_layout\": \"%s\", "
+      "\"kv_block_size\": %d, \"kv_blocks\": %d, \"kv_layout\": \"%s\", \"kv_dtype\": \"%s\", "
+      "\"weights\": \"%s\", \"weight_group_size\": %d, \"quantized_gemm_rows\": %d, "
       "\"gemm_accumulate\": \"%s\", \"graph\": %s, \"max_graphs\": %d, \"plan\": \"%s\", "
       "\"warmup\": %d, \"iters\": %d},\n",
       policy.c_str(), resolved.max_seqs, resolved.max_ctx, resolved.max_step_tokens,
       resolved.max_outputs, resolved.kv_block_size, resolved.kv_blocks, layout.c_str(),
-      gemm.c_str(), resolved.use_graph ? "true" : "false", resolved.max_graphs, plan.c_str(),
-      warmup, iters);
+      kv_dtype.c_str(), std::string(kvb::weight_scheme_name(engine.weight_format().scheme)).c_str(),
+      engine.weight_format().group_size, resolved.quantized_gemm_rows, gemm.c_str(),
+      resolved.use_graph ? "true" : "false", resolved.max_graphs, plan.c_str(), warmup, iters);
   std::printf(
       "  \"model\": {\"vocab_size\": %lld, \"hidden_size\": %lld, \"n_layers\": %lld, "
       "\"n_heads\": %lld, \"n_kv_heads\": %lld, \"intermediate_size\": %lld},\n",
@@ -319,10 +328,12 @@ int run(int argc, char** argv) {
   std::printf(
       "  \"memory\": {\"weights_bytes\": %zu, \"kv_pool_bytes\": %zu, "
       "\"kv_bytes_per_token\": %zu, \"arena_bytes\": %zu, \"arena_naive_bytes\": %zu, "
-      "\"arena_peak_live_bytes\": %zu, \"device_bytes\": %zu},\n",
+      "\"arena_peak_live_bytes\": %zu, \"dequant_bytes\": %zu, \"device_bytes\": %zu},\n",
       memory.weights, memory.kv_pool,
-      kvb::kv_bytes_per_token(model.n_layers, model.n_kv_heads, model.head_dim(), 2), memory.arena,
-      memory.arena_naive, memory.arena_peak_live, free_before - free_after);
+      kvb::kv_bytes_per_token(model.n_layers, model.n_kv_heads, model.head_dim(),
+                              resolved.kv_dtype),
+      memory.arena, memory.arena_naive, memory.arena_peak_live, memory.dequant,
+      free_before - free_after);
   std::printf("  \"load_s\": %.6f,\n", load_s);
   // The activation plan: one entry per program value, in the order values are first written.
   const std::vector<kvb::Lifetime> lifetimes = kvb::value_lifetimes(engine.program());

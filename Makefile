@@ -1,4 +1,4 @@
-.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters microbench report predict lint format typecheck clean
+.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters microbench quantize eval report predict lint format typecheck clean
 
 # torch wheel: cu128 on GPU machines, cpu in CI and on machines without a GPU
 TORCH ?= cu128
@@ -9,7 +9,10 @@ MODEL ?= tinyllama-1.1b
 # Device name from configs/devices/
 DEVICE ?= rtx3060ti
 # Arrival rates of serve-load, in requests per second
-RATES ?= 2 4 8 12
+RATES ?= 2 4 8 16
+# Weight variant and KV dtype for `make eval`: fp16 | int8_pc | int4_g | int4_g.mse, fp16 | int8
+WEIGHTS ?= fp16
+KV ?= fp16
 
 # On Windows, recipes need a POSIX sh (Git Bash) and cmake/ctest run inside the MSVC environment.
 ifeq ($(OS),Windows_NT)
@@ -72,7 +75,7 @@ bench:            ## kvbound engine: batch 1 decode and a long prompt, like benc
 SERVE = uv run python -m kvbound.serve --model $(MODEL) --pool-seqs 8
 # The paged design: the same pool in 16-token blocks, shared by up to this many sequences.
 PAGED = --policy continuous --kv-block-size 16 --slots $(PAGED_SLOTS)
-PAGED_SLOTS ?= 32
+PAGED_SLOTS ?= 64
 
 serve:            ## the three workloads in one KV pool: static, continuous over slots, paged (MODEL=...)
 	$(MAKE) build PRESET=cuda
@@ -102,6 +105,14 @@ counters:         ## hardware counters of the attention kernel on each KV layout
 microbench:       ## build the cuda preset, then run bandwidth, latency, GEMM and KV-layout microbenchmarks
 	$(MAKE) build PRESET=cuda
 	uv run python -m kvbound.microbench --preset cuda
+
+quantize:         ## quantized checkpoints: INT8 per channel and INT4 in groups of 128 (MODEL=...)
+	uv run python -m kvbound.quantize $(MODEL) --scheme int8_pc
+	uv run python -m kvbound.quantize $(MODEL) --scheme int4_g --group-size 128
+
+eval:             ## WikiText-2 perplexity of the engine at one precision (MODEL=... WEIGHTS=fp16 KV=fp16)
+	$(MAKE) build PRESET=cuda
+	uv run python -m kvbound.evals.perplexity --model $(MODEL) --weights $(WEIGHTS) --kv $(KV)
 
 report:           ## roofline, bandwidth and latency figures from the records (MODEL=... DEVICE=...)
 	uv run python -m kvbound.report --device $(DEVICE) --model $(MODEL)

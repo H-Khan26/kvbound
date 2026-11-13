@@ -1,8 +1,9 @@
 """Runs a workload through the engine under one scheduling policy and records throughput,
 latency and memory use.
 
-The KV pool is the same number of token positions under every policy (--pool-seqs sequences of
---max-ctx tokens), so runs compare what a policy does with the same memory:
+The KV pool is the same size under every policy, so runs compare what a policy does with the
+same memory. --pool-seqs gives it as sequences of --max-ctx tokens; --pool-mib gives it in bytes,
+which holds more tokens when --kv int8 halves the size of a cached token.
 
   static      --slots sequences form a batch that runs until its longest member finishes; each
               holds one block of max_ctx tokens.
@@ -16,11 +17,13 @@ Usage: python -m kvbound.serve --model tinyllama-1.1b --workload longtail --poli
 """
 
 import argparse
+import dataclasses
 from typing import Any
 
 from kvbound import bench, record, workload
 from kvbound.models import load_spec
-from kvbound.perfmodel.model import Arch
+from kvbound.perfmodel.model import Arch, Precision, kv_bytes_per_token
+from kvbound.weight_format import VARIANTS
 
 
 def weighted_mean(values: list[float], weights: list[float]) -> float:
@@ -92,22 +95,32 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     spec = load_spec(args.model)
     arch = Arch.from_table(spec.arch)
     load = workload.load(args.workload)
+    if args.requests:
+        load = dataclasses.replace(load, n_requests=args.requests)
     trace = workload.trace(load, arch.vocab_size, args.max_ctx, args.rate)
     block_size = args.kv_block_size or args.max_ctx
-    pool_seqs = args.pool_seqs or args.slots
+    if args.pool_mib:
+        precision = Precision.named(args.weights, args.kv, arch.head_dim)
+        token_bytes = kv_bytes_per_token(arch, precision.kv_bytes)
+        kv_blocks = int(args.pool_mib * 2**20 // (block_size * token_bytes))
+    else:
+        kv_blocks = (args.pool_seqs or args.slots) * args.max_ctx // block_size
     options = {
         "policy": args.policy,
         "slots": args.slots,
         "max-ctx": args.max_ctx,
         "max-step-tokens": args.max_step_tokens,
         "kv-block-size": block_size,
-        "kv-blocks": pool_seqs * args.max_ctx // block_size,
+        "kv-blocks": kv_blocks,
         "kv-layout": args.kv_layout,
+        "kv-dtype": args.kv,
+        "quantized-gemm-rows": args.quantized_gemm_rows,
         "max-graphs": args.max_graphs,
         "warmup": args.warmup,
         "iters": args.iters,
     }
-    raw, nvml = bench.run_kvb_bench(args.preset, spec.checkpoint_dir, trace, options)
+    model_dir = bench.checkpoint_dir(args.model, args.weights)
+    raw, nvml = bench.run_kvb_bench(args.preset, model_dir, trace, options)
 
     runs = [pass_metrics(run, raw["config"]) for run in raw["iterations"]]
     samples: dict[str, Any] = {name: [run[name] for run in runs] for name in runs[0]}
@@ -133,7 +146,6 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
         "engine": {"name": "kvbound", "preset": args.preset},
         "model": {"name": spec.name, "hf_repo": spec.hf_repo, "revision": spec.revision},
         "params": {
-            "dtype": "fp16",
             "workload": load.name,
             "workload_seed": load.seed,
             "n_requests": load.n_requests,
@@ -157,12 +169,20 @@ def main() -> None:
         "--pool-seqs", type=int, default=0,
         help="KV pool size in sequences of max-ctx tokens; default: --slots",
     )  # fmt: skip
+    parser.add_argument("--pool-mib", type=float, default=0, help="KV pool size in MiB instead")
     parser.add_argument("--kv-block-size", type=int, default=0, help="default: max-ctx")
+    parser.add_argument("--weights", choices=VARIANTS, default="fp16")
+    parser.add_argument("--kv", choices=bench.KV_DTYPES, default="fp16")
     parser.add_argument("--rate", type=float, default=None, help="arrivals per second")
+    parser.add_argument("--requests", type=int, default=0, help="default: the workload's count")
     parser.add_argument("--max-ctx", type=int, default=1024)
     parser.add_argument("--max-step-tokens", type=int, default=1024)
     parser.add_argument("--kv-layout", default="head_major")
     parser.add_argument("--max-graphs", type=int, default=16)
+    parser.add_argument(
+        "--quantized-gemm-rows", type=int, default=16,
+        help="widest step that multiplies quantized weights without expanding them to FP16",
+    )  # fmt: skip
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--iters", type=int, default=3)
     parser.add_argument("--preset", default="cuda")

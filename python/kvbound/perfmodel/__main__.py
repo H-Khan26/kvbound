@@ -29,7 +29,7 @@ def main() -> None:
     parser.add_argument("--model", required=True, help="name from configs/models/")
     parser.add_argument("--device", required=True, help="name from configs/devices/")
     parser.add_argument("--ceilings", choices=["measured", "spec"], default="measured")
-    parser.add_argument("--weights", choices=["fp16", "int8", "int4"], default="fp16")
+    parser.add_argument("--weights", choices=["fp16", "int8_pc", "int4_g"], default="fp16")
     parser.add_argument("--kv", choices=["fp16", "int8", "fp8"], default="fp16")
     parser.add_argument("--batch", type=int, default=1)
     parser.add_argument("--prompt-len", type=int, default=128)
@@ -41,7 +41,7 @@ def main() -> None:
 
     arch = Arch.from_table(load_spec(args.model).arch)
     hw = hardware.load(args.device, args.ceilings)
-    precision = Precision.named(args.weights, args.kv)
+    precision = Precision.named(args.weights, args.kv, arch.head_dim)
     p = predict(arch, hw, precision, args.batch, args.prompt_len, context)
 
     print(

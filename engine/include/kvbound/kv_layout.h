@@ -5,6 +5,8 @@
 #include <optional>
 #include <string_view>
 
+#include "kvbound/dtype.h"
+
 namespace kvb {
 
 // Order of the KV pool's dimensions in memory, outermost first. Every layout stores the same
@@ -46,11 +48,23 @@ struct KvStrides {
 
 KvStrides kv_strides(KvLayout layout, const KvDims& dims) noexcept;
 
-// Bytes of keys plus values one cached token occupies across all layers.
+// Element types the cache stores. F16 holds keys and values as computed. I8 holds each vector
+// (one token's key or value for one head) as integers in [-127, 127] times one FP16 scale,
+// chosen when the vector is written.
+constexpr bool kv_dtype_supported(DType dtype) noexcept {
+  return dtype == DType::F16 || dtype == DType::I8;
+}
+
+// Names used by command lines and records: "fp16", "int8".
+std::string_view kv_dtype_name(DType dtype) noexcept;
+std::optional<DType> kv_dtype_from_name(std::string_view name) noexcept;
+
+// Bytes of keys plus values one cached token occupies across all layers, scales included.
 constexpr std::size_t kv_bytes_per_token(std::int64_t n_layers, std::int64_t n_kv_heads,
-                                         std::int64_t head_dim,
-                                         std::size_t bytes_per_element) noexcept {
-  return static_cast<std::size_t>(2 * n_layers * n_kv_heads * head_dim) * bytes_per_element;
+                                         std::int64_t head_dim, DType dtype) noexcept {
+  const std::size_t scale_bytes = dtype == DType::I8 ? size_bytes(DType::F16) : 0;
+  return static_cast<std::size_t>(2 * n_layers * n_kv_heads) *
+         (static_cast<std::size_t>(head_dim) * size_bytes(dtype) + scale_bytes);
 }
 
 // What attention and KV-write kernels see of the cache, for one layer. Plain data, passed to
@@ -67,6 +81,12 @@ struct KvView {
   std::int64_t head_stride = 0;
   std::int64_t pos_stride = 0;
   std::int64_t dim_stride = 0;
+  // Quantized caches only: FP16 scales, one per stored vector, as [block][head][pos].
+  DType dtype = DType::F16;
+  void* k_scale = nullptr;
+  void* v_scale = nullptr;
+  std::int64_t scale_block_stride = 0;
+  std::int64_t scale_head_stride = 0;
 };
 
 }  // namespace kvb

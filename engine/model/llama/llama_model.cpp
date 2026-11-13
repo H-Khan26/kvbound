@@ -64,26 +64,46 @@ LlamaModelConfig checked(const LlamaModelConfig& limits, const ModelConfig& cfg)
 DeviceWeights load_weights(const std::filesystem::path& model_dir, const Program& program,
                            const ModelConfig& cfg, cudaStream_t stream) {
   const SafetensorsFile file(model_dir / "model.safetensors");
+  const WeightFormat format = weight_format_from_metadata(file.metadata());
   for (const Op& op : program.ops) {
     if (op.weight < 0) continue;
     const std::int64_t out_cols = program.values[op.out].cols;
-    std::vector<std::int64_t> expected;
-    switch (op.kind) {
-      case OpKind::Embed:
-        expected = {cfg.vocab_size, out_cols};
-        break;
-      case OpKind::RmsNorm:
-        expected = {out_cols};
-        break;
-      default:
-        expected = {out_cols, program.values[op.in0].cols};
-    }
     const std::string& name = program.weights[op.weight];
-    if (file.at(name).shape != expected) {
-      throw Error(name + ": shape does not match config.json");
+    const TensorView& tensor = file.at(name);
+    std::vector<std::int64_t> expected;
+    if (op.kind == OpKind::RmsNorm) {
+      expected = {out_cols};
+    } else {
+      // A matrix [rows, cols]: the embedding table, or a linear layer's weight.
+      const std::int64_t rows = op.kind == OpKind::Embed ? cfg.vocab_size : out_cols;
+      const std::int64_t cols = op.kind == OpKind::Embed ? out_cols : program.values[op.in0].cols;
+      expected = {rows, cols};
+      if (tensor.dtype == DType::I8 || tensor.dtype == DType::U8) {
+        expected = stored_shape(format, rows, cols);
+        if (file.at(name + ".scale").shape != scale_shape(format, rows, cols)) {
+          throw Error(name + ".scale: shape does not match the weight format");
+        }
+      }
     }
+    if (tensor.shape != expected) throw Error(name + ": shape does not match config.json");
   }
   return DeviceWeights(file, program.weights, stream);
+}
+
+// Bytes of the largest quantized matrix a step may have to expand to FP16: those multiplied
+// with more rows than the in-place kernel takes.
+std::size_t dequant_scratch_bytes(const Program& program, const DeviceWeights& weights,
+                                  const LlamaModelConfig& limits) {
+  std::size_t bytes = 0;
+  for (const Op& op : program.ops) {
+    if (op.kind != OpKind::Linear || weights.ref(op.weight).scheme == WeightScheme::F16) continue;
+    const Value& out = program.values[op.out];
+    const int max_rows = out.rows == RowKind::Token ? limits.max_step_tokens : limits.max_outputs;
+    if (max_rows <= limits.quantized_gemm_rows) continue;
+    bytes = std::max(bytes, static_cast<std::size_t>(out.cols * program.values[op.in0].cols) *
+                                sizeof(std::uint16_t));
+  }
+  return bytes;
 }
 
 }  // namespace
@@ -97,6 +117,7 @@ LlamaModel::LlamaModel(const std::filesystem::path& model_dir, const LlamaModelC
       plan_(plan_memory(value_bytes_, value_lifetimes(program_), limits.plan)),
       weights_(load_weights(model_dir, program_, config_, stream)),
       arena_(plan_.arena_bytes),
+      dequant_(dequant_scratch_bytes(program_, weights_, limits_)),
       blas_(stream, limits.gemm) {
   const std::vector<float> table = rope_cos_sin(config_, limits.max_ctx);
   rope_table_ = DeviceBuffer(table.size() * sizeof(float));
@@ -123,18 +144,35 @@ void LlamaModel::run(const StepRow* rows, const std::int32_t* out_rows, int n_to
     const Clock::time_point start = timed ? Clock::now() : Clock::time_point{};
     switch (op.kind) {
       case OpKind::Embed:
-        kernels::embedding(weights_.data(op.weight), rows, value<f16>(op.out), n_tokens,
-                           static_cast<int>(out->cols), stream);
+        if (const WeightRef table = weights_.ref(op.weight); table.scheme == WeightScheme::F16) {
+          kernels::embedding(weights_.data(op.weight), rows, value<f16>(op.out), n_tokens,
+                             static_cast<int>(out->cols), stream);
+        } else {
+          kernels::embedding_quantized(table, rows, value<f16>(op.out), n_tokens,
+                                       static_cast<int>(out->cols), stream);
+        }
         break;
       case OpKind::RmsNorm:
         kernels::rms_norm(value<f16>(op.in0), weights_.data(op.weight), value<f16>(op.out), n_rows,
                           static_cast<int>(out->cols), static_cast<float>(config_.rms_norm_eps),
                           stream);
         break;
-      case OpKind::Linear:
-        blas_.linear(weights_.data(op.weight), value<f16>(op.in0), value<void>(op.out), n_rows,
-                     static_cast<int>(in0->cols), static_cast<int>(out->cols), out->dtype);
+      case OpKind::Linear: {
+        const WeightRef weight = weights_.ref(op.weight);
+        const int n_in = static_cast<int>(in0->cols), n_out_cols = static_cast<int>(out->cols);
+        if (weight.scheme == WeightScheme::F16) {
+          blas_.linear(weights_.data(op.weight), value<f16>(op.in0), value<void>(op.out), n_rows,
+                       n_in, n_out_cols, out->dtype);
+        } else if (n_rows <= limits_.quantized_gemm_rows) {
+          kernels::linear_quantized(weight, value<f16>(op.in0), value<void>(op.out), n_rows, n_in,
+                                    n_out_cols, out->dtype == DType::F32, stream);
+        } else {
+          kernels::dequantize(weight, dequant_.as<f16>(), n_in, n_out_cols, stream);
+          blas_.linear(dequant_.as<f16>(), value<f16>(op.in0), value<void>(op.out), n_rows, n_in,
+                       n_out_cols, out->dtype);
+        }
         break;
+      }
       case OpKind::Rope:
         kernels::rope(value<f16>(op.in0), rows, rope_table_.as<float>(), n_tokens,
                       static_cast<int>(in0->cols) / head_dim, head_dim, stream);

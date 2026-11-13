@@ -63,7 +63,9 @@ TEST(KvLayout, StridesCoverThePoolExactlyOnce) {
 
 TEST(KvLayout, BytesPerToken) {
   // Llama 3.2 1B in FP16: 16 layers, 8 KV heads, head dimension 64.
-  EXPECT_EQ(kvb::kv_bytes_per_token(16, 8, 64, 2), 32u * 1024u);
+  EXPECT_EQ(kvb::kv_bytes_per_token(16, 8, 64, kvb::DType::F16), 32u * 1024u);
+  // An INT8 vector is 64 bytes plus a 2-byte scale.
+  EXPECT_EQ(kvb::kv_bytes_per_token(16, 8, 64, kvb::DType::I8), 2u * 16u * 8u * 66u);
 }
 
 }  // namespace

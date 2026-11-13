@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import torch
 
-from kvbound import golden, tolerance
+from kvbound import golden, quantize, tolerance
 from kvbound.fixture import FIXTURE_DIR
 from kvbound.models import load_spec
 from kvbound.ref import load_llama
@@ -159,6 +159,77 @@ def test_continuous_batches_match_reference(kvb):
     graphs = one_graph.graph_stats()
     assert graphs["evicted"] > 0 and graphs["captured"] == graphs["evicted"] + 1
     assert graphs["replayed"] > 0
+
+
+@pytest.fixture(scope="module")
+def quantized_fixture(tmp_path_factory):
+    """The fixture checkpoint in each quantized scheme. Its rows are 64 and 128 wide, so INT4
+    uses groups of 32."""
+    dirs = {}
+    for scheme in ("int8_pc", "int4_g"):
+        dirs[scheme] = tmp_path_factory.mktemp(scheme)
+        quantize.convert(FIXTURE_DIR, dirs[scheme], scheme, group_size=32)
+    return dirs
+
+
+@pytest.mark.parametrize("scheme", ["int8_pc", "int4_g"])
+def test_quantized_weights_match_the_dequantizing_reference(kvb, quantized_fixture, scheme):
+    """The engine on quantized weights against the reference model computing in FP32 on the same
+    weights dequantized. Both ways of multiplying are covered: in place, and expanded to FP16 for
+    the tensor-core product (quantized_gemm_rows=0 expands on every step)."""
+    model_dir = quantized_fixture[scheme]
+    model = load_llama(model_dir)
+    manifest, tensors = golden.load(FIXTURE_DIR)
+    limits = manifest["thresholds"]["fp16"]["rel_rms_max"]
+    prompts = fixture_prompts()
+    lengths = [12, 30, 20]
+    expected_tokens = [
+        reference_greedy(model, p, n)[0] for p, n in zip(prompts, lengths, strict=True)
+    ]
+    for options in ({}, {"quantized_gemm_rows": 0}):
+        engine = kvb.Engine(str(model_dir), max_ctx=64, max_seqs=2, kv_block_size=8, **options)
+        assert engine.weights() == scheme
+        for prompt in manifest["prompts"]:
+            ids = tensors[f"{prompt['id']}/input_ids"].tolist()
+            expected = golden.capture_sites(model, ids)
+            for split in (len(ids), 1):
+                for site, value in captured_sites(engine, ids, split).items():
+                    error = tolerance.rel_rms(torch.from_numpy(value), expected[site])
+                    assert error <= limits[site], (prompt["id"], site, options)
+        assert engine.serve(prompts, lengths, policy="continuous") == expected_tokens
+    # A quantized checkpoint holds its matrices at the size the format promises.
+    fp16_bytes = kvb.Engine(str(FIXTURE_DIR), max_ctx=64).memory()["weights"]
+    assert engine.memory()["weights"] < (0.62 if scheme == "int8_pc" else 0.42) * fp16_bytes
+
+
+def test_int8_kv_cache_is_close_to_fp16_and_the_same_on_every_path(kvb):
+    """Quantizing the cache moves the logits by a small error, halves the pool, and gives the
+    same tokens whatever the layout, block size, batching or preemption."""
+    manifest, tensors = golden.load(FIXTURE_DIR)
+    fp16 = kvb.Engine(str(FIXTURE_DIR), max_ctx=64)
+    int8 = kvb.Engine(str(FIXTURE_DIR), max_ctx=64, kv_dtype="int8")
+    for prompt in manifest["prompts"]:
+        ids = tensors[f"{prompt['id']}/input_ids"].tolist()
+        exact = torch.from_numpy(fp16.feed(ids)["logits"])
+        logits = torch.from_numpy(int8.feed(ids)["logits"])
+        assert tolerance.rel_rms(logits, exact) < 0.02
+        assert tolerance.top1_agreement(logits, exact) == 1.0
+    # 64 one-byte elements and a two-byte scale per vector, against 64 two-byte elements.
+    head_dim = manifest["model"]["config"]["hidden_size"] // manifest["model"]["config"]["n_heads"]
+    ratio = int8.memory()["kv_pool"] / fp16.memory()["kv_pool"]
+    assert ratio == pytest.approx((head_dim + 2) / (2 * head_dim))
+
+    prompts = [*fixture_prompts(), [9, 8, 7], [200, 3], list(range(40, 60)), [5]]
+    lengths = [12, 3, 25, 1, 17, 6, 9]
+    expected = [int8.generate(p, n) for p, n in zip(prompts, lengths, strict=True)]
+    for options in (
+        {"max_seqs": 3},
+        {"max_seqs": 4, "kv_block_size": 4, "kv_blocks": 16, "max_step_tokens": 9},
+        {"max_seqs": 2, "kv_layout": "token_major", "wide_key_loads": False},
+        {"max_seqs": 2, "kv_layout": "dim_major", "kv_block_size": 8, "graph": False},
+    ):
+        engine = kvb.Engine(str(FIXTURE_DIR), max_ctx=64, kv_dtype="int8", **options)
+        assert engine.serve(prompts, lengths, policy="continuous") == expected, options
 
 
 def test_generation_is_the_same_on_every_path(kvb):

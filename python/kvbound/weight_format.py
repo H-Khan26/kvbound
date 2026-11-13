@@ -1,0 +1,138 @@
+"""Quantized weight format: the safetensors header contract shared with the C++ loader.
+
+A quantized checkpoint keeps the Hugging Face tensor names. Every 2-D tensor is stored as integers
+under its own name plus an F16 scale tensor named "<name>.scale"; 1-D tensors stay F16. The
+header's __metadata__ says how to read them:
+
+  int8_pc  per output channel: name I8 [out, in], scale F16 [out],
+           W[o, i] = scale[o] * q[o, i], q in [-127, 127].
+  int4_g   groups of group_size along the input dimension: name U8 [out, in / 2], two
+           two's-complement nibbles per byte, element 2j in bits 0..3 and 2j + 1 in bits 4..7;
+           scale F16 [out, in / group_size], W[o, i] = scale[o, i // group_size] * q[o, i],
+           q in [-7, 7].
+
+A file without the scheme key is a plain FP16/BF16/F32 checkpoint (scheme fp16).
+
+Usage: WeightFormat.from_metadata(safe_open(path, "pt").metadata())
+"""
+
+from dataclasses import dataclass
+
+FORMAT_VERSION = "1"
+
+FP16 = "fp16"
+INT8_PC = "int8_pc"
+INT4_G = "int4_g"
+SCHEMES = (FP16, INT8_PC, INT4_G)
+
+CLIPS = ("minmax", "mse")
+PACK_ORDER = "lo_nibble_first"
+SCALE_DTYPE = "F16"
+SCALE_SUFFIX = ".scale"
+DEFAULT_GROUP_SIZE = 128
+
+# Largest integer magnitude each quantized scheme writes (symmetric, so -8 is never used in int4).
+QMAX = {INT8_PC: 127, INT4_G: 7}
+
+KEY_VERSION = "kvbound.format_version"
+KEY_SCHEME = "kvbound.scheme"
+KEY_GROUP_SIZE = "kvbound.group_size"
+KEY_PACK_ORDER = "kvbound.pack_order"
+KEY_SCALE_DTYPE = "kvbound.scale_dtype"
+KEY_CLIP = "kvbound.clip"
+KEY_SOURCE = "kvbound.source"
+KEY_SOURCE_SHA256 = "kvbound.source_sha256"
+
+# Weight variants by directory suffix (see ModelSpec.variant_dir).
+VARIANTS = (FP16, INT8_PC, INT4_G, f"{INT4_G}.mse")
+
+
+@dataclass(frozen=True)
+class WeightFormat:
+    scheme: str = FP16
+    group_size: int = 0
+    pack_order: str = ""
+    scale_dtype: str = ""
+    clip: str = ""
+
+    def __post_init__(self) -> None:
+        if self.scheme not in SCHEMES:
+            raise ValueError(f"unknown weight scheme {self.scheme!r}; known: {SCHEMES}")
+        # The fields each scheme allows: (group_size, pack_order, scale_dtype, clips).
+        group_size, pack_order, scale_dtype, clips = {
+            FP16: (0, "", "", ("",)),
+            INT8_PC: (0, "", SCALE_DTYPE, ("minmax",)),
+            INT4_G: (self.group_size, PACK_ORDER, SCALE_DTYPE, CLIPS),
+        }[self.scheme]
+        fields = (self.group_size, self.pack_order, self.scale_dtype)
+        if fields != (group_size, pack_order, scale_dtype) or self.clip not in clips:
+            raise ValueError(f"inconsistent weight format: {self}")
+        # The kernels read 32 weights per load and find a load's scale with a shift.
+        if self.scheme == INT4_G and (
+            self.group_size < 32 or self.group_size & (self.group_size - 1)
+        ):
+            raise ValueError(
+                f"int4_g needs a group size that is a power of two, at least 32; "
+                f"got {self.group_size}"
+            )
+
+    @classmethod
+    def make(
+        cls, scheme: str, group_size: int = DEFAULT_GROUP_SIZE, clip: str = "minmax"
+    ) -> "WeightFormat":
+        """The format of a scheme with the fields it does not use filled in."""
+        if scheme == INT4_G:
+            return cls(INT4_G, group_size, PACK_ORDER, SCALE_DTYPE, clip)
+        if scheme == INT8_PC:
+            return cls(INT8_PC, 0, "", SCALE_DTYPE, clip)
+        return cls()
+
+    @property
+    def quantized(self) -> bool:
+        return self.scheme != FP16
+
+    @property
+    def variant(self) -> str:
+        """Directory suffix of checkpoints in this format, e.g. "int4_g" or "int4_g.mse"."""
+        return f"{self.scheme}.mse" if self.clip == "mse" else self.scheme
+
+    def to_metadata(self) -> dict[str, str]:
+        """The header keys of this format; empty for a plain checkpoint."""
+        if not self.quantized:
+            return {}
+        return {
+            KEY_VERSION: FORMAT_VERSION,
+            KEY_SCHEME: self.scheme,
+            KEY_GROUP_SIZE: str(self.group_size),
+            KEY_PACK_ORDER: self.pack_order,
+            KEY_SCALE_DTYPE: self.scale_dtype,
+            KEY_CLIP: self.clip,
+        }
+
+    @classmethod
+    def from_metadata(cls, metadata: dict[str, str] | None) -> "WeightFormat":
+        """Reads a safetensors header's __metadata__; no scheme key means a plain checkpoint."""
+        metadata = metadata or {}
+        if KEY_SCHEME not in metadata:
+            return cls()
+        version = metadata.get(KEY_VERSION)
+        if version != FORMAT_VERSION:
+            raise ValueError(f"unsupported {KEY_VERSION} {version!r}; expected {FORMAT_VERSION}")
+        try:
+            return cls(
+                scheme=metadata[KEY_SCHEME],
+                group_size=int(metadata[KEY_GROUP_SIZE]),
+                pack_order=metadata[KEY_PACK_ORDER],
+                scale_dtype=metadata[KEY_SCALE_DTYPE],
+                clip=metadata[KEY_CLIP],
+            )
+        except KeyError as e:
+            raise ValueError(f"quantized checkpoint lacks metadata key {e}") from e
+
+    def bits_per_weight(self, out_features: int, in_features: int) -> float:
+        """Stored bits per element of an [out, in] tensor, its scales included."""
+        if self.scheme == INT8_PC:
+            return 8 + 16 / in_features
+        if self.scheme == INT4_G:
+            return 4 + 16 / self.group_size
+        return 16.0

@@ -45,6 +45,22 @@ __device__ inline float block_sum(float v, float* scratch) {
   return total;
 }
 
+// The FP16 value in the low 16 bits of a word, for kernels that load several at once.
+__device__ inline float f16_bits_to_float(unsigned bits) {
+  return __half2float(__ushort_as_half(static_cast<unsigned short>(bits)));
+}
+
+// The 16 INT8 values of one 16-byte load, in memory order.
+__device__ inline void unpack_int8(uint4 load, float* out) {
+  const unsigned words[4] = {load.x, load.y, load.z, load.w};
+  for (int w = 0; w < 4; ++w) {
+    for (int b = 0; b < 4; ++b) {
+      // Shifting the byte to the top and back down as a signed int extends its sign.
+      out[4 * w + b] = static_cast<float>(static_cast<int>(words[w] << (24 - 8 * b)) >> 24);
+    }
+  }
+}
+
 inline const __half* as_half(const f16* p) { return reinterpret_cast<const __half*>(p); }
 inline __half* as_half(f16* p) { return reinterpret_cast<__half*>(p); }
 

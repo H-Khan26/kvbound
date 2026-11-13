@@ -1,7 +1,9 @@
 """Each CUDA kernel against the same operation in torch, over shape sweeps.
 
 Inputs are FP16. The torch side computes in FP32 from those FP16 values, so the only expected
-difference is the kernel's final rounding to FP16 (about 3e-4 relative RMS).
+difference is the kernel's final rounding to FP16 (about 3e-4 relative RMS). Kernels that read
+quantized data are compared with torch computing on the same data dequantized, so the
+quantization error itself is not part of the difference.
 """
 
 import math
@@ -11,7 +13,7 @@ import pytest
 import torch
 import torch.nn.functional as F  # noqa: N812
 
-from kvbound import tolerance
+from kvbound import quantize, tolerance
 from kvbound.ref.model import apply_rope, rope_tables
 
 pytestmark = pytest.mark.gpu
@@ -110,6 +112,67 @@ def test_linear(kvb, gen, rows, n_out, n_in):
     assert tolerance.rel_rms(f16_sums, expected) < 2e-2
 
 
+def quantized(w: torch.Tensor, scheme: str, group: int):
+    """w quantized by kvbound.quantize: (stored bytes as uint8, scale bits, dequantized)."""
+    if scheme == "int8_pc":
+        q, scale = quantize.quantize_int8_pc(w)
+        deq = quantize.dequantize_int8_pc(q, scale)
+    else:
+        q, scale = quantize.quantize_int4_g(w, group)
+        deq = quantize.dequantize_int4_g(q, scale, group)
+    return np.ascontiguousarray(q.numpy()).view(np.uint8), bits(scale), deq
+
+
+@pytest.mark.parametrize(
+    ("n_out", "n_in", "group"), [(8, 64, 32), (256, 2048, 128), (2048, 5632, 128), (100, 96, 32)]
+)
+@pytest.mark.parametrize("rows", [1, 2, 5, 16, 21])
+@pytest.mark.parametrize("scheme", ["int8_pc", "int4_g"])
+def test_linear_quantized(kvb, gen, scheme, rows, n_out, n_in, group):
+    """One to 21 rows: every row-count variant of the kernel, and a second pass past 16."""
+    w = rand_f16(gen, n_out, n_in, scale=1 / math.sqrt(n_in))
+    x = rand_f16(gen, rows, n_in)
+    data, scale, deq = quantized(w, scheme, group)
+    expected = x.float() @ deq.T
+
+    f32_out = kvb.linear_quantized(scheme, data, scale, bits(x), group_size=group, f32_out=True)
+    assert tolerance.rel_rms(torch.from_numpy(f32_out), expected) < 1e-5
+    f16_out = kvb.linear_quantized(scheme, data, scale, bits(x), group_size=group)
+    assert tolerance.rel_rms(from_bits(f16_out), expected) < F16_ROUNDING
+    # The expanded matrix is what the tensor-core path multiplies by.
+    expanded = from_bits(kvb.dequantize(scheme, data, scale, group_size=group))
+    assert tolerance.rel_rms(expanded, deq) < F16_ROUNDING
+
+
+@pytest.mark.parametrize("scheme", ["int8_pc", "int4_g"])
+def test_embedding_quantized_reads_dequantized_rows(kvb, gen, scheme):
+    table = rand_f16(gen, 50, 64)
+    ids = torch.tensor([49, 0, 7, 7, 31], dtype=torch.int32)
+    data, scale, deq = quantized(table, scheme, 32)
+    actual = kvb.embedding_quantized(scheme, data, scale, ids.numpy(), group_size=32)
+    assert tolerance.rel_rms(from_bits(actual), deq[ids.long()]) < F16_ROUNDING
+
+
+def test_quantized_kernels_reject_rows_they_cannot_read(kvb, gen):
+    x = rand_f16(gen, 1, 40)
+    data = np.zeros((4, 40), dtype=np.uint8)
+    with pytest.raises(RuntimeError, match="divisible by 16"):
+        kvb.linear_quantized("int8_pc", data, bits(rand_f16(gen, 4)), bits(x))
+    with pytest.raises(RuntimeError, match="power of two"):
+        kvb.linear_quantized(
+            "int4_g", np.zeros((4, 48), dtype=np.uint8), bits(rand_f16(gen, 4, 2)),
+            bits(rand_f16(gen, 1, 96)), group_size=48,
+        )  # fmt: skip
+
+
+def int8_readback(x: torch.Tensor) -> torch.Tensor:
+    """What an INT8 cache returns for vectors x [..., dim]: integers times one FP16 scale each."""
+    xf = x.float()
+    scale = (xf.abs().amax(-1, keepdim=True) / 127).to(torch.float16).float()
+    q = torch.where(scale > 0, torch.round(xf / scale), torch.zeros_like(xf)).clamp(-127, 127)
+    return q * scale
+
+
 def reference_attention(q, k, v, positions, seqs, n_rep, query_from=0):
     """Causal grouped-query attention per token, over its sequence's earlier tokens, in FP32.
 
@@ -129,11 +192,14 @@ def reference_attention(q, k, v, positions, seqs, n_rep, query_from=0):
     return out
 
 
+@pytest.mark.parametrize("kv_dtype", ["fp16", "int8"])
 @pytest.mark.parametrize("wide", [True, False])
 @pytest.mark.parametrize("layout", ["head_major", "token_major", "dim_major"])
 @pytest.mark.parametrize("block_size", [4, 64])
 @pytest.mark.parametrize("head_dim", [16, 64])
-def test_attention_over_interleaved_sequences(kvb, gen, head_dim, block_size, layout, wide):
+def test_attention_over_interleaved_sequences(
+    kvb, gen, head_dim, block_size, layout, wide, kv_dtype
+):
     """Three sequences of different lengths, tokens shuffled, blocks assigned out of order."""
     n_heads, n_kv_heads, lengths = 4, 2, [1, 23, 50]
     blocks_per_seq = math.ceil(max(lengths) / block_size)
@@ -155,16 +221,19 @@ def test_attention_over_interleaved_sequences(kvb, gen, head_dim, block_size, la
         kvb.kv_attention(
             bits(q), bits(k), bits(v), positions.numpy(), seqs.numpy(), slots.numpy(),
             physical.to(torch.int32).numpy(), block_size, n_blocks, layout,
-            wide_key_loads=wide,
+            wide_key_loads=wide, kv_dtype=kv_dtype,
         )
     )  # fmt: skip
+    if kv_dtype == "int8":
+        k, v = int8_readback(k), int8_readback(v)
     expected = reference_attention(q, k, v, positions, seqs, n_heads // n_kv_heads)
     assert tolerance.rel_rms(actual, expected) < 2 * F16_ROUNDING
 
 
+@pytest.mark.parametrize("kv_dtype", ["fp16", "int8"])
 @pytest.mark.parametrize("wide", [True, False])
 @pytest.mark.parametrize("layout", ["head_major", "token_major", "dim_major"])
-def test_attention_long_context_single_query(kvb, gen, layout, wide):
+def test_attention_long_context_single_query(kvb, gen, layout, wide, kv_dtype):
     """One query over 1,500 cached positions: the decode shape, with several keys per thread."""
     n_heads, n_kv_heads, head_dim, ctx = 4, 2, 64, 1500
     q, k, v = (rand_f16(gen, ctx, h, head_dim) for h in (n_heads, n_kv_heads, n_kv_heads))
@@ -174,8 +243,10 @@ def test_attention_long_context_single_query(kvb, gen, layout, wide):
     actual = from_bits(
         kvb.kv_attention(
             bits(q), bits(k), bits(v), positions.numpy(), seqs.numpy(), positions.numpy(),
-            table, ctx, 1, layout, query_from=ctx - 1, wide_key_loads=wide,
+            table, ctx, 1, layout, query_from=ctx - 1, wide_key_loads=wide, kv_dtype=kv_dtype,
         )
     )  # fmt: skip
+    if kv_dtype == "int8":
+        k, v = int8_readback(k), int8_readback(v)
     expected = reference_attention(q, k, v, positions, seqs, n_heads // n_kv_heads, ctx - 1)[-1:]
     assert tolerance.rel_rms(actual, expected) < 2 * F16_ROUNDING

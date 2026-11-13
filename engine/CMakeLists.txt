@@ -6,6 +6,7 @@ add_library(kvbound STATIC
   io/mapped_file.cpp
   io/model_config.cpp
   io/safetensors.cpp
+  io/weight_format.cpp
   kv/block_allocator.cpp
   kv/kv_layout.cpp
   memory/planner.cpp
@@ -25,6 +26,7 @@ if(KVB_ENABLE_CUDA)
     kernels/attention.cu
     kernels/blas.cpp
     kernels/elementwise.cu
+    kernels/quantized.cu
     kernels/reductions.cu
     kv/kv_pool.cpp
     model/llama/llama_model.cpp

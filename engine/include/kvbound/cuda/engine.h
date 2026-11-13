@@ -30,10 +30,14 @@ struct EngineConfig {
   int kv_block_size = 0;  // positions per KV block; 0 means max_ctx, one block per sequence
   int kv_blocks = 0;      // blocks in the pool; 0 means enough for max_seqs full sequences
   KvLayout kv_layout = KvLayout::HeadMajor;
+  DType kv_dtype = DType::F16;  // F16, or I8 with one scale per cached vector
   PlanStrategy plan = PlanStrategy::GreedyBySize;
   GemmAccumulate gemm = GemmAccumulate::F32;
   // Read cached keys 16 bytes at a time where the KV layout allows it.
   bool wide_key_loads = true;
+  // Steps of up to this many rows multiply quantized weights in place; wider steps expand each
+  // matrix to FP16 for a tensor-core product.
+  int quantized_gemm_rows = 16;
   // Replays decode-shaped steps from a captured CUDA graph instead of launching each kernel.
   bool use_graph = true;
   // Graphs kept at once. A graph serves one row count, and continuous batching changes the row
@@ -66,6 +70,7 @@ struct EngineMemory {
   std::size_t arena = 0;            // planned activation arena
   std::size_t arena_naive = 0;      // the same values without sharing
   std::size_t arena_peak_live = 0;  // lower bound for any plan
+  std::size_t dequant = 0;          // scratch for one quantized matrix expanded to FP16
 };
 
 // The GPU runtime: model, KV cache, persistent step buffers, and the sequences being generated.
@@ -80,6 +85,7 @@ class Engine {
   const ModelConfig& model_config() const noexcept { return model_->config(); }
   const EngineConfig& config() const noexcept { return config_; }
   const Program& program() const noexcept { return model_->program(); }
+  const WeightFormat& weight_format() const noexcept { return model_->weight_format(); }
   EngineMemory memory() const;
   // Where each program value lives in the activation arena, and its size at the largest step.
   const MemoryPlan& memory_plan() const noexcept { return model_->memory_plan(); }

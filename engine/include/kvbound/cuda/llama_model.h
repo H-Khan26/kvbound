@@ -40,6 +40,9 @@ struct LlamaModelConfig {
   GemmAccumulate gemm = GemmAccumulate::F32;
   // Read cached keys 16 bytes at a time where the KV layout allows it.
   bool wide_key_loads = true;
+  // Quantized matrices are multiplied in place for steps of up to this many rows. Wider steps
+  // expand each matrix to FP16 first and use the tensor-core product.
+  int quantized_gemm_rows = 16;
 };
 
 // A Llama checkpoint on the device plus everything one forward pass needs: the op program, the
@@ -55,6 +58,9 @@ class LlamaModel {
   const MemoryPlan& memory_plan() const noexcept { return plan_; }
   const std::vector<std::size_t>& value_sizes() const noexcept { return value_bytes_; }
   std::size_t weight_bytes() const noexcept { return weights_.bytes(); }
+  const WeightFormat& weight_format() const noexcept { return weights_.format(); }
+  // Scratch that holds one quantized matrix expanded to FP16; empty when no step needs it.
+  std::size_t dequant_bytes() const noexcept { return dequant_.bytes(); }
   GemmAccumulate gemm_accumulate() const noexcept { return blas_.accumulate(); }
 
   // Launches the whole program for one step. rows [n_tokens] and out_rows [n_out] are device
@@ -79,6 +85,7 @@ class LlamaModel {
   MemoryPlan plan_;
   DeviceWeights weights_;
   DeviceBuffer arena_;
+  DeviceBuffer dequant_;
   DeviceBuffer rope_table_;
   Blas blas_;
 };

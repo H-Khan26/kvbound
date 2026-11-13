@@ -7,6 +7,9 @@ kvbound.record, compares decode speed with the perf model's ceiling, and writes 
 The prompt is the same seeded random token ids the Hugging Face baseline uses, so both engines
 process identical tokens.
 
+--weights picks a quantized variant of the checkpoint (see kvbound.quantize) and --kv the
+element type of the KV cache; the ceiling is the perf model's for that precision.
+
 Usage: python -m kvbound.bench --model tinyllama-1.1b --prompt-len 128 --new-tokens 128
 """
 
@@ -27,6 +30,17 @@ from kvbound.nvml_sampler import NvmlSampler
 from kvbound.paths import binary
 from kvbound.perfmodel import hardware
 from kvbound.perfmodel.model import Arch, Precision, predict
+from kvbound.weight_format import VARIANTS
+
+KV_DTYPES = ("fp16", "int8")
+
+
+def checkpoint_dir(model: str, weights: str) -> Path:
+    """The directory of a model's weight variant; exits with a hint when it was not made."""
+    path = load_spec(model).variant_dir(weights)
+    if not (path / "model.safetensors").exists():
+        raise SystemExit(f"{path} not found; run `make fetch` and `make quantize` for {model}")
+    return path
 
 
 def random_prompt(vocab_size: int, prompt_len: int, seed: int) -> list[int]:
@@ -117,13 +131,15 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
         "max-ctx": max_ctx,
         "graph": args.graph,
         "kv-layout": args.kv_layout,
+        "kv-dtype": args.kv,
         "gemm": args.gemm,
         "warmup": args.warmup,
         "iters": args.iters,
         "profile-ops": args.profile_ops,
     }
     hw = measured_ceilings() if args.gemm == "fp32" else None
-    raw, nvml = run_kvb_bench(args.preset, spec.checkpoint_dir, trace, options)
+    model_dir = checkpoint_dir(args.model, args.weights)
+    raw, nvml = run_kvb_bench(args.preset, model_dir, trace, options)
 
     runs = [request_metrics(it["requests"][0]["token_times_s"]) for it in raw["iterations"]]
     samples = {name: [run[name] for run in runs] for name in runs[0]}
@@ -137,7 +153,8 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     # The ceiling for this decode: the perf model's bound at the middle of the generated span.
     if hw is not None:
         context = args.prompt_len + args.new_tokens // 2
-        bound = predict(arch, hw, Precision.named("fp16", "fp16"), 1, args.prompt_len, context)
+        precision = Precision.named(args.weights, args.kv, arch.head_dim)
+        bound = predict(arch, hw, precision, 1, args.prompt_len, context)
         metrics["ceiling"] = {
             "dram_gbs": hw.dram_gbs,
             "decode_tok_s": bound.decode_tok_s,
@@ -150,7 +167,6 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
         "engine": {"name": "kvbound", "preset": args.preset},
         "model": {"name": spec.name, "hf_repo": spec.hf_repo, "revision": spec.revision},
         "params": {
-            "dtype": "fp16",
             "batch": 1,
             "prompt_len": args.prompt_len,
             "new_tokens": args.new_tokens,
@@ -172,6 +188,8 @@ def main() -> None:
     parser.add_argument("--max-ctx", type=int, default=0, help="default: prompt + new tokens")
     parser.add_argument("--graph", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--kv-layout", default="head_major")
+    parser.add_argument("--weights", choices=VARIANTS, default="fp16")
+    parser.add_argument("--kv", choices=KV_DTYPES, default="fp16")
     parser.add_argument("--gemm", choices=["fp32", "fp16"], default="fp32")
     parser.add_argument("--profile-ops", action="store_true")
     parser.add_argument("--warmup", type=int, default=2)
