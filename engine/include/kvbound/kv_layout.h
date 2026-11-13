@@ -20,7 +20,8 @@ std::string_view kv_layout_name(KvLayout layout) noexcept;
 std::optional<KvLayout> kv_layout_from_name(std::string_view name) noexcept;
 
 // Shape of one pool (keys or values). A block holds block_size consecutive positions of one
-// sequence; the static design uses one block per sequence with block_size = max context.
+// sequence; the static design uses one block per sequence with block_size = max context. A
+// sequence that spans several blocks needs a power-of-two block_size.
 struct KvDims {
   std::int64_t n_layers = 0;
   std::int64_t n_blocks = 0;
@@ -61,6 +62,7 @@ struct KvView {
   const std::int32_t* block_table = nullptr;
   std::int32_t blocks_per_seq = 0;
   std::int32_t block_size = 0;
+  std::int32_t block_shift = 0;  // log2(block_size) when blocks_per_seq > 1, else unused
   std::int64_t block_stride = 0;
   std::int64_t head_stride = 0;
   std::int64_t pos_stride = 0;

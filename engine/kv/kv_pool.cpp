@@ -1,6 +1,7 @@
 #include "kvbound/cuda/kv_pool.h"
 
 #include <algorithm>
+#include <bit>
 
 namespace kvb::cuda {
 
@@ -13,6 +14,9 @@ KvPool::KvPool(const KvDims& dims, KvLayout layout, int max_seqs, int blocks_per
       values_(keys_.bytes()),
       block_table_(static_cast<std::size_t>(max_seqs) * blocks_per_seq * sizeof(std::int32_t)),
       block_table_host_(block_table_.bytes()) {
+  if (blocks_per_seq > 1 && !std::has_single_bit(static_cast<std::uint64_t>(dims.block_size))) {
+    throw Error("a KV block size below the context length must be a power of two");
+  }
   std::fill_n(block_table_host_.as<std::int32_t>(), max_seqs * blocks_per_seq, 0);
   KVB_CUDA(cudaMemset(block_table_.as(), 0, block_table_.bytes()));
 }
@@ -25,6 +29,7 @@ KvView KvPool::layer_view(int layer) const noexcept {
       .block_table = block_table_.as<std::int32_t>(),
       .blocks_per_seq = blocks_per_seq_,
       .block_size = static_cast<std::int32_t>(dims_.block_size),
+      .block_shift = std::countr_zero(static_cast<std::uint64_t>(dims_.block_size)),
       .block_stride = strides_.block,
       .head_stride = strides_.head,
       .pos_stride = strides_.pos,
