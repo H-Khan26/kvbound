@@ -235,7 +235,12 @@ LAYOUT_LABELS = {
 
 def kv_layout(records: dict[str, dict[str, Any]]) -> Figure:
     rec = records["kv_layout"]
-    points = [p for p in rec["samples"]["points"] if p["shape"] == "decode"]
+    # One block per sequence; records made before paging was timed have no placement field.
+    points = [
+        p
+        for p in rec["samples"]["points"]
+        if p["shape"] == "decode" and p.get("placement", "single") == "single"
+    ]
     params = rec["params"]
     best = rec["metrics"]["attention_ms"]
     speedup = best["head_major/scalar"]["decode_batch1"] / best["head_major/wide"]["decode_batch1"]

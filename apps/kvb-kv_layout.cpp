@@ -5,14 +5,20 @@
 // values, then attend over everything cached. Layers are visited in order, as in a forward pass,
 // so each layer's keys have left the caches by the time they are read again.
 //
+// The head-major layout is also timed with the pool cut into 16-token blocks, the paged design:
+// once with each sequence's blocks in order and once with them scattered over the pool.
+//
 // Prints one JSON object on stdout; `python -m kvbound.microbench kv_layout` records it.
 // Options restrict the run to some points, so a profiler can look at single kernel launches:
 //   --layout NAME --key-loads NAME --shape decode|prefill --batch N --ctx N --reps N
+//   --block-size N --placement single|in_order|scattered
 
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <exception>
+#include <numeric>
+#include <random>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -38,15 +44,23 @@ constexpr int kMaxCtx = 4096;
 constexpr int kMaxBatch = 8;
 constexpr int kPrefillTokens = 512;
 constexpr int kReps = 30;
+constexpr int kPagedBlockSize = 16;
+
+// How a sequence's cache positions map to the pool.
+struct Paging {
+  int block_size;
+  const char* placement;  // "single": one block per sequence; else "in_order" or "scattered"
+};
 
 // Every byte 0x3C makes every FP16 element 0x3C3C, about 1.06: finite in all the arithmetic.
 constexpr int kFillByte = 0x3C;
 
 // Which points run. An empty name or a zero matches every value.
 struct Options {
-  std::string layout, key_loads, shape;
+  std::string layout, key_loads, shape, placement;
   int batch = 0;
   int ctx = 0;
+  int block_size = 0;
   int reps = kReps;
 
   Options(int argc, char** argv) {
@@ -66,6 +80,10 @@ struct Options {
         batch = integer(key, value);
       } else if (key == "--ctx") {
         ctx = integer(key, value);
+      } else if (key == "--block-size") {
+        block_size = integer(key, value);
+      } else if (key == "--placement") {
+        placement = value;
       } else if (key == "--reps") {
         reps = integer(key, value);
       } else {
@@ -92,6 +110,10 @@ struct Options {
     return wanted.empty() || wanted == value;
   }
   bool wants_layout(kvb::KvLayout l) const { return matches(layout, kvb::kv_layout_name(l)); }
+  bool wants(const Paging& paging) const {
+    return (block_size == 0 || block_size == paging.block_size) &&
+           matches(placement, paging.placement);
+  }
   bool wants(KeyLoads loads, std::string_view point_shape, int point_batch, int point_ctx) const {
     return matches(key_loads, kvb::kernels::key_loads_name(loads)) && matches(shape, point_shape) &&
            (batch == 0 || batch == point_batch) && (ctx == 0 || ctx == point_ctx);
@@ -148,80 +170,93 @@ int run(const Options& options) {
   for (const kvb::KvLayout layout :
        {kvb::KvLayout::HeadMajor, kvb::KvLayout::TokenMajor, kvb::KvLayout::DimMajor}) {
     if (!options.wants_layout(layout)) continue;
-    kvb::cuda::KvPool pool(kvb::KvDims{.n_layers = kLayers,
-                                       .n_blocks = kMaxBatch,
-                                       .n_kv_heads = kKvHeads,
-                                       .block_size = kMaxCtx,
-                                       .head_dim = kHeadDim},
-                           layout, kMaxBatch, 1);
-    for (int seq = 0; seq < kMaxBatch; ++seq) {
-      const int block = seq;
-      pool.set_blocks(seq, {&block, 1}, nullptr);
+    std::vector<Paging> pagings = {{kMaxCtx, "single"}};
+    if (layout == kvb::KvLayout::HeadMajor) {
+      pagings.push_back({kPagedBlockSize, "in_order"});
+      pagings.push_back({kPagedBlockSize, "scattered"});
     }
-    // The pools start as the same finite value everywhere.
-    for (int layer = 0; layer < kLayers; ++layer) {
-      const kvb::KvView view = pool.layer_view(layer);
-      const std::size_t layer_bytes = pool.bytes() / 2 / kLayers;
-      if (layout != kvb::KvLayout::TokenMajor) {
-        KVB_CUDA(cudaMemset(view.k, kFillByte, layer_bytes));
-        KVB_CUDA(cudaMemset(view.v, kFillByte, layer_bytes));
-      } else if (layer == 0) {
-        // Token-major interleaves the layers, so the whole pool is one region.
-        KVB_CUDA(cudaMemset(view.k, kFillByte, pool.bytes() / 2));
-        KVB_CUDA(cudaMemset(view.v, kFillByte, pool.bytes() / 2));
+    for (const Paging& paging : pagings) {
+      if (!options.wants(paging)) continue;
+      const int blocks_per_seq = kMaxCtx / paging.block_size;
+      const int n_blocks = kMaxBatch * blocks_per_seq;
+      kvb::cuda::KvPool pool(kvb::KvDims{.n_layers = kLayers,
+                                         .n_blocks = n_blocks,
+                                         .n_kv_heads = kKvHeads,
+                                         .block_size = paging.block_size,
+                                         .head_dim = kHeadDim},
+                             layout, kMaxBatch, blocks_per_seq);
+      // Sequence s owns blocks[s * blocks_per_seq ...], in logical order.
+      std::vector<int> blocks(n_blocks);
+      std::iota(blocks.begin(), blocks.end(), 0);
+      if (std::string_view(paging.placement) == "scattered") {
+        std::shuffle(blocks.begin(), blocks.end(), std::mt19937(0));
       }
-    }
-
-    std::vector<KeyLoads> variants = {KeyLoads::Scalar};
-    if (kvb::kernels::widest_key_loads(pool.layer_view(0), kHeadDim) == KeyLoads::Wide) {
-      variants.push_back(KeyLoads::Wide);
-    }
-    for (const KeyLoads loads : variants) {
-      const auto point = [&](const char* shape, int batch, int ctx, int n_tokens, int reps,
-                             const std::vector<StepRow>& rows) {
-        if (!options.wants(loads, shape, batch, ctx)) return;
-        const DeviceBuffer device_rows = upload(rows);
-        const StepRow* r = device_rows.as<StepRow>();
-        const Timing write = time_steps(reps, [&] {
-          for (int layer = 0; layer < kLayers; ++layer) {
-            kvb::kernels::kv_write(k.as<f16>(), v.as<f16>(), r, pool.layer_view(layer), n_tokens,
-                                   kKvHeads, kHeadDim, nullptr);
-          }
-        });
-        const Timing attend = time_steps(reps, [&] {
-          for (int layer = 0; layer < kLayers; ++layer) {
-            kvb::kernels::attention(q.as<f16>(), out.as<f16>(), r, pool.layer_view(layer), n_tokens,
-                                    kHeads, kKvHeads, kHeadDim, kMaxCtx, loads, nullptr);
-          }
-        });
-        std::printf(
-            "%s\n    {\"layout\": \"%s\", \"key_loads\": \"%s\", \"shape\": \"%s\", "
-            "\"batch\": %d, \"ctx\": %d, \"attention_ms\": %.4f, \"attention_median_ms\": %.4f, "
-            "\"write_ms\": %.4f, \"write_median_ms\": %.4f}",
-            first ? "" : ",", std::string(kvb::kv_layout_name(layout)).c_str(),
-            std::string(kvb::kernels::key_loads_name(loads)).c_str(), shape, batch, ctx,
-            attend.best_ms, attend.median_ms, write.best_ms, write.median_ms);
-        first = false;
+      for (int seq = 0; seq < kMaxBatch; ++seq) {
+        pool.set_blocks(
+            seq, {blocks.data() + seq * blocks_per_seq, static_cast<std::size_t>(blocks_per_seq)},
+            nullptr);
+      }
+      const auto slot = [&](int seq, int pos) {
+        return blocks[seq * blocks_per_seq + pos / paging.block_size] * paging.block_size +
+               pos % paging.block_size;
       };
+      // The pools start as the same finite value everywhere.
+      KVB_CUDA(cudaMemset(pool.layer_view(0).k, kFillByte, pool.bytes() / 2));
+      KVB_CUDA(cudaMemset(pool.layer_view(0).v, kFillByte, pool.bytes() / 2));
 
-      for (const int batch : {1, kMaxBatch}) {
-        for (const int ctx : {128, 256, 512, 1024, 2048, 4096}) {
-          std::vector<StepRow> rows;
-          for (int seq = 0; seq < batch; ++seq) {
-            rows.push_back({.token_id = 0,
-                            .position = ctx - 1,
-                            .seq = seq,
-                            .kv_slot = seq * kMaxCtx + ctx - 1});
+      std::vector<KeyLoads> variants = {KeyLoads::Scalar};
+      if (kvb::kernels::widest_key_loads(pool.layer_view(0), kHeadDim) == KeyLoads::Wide) {
+        variants.push_back(KeyLoads::Wide);
+      }
+      for (const KeyLoads loads : variants) {
+        const auto point = [&](const char* shape, int batch, int ctx, int n_tokens, int reps,
+                               const std::vector<StepRow>& rows) {
+          if (!options.wants(loads, shape, batch, ctx)) return;
+          const DeviceBuffer device_rows = upload(rows);
+          const StepRow* r = device_rows.as<StepRow>();
+          const Timing write = time_steps(reps, [&] {
+            for (int layer = 0; layer < kLayers; ++layer) {
+              kvb::kernels::kv_write(k.as<f16>(), v.as<f16>(), r, pool.layer_view(layer), n_tokens,
+                                     kKvHeads, kHeadDim, nullptr);
+            }
+          });
+          const Timing attend = time_steps(reps, [&] {
+            for (int layer = 0; layer < kLayers; ++layer) {
+              kvb::kernels::attention(q.as<f16>(), out.as<f16>(), r, pool.layer_view(layer),
+                                      n_tokens, kHeads, kKvHeads, kHeadDim, kMaxCtx, loads,
+                                      nullptr);
+            }
+          });
+          std::printf(
+              "%s\n    {\"layout\": \"%s\", \"key_loads\": \"%s\", \"block_size\": %d, "
+              "\"placement\": \"%s\", \"shape\": \"%s\", "
+              "\"batch\": %d, \"ctx\": %d, \"attention_ms\": %.4f, "
+              "\"attention_median_ms\": %.4f, "
+              "\"write_ms\": %.4f, \"write_median_ms\": %.4f}",
+              first ? "" : ",", std::string(kvb::kv_layout_name(layout)).c_str(),
+              std::string(kvb::kernels::key_loads_name(loads)).c_str(), paging.block_size,
+              paging.placement, shape, batch, ctx, attend.best_ms, attend.median_ms, write.best_ms,
+              write.median_ms);
+          first = false;
+        };
+
+        for (const int batch : {1, kMaxBatch}) {
+          for (const int ctx : {128, 256, 512, 1024, 2048, 4096}) {
+            std::vector<StepRow> rows;
+            for (int seq = 0; seq < batch; ++seq) {
+              rows.push_back(
+                  {.token_id = 0, .position = ctx - 1, .seq = seq, .kv_slot = slot(seq, ctx - 1)});
+            }
+            point("decode", batch, ctx, batch, options.reps, rows);
           }
-          point("decode", batch, ctx, batch, options.reps, rows);
         }
+        // Prefill: every position of one prompt attends to the positions before it.
+        std::vector<StepRow> rows;
+        for (int pos = 0; pos < kPrefillTokens; ++pos) {
+          rows.push_back({.token_id = 0, .position = pos, .seq = 0, .kv_slot = slot(0, pos)});
+        }
+        point("prefill", 1, kPrefillTokens, kPrefillTokens, std::min(5, options.reps), rows);
       }
-      // Prefill: every position of one prompt attends to the positions before it.
-      std::vector<StepRow> rows;
-      for (int pos = 0; pos < kPrefillTokens; ++pos) {
-        rows.push_back({.token_id = 0, .position = pos, .seq = 0, .kv_slot = pos});
-      }
-      point("prefill", 1, kPrefillTokens, kPrefillTokens, std::min(5, options.reps), rows);
     }
   }
   if (first) throw kvb::Error("no point matches the options");

@@ -74,18 +74,44 @@ def summarize_gemm(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def summarize_kv_layout(raw: dict[str, Any]) -> dict[str, Any]:
-    """Attention milliseconds per step for each layout and key-load width.
+    """Attention milliseconds per step for each layout and key-load width, and what paging costs.
 
-    Decode entries are at the longest context, keyed by batch size; prefill is one prompt.
+    attention_ms is for one block per sequence: decode entries are at the longest context, keyed
+    by batch size; prefill is one prompt. paged_slowdown is attention time with 16-token blocks
+    divided by the time with one block per sequence, for the same layout, loads and shape: the
+    median and the largest ratio over the decode contexts of each batch size, and the prefill
+    ratio.
     """
-    longest = max(p["ctx"] for p in raw["points"] if p["shape"] == "decode")
+    points = raw["points"]
+    longest = max(p["ctx"] for p in points if p["shape"] == "decode")
     metrics: dict[str, Any] = {"decode_ctx": longest, "attention_ms": {}}
-    for p in raw["points"]:
+    single = {}
+    for p in points:
+        if p["placement"] != "single":
+            continue
+        single[p["layout"], p["key_loads"], p["shape"], p["batch"], p["ctx"]] = p["attention_ms"]
         variant = metrics["attention_ms"].setdefault(f"{p['layout']}/{p['key_loads']}", {})
         if p["shape"] == "prefill":
             variant["prefill"] = p["attention_ms"]
         elif p["ctx"] == longest:
             variant[f"decode_batch{p['batch']}"] = p["attention_ms"]
+
+    ratios: dict[str, dict[str, list[float]]] = {}
+    for p in points:
+        if p["placement"] == "single":
+            continue
+        base = single[p["layout"], p["key_loads"], p["shape"], p["batch"], p["ctx"]]
+        shape = "prefill" if p["shape"] == "prefill" else f"decode_batch{p['batch']}"
+        name = f"{p['layout']}/{p['key_loads']}/{p['placement']}"
+        ratios.setdefault(name, {}).setdefault(shape, []).append(p["attention_ms"] / base)
+        metrics["paged_block_size"] = p["block_size"]
+    metrics["paged_slowdown"] = {
+        name: {
+            shape: {"median": statistics.median(values), "max": max(values)}
+            for shape, values in shapes.items()
+        }
+        for name, shapes in ratios.items()
+    }
     return metrics
 
 
