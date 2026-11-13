@@ -77,15 +77,6 @@ def dequantize_int8_pc(q: Tensor, scale: Tensor) -> Tensor:
     return q.float() * scale.float().unsqueeze(-1)
 
 
-def check_int4_shape(shape: tuple[int, ...] | list[int], group_size: int, name: str = "") -> None:
-    """Raises unless the input dimension splits into whole groups and whole bytes."""
-    if len(shape) != 2 or shape[1] % group_size or shape[1] % 2:
-        raise ValueError(
-            f"{name or 'tensor'}: shape {tuple(shape)} does not split into int4 groups of "
-            f"{group_size} along the input dimension"
-        )
-
-
 def pack_int4(q: Tensor) -> Tensor:
     """Packs int8 [out, in] with values in [-8, 7] into uint8 [out, in / 2], low nibble first."""
     nibbles = (q & 0xF).to(torch.uint8)
@@ -126,9 +117,9 @@ def squared_error(groups: Tensor, scale: Tensor, qmax: int) -> Tensor:
 
 def quantize_int4_g(w: Tensor, group_size: int, clip: str = "minmax") -> tuple[Tensor, Tensor]:
     """Group-wise INT4 of w [out, in]: packed uint8 [out, in / 2], scale F16 [out, in / group]."""
-    check_int4_shape(tuple(w.shape), group_size)
     if clip not in CLIPS:
         raise ValueError(f"unknown clip {clip!r}; known: {CLIPS}")
+    WeightFormat.make(INT4_G, group_size, clip).check_shape(tuple(w.shape))
     out_features, in_features = w.shape
     groups = w.float().reshape(out_features, in_features // group_size, group_size)
     amax = groups.abs().amax(dim=-1)
@@ -292,9 +283,10 @@ def read_tensor(f: Any, name: str, fmt: WeightFormat) -> Tensor:
         scale = f.get_tensor(name + SCALE_SUFFIX)
         rows, cols = tensor.shape
         if fmt.scheme == INT8_PC:
+            fmt.check_shape((rows, cols), name)
             scale_shape: tuple[int, ...] = (rows,)
         else:
-            check_int4_shape((rows, 2 * cols), fmt.group_size, name)
+            fmt.check_shape((rows, 2 * cols), name)
             scale_shape = (rows, 2 * cols // fmt.group_size)
         if scale.dtype != torch.float16 or tuple(scale.shape) != scale_shape:
             raise ValueError(

@@ -121,7 +121,7 @@ precision:        ## every pair in PRECISIONS: perplexity, per-layer error, deco
 	for p in $(PRECISIONS); do w=$${p%%:*}; k=$${p##*:}; \
 	  uv run python -m kvbound.evals.perplexity --model $(MODEL) --weights $$w --kv $$k || exit 1; \
 	  uv run python -m kvbound.evals.sites --model $(MODEL) --weights $$w --kv $$k || exit 1; \
-	  uv run python -m kvbound.bench --model $(MODEL) --weights $$w --kv $$k --prompt-len 128 || exit 1; \
+	  uv run python -m kvbound.bench --model $(MODEL) --weights $$w --kv $$k --prompt-len 128 --profile-ops || exit 1; \
 	  $(SERVE) --weights $$w --kv $$k --workload fixed --requests 96 $(PAGED) || exit 1; \
 	done
 

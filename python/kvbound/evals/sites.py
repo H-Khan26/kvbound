@@ -79,7 +79,7 @@ def evaluate(
             "logits_cosine": sites["logits"]["cosine"],
             "top1_mismatches": mismatches,
             "positions": positions,
-            "mean_kl": kl,
+            "mean_kl_max": kl,  # of the prompt whose mean KL is largest
             "by_depth": depths,
         },
         "samples": {"sites": sites, "generated": texts},
@@ -105,7 +105,7 @@ def main() -> None:
         f"{args.model} weights={args.weights} kv={args.kv}:"
         f" logits rel-RMS {m['logits_rel_rms']:.4f}, cosine {m['logits_cosine']:.5f},"
         f" {m['top1_mismatches']} of {m['positions']} top-1 choices differ,"
-        f" mean KL {m['mean_kl']:.5f}"
+        f" largest per-prompt mean KL {m['mean_kl_max']:.5f}"
     )
     for sample in result["samples"]["generated"]:
         print(f"  {sample['id']}: {sample['text']!r}")

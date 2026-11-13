@@ -81,9 +81,12 @@ def test_int4_packs_the_low_nibble_first():
     assert packed.tolist() == [[0xF1, 0x97], [0x30, 0x28]]
     assert torch.equal(unpack_int4(packed), q)
 
-    # Through the quantizer: one group of 4 with scale 0.1 in F16, so q = [1, -1, 7, -7].
-    packed, scale = quantize_int4_g(torch.tensor([[0.1, -0.1, 0.7, -0.7]]), group_size=4)
-    assert packed.tolist() == [[0xF1, 0x97]]
+    # Through the quantizer: one group of 32 with scale 0.1 in F16, so q starts [1, -1, 7, -7]
+    # and the rest is zero.
+    row = torch.zeros(1, GROUP)
+    row[0, :4] = torch.tensor([0.1, -0.1, 0.7, -0.7])
+    packed, scale = quantize_int4_g(row, group_size=GROUP)
+    assert packed.tolist() == [[0xF1, 0x97] + [0] * (GROUP // 2 - 2)]
     assert scale.tolist() == [[torch.tensor(0.1, dtype=torch.float16).item()]]
 
 

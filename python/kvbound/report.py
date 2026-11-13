@@ -1,7 +1,8 @@
 """Turns result records into figures under reports/<device>/.
 
 Hardware: roofline, bandwidth sweep, latency. Engine: KV layout benchmark, KV memory under static
-batching, and the activation memory plan. Figures whose records do not exist yet are skipped.
+batching, the activation memory plan, the three serving setups in one KV pool, latency under
+arriving load, and the precision comparison. Figures whose records do not exist yet are skipped.
 
 Usage: python -m kvbound.report --device rtx3060ti --model tinyllama-1.1b
 """
@@ -378,6 +379,240 @@ def static_memory(serve: dict[tuple[str, str, int, float], dict[str, Any]], slot
     return fig
 
 
+ServeRecords = dict[tuple[str, str, int, float], dict[str, Any]]
+
+# The three ways a workload is served in one KV pool, in the order their colors are assigned.
+SETUP_LABELS = {
+    "static": "static batches",
+    "continuous": "continuous, whole slots",
+    "paged": "continuous, 16-token blocks",
+}
+WORKLOADS = ("fixed", "uniform", "longtail")
+
+
+def _panels(rows: int, cols: int, title: str, subtitle: str, **kwargs: Any) -> tuple[Figure, Any]:
+    """A grid of axes in the house style, with the title and subtitle above it."""
+    fig, grid = plt.subplots(rows, cols, figsize=(9, 5.6), dpi=160, squeeze=False, **kwargs)
+    fig.patch.set_facecolor(SURFACE)
+    fig.suptitle(title, x=0.07, y=0.97, ha="left", fontsize=13, fontweight="bold", color=INK)
+    fig.text(0.07, 0.9, subtitle, fontsize=9.5, color=INK_2, va="top")
+    for ax in grid.flat:
+        ax.set_facecolor(SURFACE)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        for side in ("left", "bottom"):
+            ax.spines[side].set_color(AXIS)
+        ax.tick_params(colors=MUTED, labelsize=8.5, which="both")
+        ax.grid(True, axis="y", color=GRID, linewidth=0.6)
+        ax.set_axisbelow(True)
+    return fig, grid
+
+
+def _bars(ax: Axes, groups: list[str], series: dict[str, list[float]], fmt: str) -> None:
+    """Grouped bars with a value above each; series colors follow SERIES order."""
+    width = 0.8 / len(series)
+    for i, (label, values) in enumerate(series.items()):
+        xs = [g + (i - (len(series) - 1) / 2) * width for g in range(len(groups))]
+        ax.bar(xs, values, width * 0.92, color=SERIES[i], label=label)
+        for x, value in zip(xs, values, strict=True):
+            ax.annotate(format(value, fmt), (x, value), (0, 2), textcoords="offset points",
+                        ha="center", va="bottom", fontsize=7.5, color=INK_2)  # fmt: skip
+    ax.set_xticks(range(len(groups)), groups)
+    ax.margins(y=0.15)
+
+
+def _bursts(serve: ServeRecords, setup: str) -> list[dict[str, Any]]:
+    """One setup's record for each workload with every request queued at time zero, or an empty
+    list when any is missing. Of several slot counts the largest is taken (static runs also exist
+    one slot at a time)."""
+    records = []
+    for name in WORKLOADS:
+        runs = [
+            (n, rec) for (w, s, n, rate), rec in serve.items() if (w, s, rate) == (name, setup, 0)
+        ]
+        if not runs:
+            return []
+        records.append(max(runs, key=lambda run: run[0])[1])
+    return records
+
+
+def serving(serve: ServeRecords) -> Figure | None:
+    """Static batching against continuous batching and paging on the three workloads."""
+    runs = {setup: _bursts(serve, setup) for setup in SETUP_LABELS}
+    if not all(runs.values()):
+        return None
+    first = runs["static"][0]
+    pool_mib = first["metrics"]["memory"]["kv_pool_bytes"] / 2**20
+    fig, grid = _panels(
+        2, 2,
+        f"One {pool_mib:.0f} MiB KV pool served three ways",
+        f"48 requests queued at once per workload. Static batches hold {first['params']['slots']}"
+        " whole-context slots; the paged engine shares the same bytes block by block.",
+    )  # fmt: skip
+    panels = (
+        ("throughput_tok_s", 1.0, "tokens per second", ".0f"),
+        ("ttft_p50_s", 1.0, "time to first token, median (s)", ".2f"),
+        ("tpot_p50_s", 1e3, "time per output token, median (ms)", ".1f"),
+        ("running_peak", 1.0, "most sequences in one step", ".0f"),
+    )
+    for ax, (metric, scale, label, fmt) in zip(grid.flat, panels, strict=True):
+        series = {
+            SETUP_LABELS[setup]: [rec["metrics"][metric]["p50"] * scale for rec in recs]
+            for setup, recs in runs.items()
+        }
+        _bars(ax, list(WORKLOADS), series, fmt)
+        ax.set_title(label, loc="left", fontsize=9.5, color=INK_2)
+    grid[0][0].legend(loc="upper left", frameon=False, fontsize=8, labelcolor=INK_2, ncols=1)
+    return fig
+
+
+def paged_memory(serve: ServeRecords) -> Figure | None:
+    """KV memory over time, static slots above and 16-token blocks below, per workload."""
+    rows = {setup: _bursts(serve, setup) for setup in ("static", "paged")}
+    if not all(rows.values()):
+        return None
+    first = rows["static"][0]
+    to_mib = first["metrics"]["memory"]["kv_bytes_per_token"] / 2**20
+    pool_mib = first["metrics"]["memory"]["kv_pool_bytes"] / 2**20
+    fig, grid = _panels(
+        2, 3,
+        "KV cache memory: whole slots against 16-token blocks",
+        f"The same {pool_mib:.0f} MiB pool and the same requests. The filled area holds tokens; the"
+        " line is memory reserved for admitted sequences.\nTop row: static batches. Bottom row:"
+        " continuous batching over blocks.",
+        sharey=True,
+    )  # fmt: skip
+    for row, setup in enumerate(rows):
+        for col, rec in enumerate(rows[setup]):
+            ax, steps, m = grid[row][col], rec["samples"]["steps"], rec["metrics"]
+            t = steps["end_s"]
+            ax.fill_between(t, [u * to_mib for u in steps["used_tokens"]], step="pre",
+                            color=SERIES[0], alpha=0.85, lw=0, label="holds tokens")  # fmt: skip
+            ax.plot(t, [r * to_mib for r in steps["reserved_tokens"]], drawstyle="steps-pre",
+                    color=INK, lw=1.1, label="reserved")  # fmt: skip
+            ax.set_title(
+                f"{WORKLOADS[col]}: {m['throughput_tok_s']['p50']:.0f} tokens/s,\n"
+                f"{m['kv_used_of_reserved']['p50']:.0%} of reserved in use",
+                loc="left", fontsize=8.5, color=INK_2,
+            )  # fmt: skip
+            # Both rows of a column share the static run's time span.
+            ax.set_xlim(0, max(rows["static"][col]["samples"]["steps"]["end_s"]))
+        grid[row][0].set_ylabel("KV cache (MiB)", color=INK_2, fontsize=9)
+    for ax in grid[1]:
+        ax.set_xlabel("seconds", color=INK_2, fontsize=9)
+    grid[0][2].legend(loc="center right", frameon=False, fontsize=8, labelcolor=INK_2)
+    return fig
+
+
+def serving_load(serve: ServeRecords, name: str = "longtail") -> Figure | None:
+    """Latency as requests arrive faster: static batches against the paged engine."""
+    series: dict[str, list[tuple[float, dict[str, Any]]]] = {"static": [], "paged": []}
+    for (w, setup, _, rate), rec in sorted(serve.items(), key=lambda item: item[0][3]):
+        if w == name and rate > 0 and setup in series:
+            series[setup].append((rate, rec["metrics"]))
+    if not series["static"] or not series["paged"]:
+        return None
+    fig, grid = _panels(
+        1, 2,
+        f"Latency as {name} requests arrive faster",
+        "Poisson arrivals. Solid lines are medians over the requests, dashed lines the 90th"
+        " percentile.",
+    )  # fmt: skip
+    panels = (("ttft", "time to first token (s)"), ("latency", "time to last token (s)"))
+    for ax, (metric, label) in zip(grid[0], panels, strict=True):
+        for setup, color in (("static", SERIES[0]), ("paged", SERIES[2])):
+            rates = [rate for rate, _ in series[setup]]
+            for q, style in (("p50", "-"), ("p90", (0, (4, 2)))):
+                values = [m[f"{metric}_{q}_s"]["p50"] for _, m in series[setup]]
+                quantile = "median" if q == "p50" else "90th percentile"
+                ax.plot(rates, values, color=color, lw=2, ls=style, marker="o", ms=4,
+                        label=f"{SETUP_LABELS[setup]}, {quantile}")  # fmt: skip
+        ax.set_yscale("log")
+        ax.set_xscale("log", base=2)
+        rates = sorted({rate for runs in series.values() for rate, _ in runs})
+        ax.set_xticks(rates, [f"{r:g}" for r in rates])
+        ax.minorticks_off()
+        ax.grid(True, which="major", color=GRID, linewidth=0.6)
+        ax.set_xlabel("requests per second", color=INK_2, fontsize=9)
+        ax.set_title(label, loc="left", fontsize=9.5, color=INK_2)
+    grid[0][1].legend(loc="lower right", frameon=False, fontsize=7.5, labelcolor=INK_2)
+    return fig
+
+
+PRECISION_ORDER = (
+    ("fp16", "fp16"),
+    ("fp16", "int8"),
+    ("int8_pc", "fp16"),
+    ("int8_pc", "int8"),
+    ("int4_g", "fp16"),
+    ("int4_g", "int8"),
+)
+WEIGHT_LABELS = {"fp16": "FP16", "int8_pc": "INT8", "int4_g": "INT4"}
+
+
+def precision_records(device: str, model: str) -> dict[tuple[str, str], dict[str, Any]]:
+    """Per (weights, kv): the newest perplexity (whole test split), batch-1 decode benchmark
+    (128-token prompt, with graphs) and paged serve record."""
+    table: dict[tuple[str, str], dict[str, Any]] = {}
+    for rec in record.load_records():
+        if rec["fingerprint"]["device_config"] != device:
+            continue
+        if not rec["model"] or rec["model"]["name"] != model:
+            continue
+        params = rec["params"]
+        if rec["engine"]["name"] != "kvbound":
+            continue
+        if rec["kind"] == "eval.perplexity" and params["max_windows"] == 0:
+            table.setdefault((params["weights"], params["kv"]), {})["perplexity"] = rec
+        elif rec["kind"] == "generate" and (params["prompt_len"], params["graph"]) == (128, True):
+            key = (params.get("weights", "fp16"), params.get("kv_dtype", "fp16"))
+            table.setdefault(key, {})["decode"] = rec
+        elif rec["kind"] == "serve" and serve_setup(rec) == "paged" and params["n_requests"] == 96:
+            key = (params.get("weights", "fp16"), params.get("kv_dtype", "fp16"))
+            table.setdefault(key, {})["serve"] = rec
+    return table
+
+
+def precision(table: dict[tuple[str, str], dict[str, Any]], model: str) -> Figure | None:
+    """What each weight and KV precision costs and buys."""
+    rows = [(key, table.get(key, {})) for key in PRECISION_ORDER]
+    if any({"perplexity", "decode", "serve"} - set(recs) for _, recs in rows):
+        return None
+    labels = [f"{WEIGHT_LABELS[w]}\n{'INT8' if kv == 'int8' else 'FP16'} KV" for (w, kv), _ in rows]
+    fig, grid = _panels(
+        2, 2,
+        f"Precision: what each configuration costs and buys ({model})",
+        "Labels give the weight format, then the KV cache format. Speed is one request at a time;"
+        " the bottom row is 96 requests\nserved together in a KV pool of the same bytes.",
+    )  # fmt: skip
+    x = range(len(rows))
+
+    def panel(ax: Axes, values: list[float], title: str, fmt: str) -> None:
+        ax.bar(x, values, 0.62, color=SERIES[0])
+        for i, value in enumerate(values):
+            ax.annotate(format(value, fmt), (i, value), (0, 2), textcoords="offset points",
+                        ha="center", va="bottom", fontsize=8, color=INK_2)  # fmt: skip
+        ax.set_xticks(x, labels, fontsize=7.5)
+        ax.set_title(title, loc="left", fontsize=9.5, color=INK_2)
+        ax.margins(y=0.18)
+
+    decode = [recs["decode"]["metrics"] for _, recs in rows]
+    panel(grid[0][0], [m["decode_tok_s"]["p50"] for m in decode],
+          "decode tokens per second (tick: memory-bandwidth ceiling)", ".0f")  # fmt: skip
+    for i, m in enumerate(decode):
+        if "ceiling" in m:
+            ceiling = m["ceiling"]["decode_tok_s"]
+            grid[0][0].plot([i - 0.36, i + 0.36], [ceiling, ceiling], color=INK, lw=1.4)
+    panel(grid[0][1], [recs["perplexity"]["metrics"]["perplexity"] for _, recs in rows],
+          "WikiText-2 perplexity (lower is better)", ".2f")  # fmt: skip
+    serve = [recs["serve"]["metrics"] for _, recs in rows]
+    panel(grid[1][0], [m["running_peak"]["p50"] for m in serve],
+          "most sequences in one step", ".0f")  # fmt: skip
+    panel(grid[1][1], [m["throughput_tok_s"]["p50"] for m in serve],
+          "tokens per second under that load", ".0f")  # fmt: skip
+    return fig
+
+
 def arena(rec: dict[str, Any]) -> Figure:
     """Each activation as a rectangle: the ops it lives through by the arena bytes it occupies."""
     plan, memory = rec["samples"]["plan"], rec["metrics"]["memory"]
@@ -442,6 +677,14 @@ def main() -> None:
             if (setup, n, rate) == ("static", slots, 0)
         )
         print(_save(arena(first), out / "arena.png"))
+    for name, figure in (
+        ("serving", serving(serve)),
+        ("paged_memory", paged_memory(serve)),
+        ("serving_load", serving_load(serve)),
+        ("precision", precision(precision_records(args.device, args.model), args.model)),
+    ):
+        if figure is not None:
+            print(_save(figure, out / f"{name}.png", top=0.85))
 
 
 if __name__ == "__main__":
