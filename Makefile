@@ -1,4 +1,4 @@
-.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve profile microbench report predict lint format typecheck clean
+.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve profile counters microbench report predict lint format typecheck clean
 
 # torch wheel: cu128 on GPU machines, cpu in CI and on machines without a GPU
 TORCH ?= cu128
@@ -76,6 +76,10 @@ profile:          ## Nsight Systems decode profile, with and without CUDA graphs
 	$(MAKE) build PRESET=cuda
 	uv run python -m kvbound.profile --model $(MODEL) --no-graph
 	uv run python -m kvbound.profile --model $(MODEL)
+
+counters:         ## hardware counters of the attention kernel on each KV layout, via Nsight Compute
+	$(MAKE) build PRESET=cuda
+	uv run python -m kvbound.counters
 
 microbench:       ## build the cuda preset, then run bandwidth, latency, GEMM and KV-layout microbenchmarks
 	$(MAKE) build PRESET=cuda

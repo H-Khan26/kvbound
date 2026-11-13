@@ -37,7 +37,12 @@ def _perf_counter_check() -> Check:
     """Nsight Compute needs GPU performance counters readable by non-root users."""
     params = Path("/proc/driver/nvidia/params")
     if not params.exists():
-        return WARN, "perf counters", "cannot check on this OS (run Nsight Compute elevated)"
+        return (
+            WARN,
+            "perf counters",
+            "cannot check on this OS; an administrator enables them in NVIDIA Control Panel "
+            "(Developer > Manage GPU Performance Counters)",
+        )
     admin_only = "RmProfilingAdminOnly: 1" in params.read_text()
     if admin_only:
         return FAIL, "perf counters", "admin only; set NVreg_RestrictProfilingToAdminUsers=0"

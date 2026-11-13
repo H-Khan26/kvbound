@@ -49,7 +49,11 @@ Two more results from this phase:
   the two layouts that keep a key's dimensions adjacent, which dimension is outermost changes attention time by 2% at
   batch 1 and 11% at batch 8. What matters more is how many memory requests a warp issues: reading each 128-byte key
   as eight 16-byte loads instead of 64 two-byte loads is 2.9 times faster (3.4 at batch 8), and only those two layouts
-  allow it. Figure: `reports/rtx3060ti/kv_layout.png`.
+  allow it. Figure: `reports/rtx3060ti/kv_layout.png`. Hardware counters (Nsight Compute, `make counters`) match the
+  counts derived from the code: for one layer at batch 1 with 4,096 cached tokens, the 2-byte kernel asks the L1 cache
+  for 8.9 million sectors and the 16-byte kernel for 1.6 million, while both read the same 4.2 MB from DRAM, the
+  layer's keys and values exactly once. Attention moves roughly 17 to 50 GB/s, far below the memory bandwidth, so the wide
+  loads help by cutting the traffic to the L1 cache, not the traffic to DRAM.
 - **Activation memory.** The forward pass has 225 intermediate tensors. Side by side they would need 1,039 MiB for
   1,024-token steps; placed by lifetime in one arena they share 30 MiB, which is also the lower bound. Figure:
   `reports/rtx3060ti/arena.png`.
@@ -79,7 +83,7 @@ clocks. Exact values are in `results/raw/` and the figures in `reports/`.
 | `tests/py/` | pytest: reference vs Hugging Face; under the `gpu` marker, each kernel vs torch and the engine vs the goldens |
 | `configs/` | model, device and workload descriptions |
 | `results/raw/<device>/` | one JSON record per benchmark run, written only by `kvbound.record` |
-| `results/profiles/` | Nsight Systems summaries (CSV) of decode runs |
+| `results/profiles/` | Nsight Systems summaries (CSV) of decode runs; Nsight Compute counters of the attention kernel |
 | `reports/<device>/` | figures generated from the records |
 
 ## Build and test
@@ -107,6 +111,7 @@ make microbench                      # hardware ceilings and the KV layout bench
 make bench MODEL=tinyllama-1.1b      # kvbound engine records, one request at a time
 make serve MODEL=tinyllama-1.1b      # static batching on the three workloads
 make profile MODEL=tinyllama-1.1b    # Nsight Systems decode profiles
+make counters                        # Nsight Compute counters of the attention kernel (needs GPU counter access)
 make report MODEL=tinyllama-1.1b DEVICE=rtx3060ti   # figures into reports/
 make predict MODEL=llama-3.2-1b DEVICE=rtx3060ti
 ```
