@@ -72,7 +72,7 @@ Greedy output matches the reference token for token on every golden prompt, and 
 | Weights read per token | 2.47 GB | 2.07 GB |
 | Decode ceiling, batch 1 | 168 tokens/s | 200 tokens/s |
 | kvbound decode, batch 1 | 144 tokens/s, 86% of the ceiling | 144 tokens/s, 72% |
-| kvbound decode without CUDA graphs | 136 tokens/s | 128 tokens/s |
+| kvbound decode without CUDA graphs | 135 tokens/s | 128 tokens/s |
 | Time to first token, 128 / 1,024 prompt tokens | 13 ms / 147 ms | 15 ms / 201 ms |
 | Static batching, 8 slots: `fixed` / `uniform` / `longtail` | 841 / 621 / 371 tokens/s | 792 / 599 / 360 tokens/s |
 | Hugging Face Transformers decode, batch 1 | 47 tokens/s | 17 to 33 tokens/s |
