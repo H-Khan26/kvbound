@@ -218,10 +218,8 @@ def convert(
         names = list(f.keys())
         shapes = {name: f.get_slice(name).get_shape() for name in names}
         for name, shape in shapes.items():
-            if len(shape) not in (1, 2):
-                raise ValueError(f"{name}: cannot quantize a {len(shape)}-D tensor")
-            if len(shape) == 2 and fmt.scheme == INT4_G:
-                check_int4_shape(shape, fmt.group_size, name)
+            if len(shape) != 1:
+                fmt.check_shape(shape, name)
 
         for name in names:
             w = f.get_tensor(name)

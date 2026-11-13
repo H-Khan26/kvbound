@@ -76,42 +76,52 @@ def summarize_gemm(raw: dict[str, Any]) -> dict[str, Any]:
 def summarize_kv_layout(raw: dict[str, Any]) -> dict[str, Any]:
     """Attention milliseconds per step for each layout and key-load width, and what paging costs.
 
-    attention_ms is for one block per sequence: decode entries are at the longest context, keyed
-    by batch size; prefill is one prompt. paged_slowdown is attention time with 16-token blocks
-    divided by the time with one block per sequence, for the same layout, loads and shape: the
+    attention_ms is for an FP16 cache with one block per sequence: decode entries are at the
+    longest context, keyed by batch size; prefill is one prompt. The two ratio tables give the
     median and the largest ratio over the decode contexts of each batch size, and the prefill
-    ratio.
+    ratio:
+      paged_slowdown  time with 16-token blocks over time with one block per sequence, for the
+                      same layout, loads and element type.
+      int8_time       time on an INT8 cache over time on an FP16 one, for the same layout, loads
+                      and block placement.
     """
     points = raw["points"]
     longest = max(p["ctx"] for p in points if p["shape"] == "decode")
     metrics: dict[str, Any] = {"decode_ctx": longest, "attention_ms": {}}
-    single = {}
-    for p in points:
-        if p["placement"] != "single":
-            continue
-        single[p["layout"], p["key_loads"], p["shape"], p["batch"], p["ctx"]] = p["attention_ms"]
-        variant = metrics["attention_ms"].setdefault(f"{p['layout']}/{p['key_loads']}", {})
-        if p["shape"] == "prefill":
-            variant["prefill"] = p["attention_ms"]
-        elif p["ctx"] == longest:
-            variant[f"decode_batch{p['batch']}"] = p["attention_ms"]
 
-    ratios: dict[str, dict[str, list[float]]] = {}
+    def key(p: dict[str, Any], placement: str, dtype: str) -> tuple[Any, ...]:
+        return (p["layout"], p["key_loads"], placement, dtype, p["shape"], p["batch"], p["ctx"])
+
+    times = {key(p, p["placement"], p["kv_dtype"]): p["attention_ms"] for p in points}
+    paged: dict[str, dict[str, list[float]]] = {}
+    int8: dict[str, dict[str, list[float]]] = {}
     for p in points:
-        if p["placement"] == "single":
-            continue
-        base = single[p["layout"], p["key_loads"], p["shape"], p["batch"], p["ctx"]]
         shape = "prefill" if p["shape"] == "prefill" else f"decode_batch{p['batch']}"
-        name = f"{p['layout']}/{p['key_loads']}/{p['placement']}"
-        ratios.setdefault(name, {}).setdefault(shape, []).append(p["attention_ms"] / base)
-        metrics["paged_block_size"] = p["block_size"]
-    metrics["paged_slowdown"] = {
-        name: {
-            shape: {"median": statistics.median(values), "max": max(values)}
-            for shape, values in shapes.items()
+        variant = f"{p['layout']}/{p['key_loads']}"
+        baseline = (p["placement"], p["kv_dtype"]) == ("single", "fp16")
+        if baseline and (p["shape"] == "prefill" or p["ctx"] == longest):
+            metrics["attention_ms"].setdefault(variant, {})[shape] = p["attention_ms"]
+        if p["placement"] != "single":
+            base = times[key(p, "single", p["kv_dtype"])]
+            name = f"{variant}/{p['placement']}/{p['kv_dtype']}"
+            paged.setdefault(name, {}).setdefault(shape, []).append(p["attention_ms"] / base)
+            metrics["paged_block_size"] = p["block_size"]
+        if p["kv_dtype"] == "int8":
+            base = times[key(p, p["placement"], "fp16")]
+            name = f"{variant}/{p['placement']}"
+            int8.setdefault(name, {}).setdefault(shape, []).append(p["attention_ms"] / base)
+
+    def summary(ratios: dict[str, dict[str, list[float]]]) -> dict[str, Any]:
+        return {
+            name: {
+                shape: {"median": statistics.median(values), "max": max(values)}
+                for shape, values in shapes.items()
+            }
+            for name, shapes in ratios.items()
         }
-        for name, shapes in ratios.items()
-    }
+
+    metrics["paged_slowdown"] = summary(paged)
+    metrics["int8_time"] = summary(int8)
     return metrics
 
 

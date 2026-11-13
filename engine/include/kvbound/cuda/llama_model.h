@@ -43,6 +43,9 @@ struct LlamaModelConfig {
   // Quantized matrices are multiplied in place for steps of up to this many rows. Wider steps
   // expand each matrix to FP16 first and use the tensor-core product.
   int quantized_gemm_rows = 16;
+  // A matrix is expanded this many bytes at a time, as whole output channels, so the vocabulary
+  // projection needs no scratch of its own size.
+  std::size_t dequant_slice_bytes = std::size_t{32} << 20;
 };
 
 // A Llama checkpoint on the device plus everything one forward pass needs: the op program, the

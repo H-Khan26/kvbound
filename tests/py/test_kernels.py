@@ -142,6 +142,9 @@ def test_linear_quantized(kvb, gen, scheme, rows, n_out, n_in, group):
     # The expanded matrix is what the tensor-core path multiplies by.
     expanded = from_bits(kvb.dequantize(scheme, data, scale, group_size=group))
     assert tolerance.rel_rms(expanded, deq) < F16_ROUNDING
+    # A slice of output channels equals the same rows of the whole.
+    part = kvb.dequantize(scheme, data, scale, group_size=group, first_channel=3, n_channels=4)
+    assert np.array_equal(part, bits(expanded.to(torch.float16))[3:7])
 
 
 @pytest.mark.parametrize("scheme", ["int8_pc", "int4_g"])

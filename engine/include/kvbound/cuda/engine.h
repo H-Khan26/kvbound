@@ -38,6 +38,8 @@ struct EngineConfig {
   // Steps of up to this many rows multiply quantized weights in place; wider steps expand each
   // matrix to FP16 for a tensor-core product.
   int quantized_gemm_rows = 16;
+  // Bytes of FP16 a quantized matrix is expanded to at a time, as whole output channels.
+  std::size_t dequant_slice_bytes = std::size_t{32} << 20;
   // Replays decode-shaped steps from a captured CUDA graph instead of launching each kernel.
   bool use_graph = true;
   // Graphs kept at once. A graph serves one row count, and continuous batching changes the row

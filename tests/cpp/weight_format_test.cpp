@@ -26,7 +26,6 @@ TEST(WeightFormat, FileWithoutASchemeHoldsFloats) {
   EXPECT_EQ(format.scheme, WeightScheme::F16);
   EXPECT_EQ(kvb::stored_shape(format, 8, 100), (std::vector<std::int64_t>{8, 100}));
   EXPECT_TRUE(kvb::scale_shape(format, 8, 100).empty());
-  EXPECT_DOUBLE_EQ(kvb::bytes_per_weight(format, 100), 2.0);
 }
 
 TEST(WeightFormat, ReadsBothQuantizedSchemes) {
@@ -38,7 +37,6 @@ TEST(WeightFormat, ReadsBothQuantizedSchemes) {
   EXPECT_EQ(int8.scheme, WeightScheme::Int8PerChannel);
   EXPECT_EQ(kvb::stored_shape(int8, 5632, 2048), (std::vector<std::int64_t>{5632, 2048}));
   EXPECT_EQ(kvb::scale_shape(int8, 5632, 2048), (std::vector<std::int64_t>{5632}));
-  EXPECT_DOUBLE_EQ(kvb::bytes_per_weight(int8, 2048), 1.0 + 2.0 / 2048);
 
   const WeightFormat int4 = kvb::weight_format_from_metadata(int4_metadata("128"));
   EXPECT_EQ(int4.scheme, WeightScheme::Int4Grouped);
@@ -46,7 +44,6 @@ TEST(WeightFormat, ReadsBothQuantizedSchemes) {
   // Two weights per byte, one scale per 128 weights.
   EXPECT_EQ(kvb::stored_shape(int4, 2048, 5632), (std::vector<std::int64_t>{2048, 2816}));
   EXPECT_EQ(kvb::scale_shape(int4, 2048, 5632), (std::vector<std::int64_t>{2048, 44}));
-  EXPECT_DOUBLE_EQ(kvb::bytes_per_weight(int4, 5632), 0.5 + 2.0 / 128);
 }
 
 TEST(WeightFormat, NamesRoundTrip) {

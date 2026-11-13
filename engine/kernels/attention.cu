@@ -56,8 +56,8 @@ struct SeqKv {
         scale_head_offset(kv_head * kv.scale_head_stride),
         scale_block_stride(kv.scale_block_stride) {}
 
-  // Called once per element read, so a paged cache splits the position with a shift and a mask:
-  // dividing by a block size known only at run time made attention 1.3 to 1.8 times slower.
+  // Called once per element read. A paged cache splits the position with a shift and a mask,
+  // which is why its block size is a power of two: a division here costs more than the load.
   __device__ std::int64_t offset(int pos) const {
     if (blocks_per_seq == 1) return first_block * block_stride + head_offset + pos * pos_stride;
     const std::uint32_t p = static_cast<std::uint32_t>(pos);

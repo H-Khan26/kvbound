@@ -129,6 +129,21 @@ class WeightFormat:
         except KeyError as e:
             raise ValueError(f"quantized checkpoint lacks metadata key {e}") from e
 
+    def check_shape(self, shape: tuple[int, ...] | list[int], name: str = "tensor") -> None:
+        """Raises unless a matrix of this shape can be stored: the kernels read int8_pc rows 16
+        values at a time, and int4_g rows as whole groups."""
+        if not self.quantized:
+            return
+        if len(shape) != 2:
+            raise ValueError(f"{name}: cannot quantize a {len(shape)}-D tensor")
+        if self.scheme == INT8_PC and shape[1] % 16:
+            raise ValueError(f"{name}: int8_pc needs a row length divisible by 16, got {shape[1]}")
+        if self.scheme == INT4_G and shape[1] % self.group_size:
+            raise ValueError(
+                f"{name}: shape {tuple(shape)} does not split into int4 groups of "
+                f"{self.group_size} along the input dimension"
+            )
+
     def bits_per_weight(self, out_features: int, in_features: int) -> float:
         """Stored bits per element of an [out, in] tensor, its scales included."""
         if self.scheme == INT8_PC:

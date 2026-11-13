@@ -194,14 +194,19 @@ nb::object linear_quantized(const std::string& scheme, In<std::uint8_t> data, In
   return nb::cast(download<f16>(out.as(), {x.shape(0), data.shape(0)}));
 }
 
-// The quantized matrix expanded to FP16 [n_out, n_in].
-Out<f16> dequantize(const std::string& scheme, In<std::uint8_t> data, In<f16> scale,
-                    int group_size) {
+// Output channels first_channel onward of the quantized matrix, expanded to FP16
+// [n_channels, n_in]. n_channels 0 means every channel from first_channel.
+Out<f16> dequantize(const std::string& scheme, In<std::uint8_t> data, In<f16> scale, int group_size,
+                    int first_channel, int n_channels) {
   const DeviceWeight w(scheme, data, scale, group_size);
   const int n_out = static_cast<int>(data.shape(0)), n_in = w.n_in(data);
-  const DeviceBuffer out(static_cast<std::size_t>(n_out) * n_in * sizeof(f16));
-  kvb::kernels::dequantize(w.ref, out.as<f16>(), n_in, n_out, nullptr);
-  return download<f16>(out.as(), {data.shape(0), static_cast<std::size_t>(n_in)});
+  const int count = n_channels > 0 ? n_channels : n_out - first_channel;
+  if (first_channel < 0 || count <= 0 || first_channel + count > n_out) {
+    throw kvb::Error("channel range outside the matrix");
+  }
+  const DeviceBuffer out(static_cast<std::size_t>(count) * n_in * sizeof(f16));
+  kvb::kernels::dequantize(w.ref, out.as<f16>(), n_in, first_channel, count, nullptr);
+  return download<f16>(out.as(), {static_cast<std::size_t>(count), static_cast<std::size_t>(n_in)});
 }
 
 // Rows `ids` of a quantized table, as FP16.
@@ -274,7 +279,7 @@ class PyEngine {
   PyEngine(const std::string& model_dir, int max_ctx, int max_seqs, int max_step_tokens,
            int kv_block_size, const std::string& kv_layout, const std::string& gemm, bool graph,
            const std::string& plan, bool wide_key_loads, int kv_blocks, int max_graphs,
-           const std::string& kv_dtype, int quantized_gemm_rows)
+           const std::string& kv_dtype, int quantized_gemm_rows, std::size_t dequant_slice_bytes)
       : engine_(model_dir, kvb::cuda::EngineConfig{
                                .max_ctx = max_ctx,
                                .max_seqs = max_seqs,
@@ -290,6 +295,7 @@ class PyEngine {
                                .gemm = accumulate_from(gemm),
                                .wide_key_loads = wide_key_loads,
                                .quantized_gemm_rows = quantized_gemm_rows,
+                               .dequant_slice_bytes = dequant_slice_bytes,
                                .use_graph = graph,
                                .max_graphs = max_graphs,
                            }) {}
@@ -410,17 +416,20 @@ NB_MODULE(_kvb, m) {
         "query_from"_a = 0, "wide_key_loads"_a = true, "kv_dtype"_a = "fp16");
   m.def("linear_quantized", &linear_quantized, "scheme"_a, "data"_a, "scale"_a, "x"_a,
         "group_size"_a = 0, "f32_out"_a = false);
-  m.def("dequantize", &dequantize, "scheme"_a, "data"_a, "scale"_a, "group_size"_a = 0);
+  m.def("dequantize", &dequantize, "scheme"_a, "data"_a, "scale"_a, "group_size"_a = 0,
+        "first_channel"_a = 0, "n_channels"_a = 0);
   m.def("embedding_quantized", &embedding_quantized, "scheme"_a, "data"_a, "scale"_a, "ids"_a,
         "group_size"_a = 0);
 
   nb::class_<PyEngine>(m, "Engine")
       .def(nb::init<const std::string&, int, int, int, int, const std::string&, const std::string&,
-                    bool, const std::string&, bool, int, int, const std::string&, int>(),
+                    bool, const std::string&, bool, int, int, const std::string&, int,
+                    std::size_t>(),
            "model_dir"_a, "max_ctx"_a = 2048, "max_seqs"_a = 1, "max_step_tokens"_a = 0,
            "kv_block_size"_a = 0, "kv_layout"_a = "head_major", "gemm"_a = "fp32", "graph"_a = true,
            "plan"_a = "greedy", "wide_key_loads"_a = true, "kv_blocks"_a = 0, "max_graphs"_a = 16,
-           "kv_dtype"_a = "fp16", "quantized_gemm_rows"_a = 16)
+           "kv_dtype"_a = "fp16", "quantized_gemm_rows"_a = 16,
+           "dequant_slice_bytes"_a = std::size_t{32} << 20)
       .def("feed", &PyEngine::feed, "ids"_a, "start"_a = 0, "seq"_a = 0, "capture"_a = false)
       .def("generate", &PyEngine::generate, "prompt"_a, "max_new_tokens"_a, "temperature"_a = 0.0f,
            "top_k"_a = 0, "top_p"_a = 1.0f, "seed"_a = 0, "eos_token_id"_a = -1)

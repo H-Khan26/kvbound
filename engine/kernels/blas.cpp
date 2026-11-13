@@ -37,7 +37,7 @@ Blas::~Blas() {
 }
 
 void Blas::linear(const std::uint16_t* weight, const std::uint16_t* x, void* y, int n_rows,
-                  int n_in, int n_out, DType out_dtype) {
+                  int n_in, int n_out, DType out_dtype, int y_cols) {
   // cuBLAS is column-major. A row-major [rows, cols] matrix is its own transpose read
   // column-major, so with W' = weight (n_in x n_out) and X' = x (n_in x n_rows) the product
   // y' (n_out x n_rows) = W'^T * X' is y in row-major order.
@@ -49,7 +49,7 @@ void Blas::linear(const std::uint16_t* weight, const std::uint16_t* x, void* y, 
   const void* beta = f32_sums ? static_cast<const void*>(&zero_f32) : &zero_f16;
   check(cublasGemmEx(handle_, CUBLAS_OP_T, CUBLAS_OP_N, n_out, n_rows, n_in, alpha, weight,
                      CUDA_R_16F, n_in, x, CUDA_R_16F, n_in, beta, y,
-                     f32_out ? CUDA_R_32F : CUDA_R_16F, n_out,
+                     f32_out ? CUDA_R_32F : CUDA_R_16F, y_cols > 0 ? y_cols : n_out,
                      f32_sums ? CUBLAS_COMPUTE_32F : CUBLAS_COMPUTE_16F, CUBLAS_GEMM_DEFAULT),
         "cublasGemmEx");
 }

@@ -39,17 +39,17 @@ struct WeightFormat {
 WeightFormat weight_format_from_metadata(
     const std::map<std::string, std::string, std::less<>>& metadata);
 
-// Shapes a matrix [out, in] and its scales have in a file of this format. Throws kvb::Error
-// when the format cannot hold the matrix: Int8PerChannel needs in % 16 == 0, Int4Grouped needs
-// a group size that is a power of two, at least 32, and divides in. The kernels read 16 bytes
-// at a time and find a load's scale with a shift.
+// Throws kvb::Error when the format cannot hold rows of `in` weights: Int8PerChannel needs
+// in % 16 == 0, Int4Grouped needs a group size that is a power of two, at least 32, and divides
+// in. The kernels read 16 bytes at a time and find a load's scale with a shift.
+void check_row_length(const WeightFormat& format, std::int64_t in);
+
+// Shapes a matrix [out, in] and its scales have in a file of this format, after
+// check_row_length().
 std::vector<std::int64_t> stored_shape(const WeightFormat& format, std::int64_t out,
                                        std::int64_t in);
 std::vector<std::int64_t> scale_shape(const WeightFormat& format, std::int64_t out,
                                       std::int64_t in);
-
-// Bytes one stored weight takes, scales included.
-double bytes_per_weight(const WeightFormat& format, std::int64_t in) noexcept;
 
 // One matrix on the device, as the kernels receive it.
 struct WeightRef {

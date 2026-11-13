@@ -19,7 +19,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
-from kvbound import record
+from kvbound import record, workload
 from kvbound.models import load_spec
 from kvbound.paths import CONFIGS, REPORTS
 from kvbound.perfmodel import hardware
@@ -235,11 +235,14 @@ LAYOUT_LABELS = {
 
 def kv_layout(records: dict[str, dict[str, Any]]) -> Figure:
     rec = records["kv_layout"]
-    # One block per sequence; records made before paging was timed have no placement field.
+    # The FP16 points with one block per sequence. Points without the two fields are of
+    # that kind.
     points = [
         p
         for p in rec["samples"]["points"]
-        if p["shape"] == "decode" and p.get("placement", "single") == "single"
+        if p["shape"] == "decode"
+        and p.get("placement", "single") == "single"
+        and p.get("kv_dtype", "fp16") == "fp16"
     ]
     params = rec["params"]
     best = rec["metrics"]["attention_ms"]
@@ -294,17 +297,40 @@ def kv_layout(records: dict[str, dict[str, Any]]) -> Figure:
     return fig
 
 
-def latest_serve_records(device: str, model: str) -> dict[tuple[str, int], dict[str, Any]]:
-    """Newest serve record per (workload, slots) for a device config and model."""
+def serve_setup(rec: dict[str, Any]) -> str:
+    """What a serve record ran: "static" batching, "continuous" batching over whole-sequence
+    slots, or "paged" (continuous over blocks smaller than a sequence)."""
+    params = rec["params"]
+    if params.get("policy", "static") == "static":
+        return "static"
+    return "paged" if params["kv_block_size"] < params["max_ctx"] else "continuous"
+
+
+def latest_serve_records(
+    device: str, model: str, weights: str = "fp16", kv: str = "fp16"
+) -> dict[tuple[str, str, int, float], dict[str, Any]]:
+    """Newest serve record per (workload, setup, slots, arrival rate) for a device config, model
+    and precision. Only runs of each workload's own request count are kept."""
     latest = {}
     for rec in record.load_records("serve"):
-        if rec["fingerprint"]["device_config"] == device and rec["model"]["name"] == model:
-            latest[rec["params"]["workload"], rec["params"]["slots"]] = rec
+        params = rec["params"]
+        if rec["fingerprint"]["device_config"] != device or rec["model"]["name"] != model:
+            continue
+        if (params.get("weights", "fp16"), params.get("kv_dtype", "fp16")) != (weights, kv):
+            continue
+        if params["n_requests"] != workload.load(params["workload"]).n_requests:
+            continue
+        key = (params["workload"], serve_setup(rec), params["slots"], params.get("arrival_rate", 0))
+        latest[key] = rec
     return latest
 
 
-def static_memory(serve: dict[tuple[str, int], dict[str, Any]], slots: int) -> Figure:
-    runs = {workload: rec for (workload, n), rec in serve.items() if n == slots}
+def static_memory(serve: dict[tuple[str, str, int, float], dict[str, Any]], slots: int) -> Figure:
+    runs = {
+        name: rec
+        for (name, setup, n, rate), rec in serve.items()
+        if (setup, n, rate) == ("static", slots, 0)
+    }
     first = next(iter(runs.values()))
     per_token = first["metrics"]["memory"]["kv_bytes_per_token"]
     pool = first["params"]["kv_blocks"] * first["params"]["kv_block_size"]
@@ -324,7 +350,7 @@ def static_memory(serve: dict[tuple[str, int], dict[str, Any]], slots: int) -> F
         "admitted sequences.",
         fontsize=9.5, color=INK_2, va="top",
     )  # fmt: skip
-    for ax, (workload, rec) in zip(axes, runs.items(), strict=True):
+    for ax, (name, rec) in zip(axes, runs.items(), strict=True):
         steps, m = rec["samples"]["steps"], rec["metrics"]
         ax.set_facecolor(SURFACE)
         for side in ("top", "right"):
@@ -340,7 +366,7 @@ def static_memory(serve: dict[tuple[str, int], dict[str, Any]], slots: int) -> F
         ax.plot(t, [r * to_mib for r in steps["reserved_tokens"]], drawstyle="steps-pre",
                 color=INK, lw=1.2, label="reserved for sequences")  # fmt: skip
         ax.set_title(
-            f"{workload}\n{m['throughput_tok_s']['p50']:.0f} tokens/s, "
+            f"{name}\n{m['throughput_tok_s']['p50']:.0f} tokens/s, "
             f"{m['kv_used_of_reserved']['p50']:.0%} of reserved in use,\n"
             f"slots busy {m['slot_occupancy']['p50']:.0%} of the time",
             loc="left", fontsize=9, color=INK_2,
@@ -406,14 +432,16 @@ def main() -> None:
     if "kv_layout" in records:
         print(_save(kv_layout(records), out / "kv_layout.png", top=0.85))
     serve = latest_serve_records(args.device, args.model)
-    slots = max((n for _, n in serve), default=0)
-    if slots:
+    static = [n for (_, setup, n, rate) in serve if setup == "static" and rate == 0]
+    if static:
+        slots = max(static)
         print(_save(static_memory(serve, slots), out / "static_memory.png", top=0.85))
-        print(
-            _save(
-                arena(next(rec for (_, n), rec in serve.items() if n == slots)), out / "arena.png"
-            )
+        first = next(
+            rec
+            for (_, setup, n, rate), rec in serve.items()
+            if (setup, n, rate) == ("static", slots, 0)
         )
+        print(_save(arena(first), out / "arena.png"))
 
 
 if __name__ == "__main__":

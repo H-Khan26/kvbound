@@ -30,7 +30,7 @@ from kvbound.nvml_sampler import NvmlSampler
 from kvbound.paths import binary
 from kvbound.perfmodel import hardware
 from kvbound.perfmodel.model import Arch, Precision, predict
-from kvbound.weight_format import VARIANTS
+from kvbound.weight_format import DEFAULT_GROUP_SIZE, VARIANTS
 
 KV_DTYPES = ("fp16", "int8")
 
@@ -153,7 +153,8 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     # The ceiling for this decode: the perf model's bound at the middle of the generated span.
     if hw is not None:
         context = args.prompt_len + args.new_tokens // 2
-        precision = Precision.named(args.weights, args.kv, arch.head_dim)
+        group_size = raw["config"]["weight_group_size"] or DEFAULT_GROUP_SIZE
+        precision = Precision.named(args.weights, args.kv, arch.head_dim, group_size)
         bound = predict(arch, hw, precision, 1, args.prompt_len, context)
         metrics["ceiling"] = {
             "dram_gbs": hw.dram_gbs,
@@ -173,6 +174,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "seed": args.seed,
             "sampling": "greedy",
             **raw["config"],
+            "weights": args.weights,  # the variant name; the binary knows only the scheme
         },
         "metrics": metrics,
         "samples": {**samples, "tokens": raw["iterations"][0]["requests"][0]["tokens"]},

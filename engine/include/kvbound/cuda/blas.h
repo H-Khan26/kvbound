@@ -29,9 +29,10 @@ class Blas {
 
   // y [n_rows, n_out] = x [n_rows, n_in] * weight^T, with weight [n_out, n_in] as stored in the
   // checkpoint. x and weight are FP16; y is FP16, or FP32 when out_dtype is F32 (which always
-  // accumulates in FP32).
+  // accumulates in FP32). When y is n_out adjacent columns of a wider matrix, y_cols is that
+  // matrix's column count and y points at the first of the columns; 0 means n_out.
   void linear(const std::uint16_t* weight, const std::uint16_t* x, void* y, int n_rows, int n_in,
-              int n_out, DType out_dtype = DType::F16);
+              int n_out, DType out_dtype = DType::F16, int y_cols = 0);
 
   GemmAccumulate accumulate() const noexcept { return accumulate_; }
 

@@ -1,9 +1,10 @@
 """Runs a workload through the engine under one scheduling policy and records throughput,
 latency and memory use.
 
-The KV pool is the same size under every policy, so runs compare what a policy does with the
-same memory. --pool-seqs gives it as sequences of --max-ctx tokens; --pool-mib gives it in bytes,
-which holds more tokens when --kv int8 halves the size of a cached token.
+The KV pool is the same number of bytes in every run, so runs compare what a policy or a
+precision does with the same memory: --pool-seqs gives it as the bytes of that many FP16
+sequences of --max-ctx tokens. With --kv int8 a cached token takes about half the bytes, so the
+same pool holds about twice the tokens.
 
   static      --slots sequences form a batch that runs until its longest member finishes; each
               holds one block of max_ctx tokens.
@@ -99,12 +100,11 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
         load = dataclasses.replace(load, n_requests=args.requests)
     trace = workload.trace(load, arch.vocab_size, args.max_ctx, args.rate)
     block_size = args.kv_block_size or args.max_ctx
-    if args.pool_mib:
-        precision = Precision.named(args.weights, args.kv, arch.head_dim)
-        token_bytes = kv_bytes_per_token(arch, precision.kv_bytes)
-        kv_blocks = int(args.pool_mib * 2**20 // (block_size * token_bytes))
-    else:
-        kv_blocks = (args.pool_seqs or args.slots) * args.max_ctx // block_size
+    # The pool is sized in bytes, as FP16 sequences, then cut into blocks of the actual dtype.
+    fp16_token = kv_bytes_per_token(arch, Precision.named("fp16", "fp16").kv_bytes)
+    token = kv_bytes_per_token(arch, Precision.named("fp16", args.kv, arch.head_dim).kv_bytes)
+    pool_bytes = (args.pool_seqs or args.slots) * args.max_ctx * fp16_token
+    kv_blocks = int(pool_bytes // (block_size * token))
     options = {
         "policy": args.policy,
         "slots": args.slots,
@@ -152,6 +152,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "arrival_rate": trace["arrival_rate"],
             "sampling": "greedy",
             **raw["config"],
+            "weights": args.weights,  # the variant name; the binary knows only the scheme
         },
         "metrics": metrics,
         "samples": samples,
@@ -167,9 +168,8 @@ def main() -> None:
     parser.add_argument("--slots", type=int, default=8, help="sequences cached at the same time")
     parser.add_argument(
         "--pool-seqs", type=int, default=0,
-        help="KV pool size in sequences of max-ctx tokens; default: --slots",
+        help="KV pool size, as FP16 sequences of max-ctx tokens; default: --slots",
     )  # fmt: skip
-    parser.add_argument("--pool-mib", type=float, default=0, help="KV pool size in MiB instead")
     parser.add_argument("--kv-block-size", type=int, default=0, help="default: max-ctx")
     parser.add_argument("--weights", choices=VARIANTS, default="fp16")
     parser.add_argument("--kv", choices=bench.KV_DTYPES, default="fp16")

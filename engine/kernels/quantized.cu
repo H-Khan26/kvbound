@@ -97,7 +97,8 @@ __global__ void linear_quantized_kernel(const uint4* weight, const __half* scale
   }
 }
 
-// One thread per 16-byte load of the matrix: writes its weights as FP16.
+// One thread per 16-byte load of the channels given: writes its weights as FP16. `weight` and
+// `scale` start at the first of those channels.
 template <bool kInt4>
 __global__ void dequantize_kernel(const uint4* weight, const __half* scale, uint4* out, int n_loads,
                                   std::size_t n, int group_loads_shift) {
@@ -150,14 +151,8 @@ int group_loads_shift(const WeightRef& w) {
 }
 
 void check_quantized(const WeightRef& w, int n_in) {
-  if (w.scheme == WeightScheme::Int8PerChannel && n_in % kInt8PerLoad == 0) return;
-  if (w.scheme == WeightScheme::Int4Grouped && w.group_size >= kInt4PerLoad &&
-      std::has_single_bit(static_cast<unsigned>(w.group_size)) && n_in % w.group_size == 0) {
-    return;
-  }
-  throw Error(
-      "quantized kernels need int8_pc rows divisible by 16, or int4_g groups that are a "
-      "power of two of at least 32 and divide the row");
+  if (w.scheme == WeightScheme::F16) throw Error("not a quantized matrix");
+  check_row_length({.scheme = w.scheme, .group_size = w.group_size}, n_in);
 }
 
 template <bool kInt4, bool kF32Out>
@@ -204,19 +199,23 @@ void linear_quantized(const WeightRef& w, const f16* x, void* y, int n_rows, int
   }
 }
 
-void dequantize(const WeightRef& w, f16* out, int n_in, int n_out, cudaStream_t stream) {
+void dequantize(const WeightRef& w, f16* out, int n_in, int first_channel, int n_channels,
+                cudaStream_t stream) {
   check_quantized(w, n_in);
   const bool int4 = w.scheme == WeightScheme::Int4Grouped;
   const int n_loads = n_in / (int4 ? kInt4PerLoad : kInt8PerLoad);
-  const std::size_t n = static_cast<std::size_t>(n_out) * n_loads;
-  const uint4* weight = static_cast<const uint4*>(w.data);
+  const std::size_t n = static_cast<std::size_t>(n_channels) * n_loads;
+  const std::size_t first = static_cast<std::size_t>(first_channel);
+  const uint4* weight = static_cast<const uint4*>(w.data) + first * n_loads;
   uint4* dst = reinterpret_cast<uint4*>(out);
   if (int4) {
-    dequantize_kernel<true><<<blocks_for(n), kBlockThreads, 0, stream>>>(
-        weight, as_half(w.scale), dst, n_loads, n, group_loads_shift(w));
+    const int shift = group_loads_shift(w);
+    const __half* scale = as_half(w.scale) + first * (n_loads >> shift);
+    dequantize_kernel<true>
+        <<<blocks_for(n), kBlockThreads, 0, stream>>>(weight, scale, dst, n_loads, n, shift);
   } else {
-    dequantize_kernel<false>
-        <<<blocks_for(n), kBlockThreads, 0, stream>>>(weight, as_half(w.scale), dst, n_loads, n, 0);
+    dequantize_kernel<false><<<blocks_for(n), kBlockThreads, 0, stream>>>(
+        weight, as_half(w.scale) + first, dst, n_loads, n, 0);
   }
   KVB_CUDA(cudaGetLastError());
 }

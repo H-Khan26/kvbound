@@ -70,17 +70,18 @@ class Precision:
     compute: str  # key into Ceilings.peak_tops
 
     @classmethod
-    def named(cls, weights: str, kv: str, head_dim: int = 64) -> "Precision":
+    def named(cls, weights: str, kv: str, head_dim: int = 64, group_size: int = 128) -> "Precision":
         """weights is a variant name (fp16, int8_pc, int4_g, int4_g.mse); kv is fp16, int8 or fp8.
 
-        Bytes include the FP16 scales: one per 128 weights for int4_g (one per row for int8_pc,
-        which is negligible), one per cached vector of head_dim elements for an int8 cache.
+        Bytes include the FP16 scales: one per group_size weights for int4_g (one per row for
+        int8_pc, which is negligible), one per cached vector of head_dim elements for an int8
+        cache.
         """
         # Quantization here is weight-only: INT8 and INT4 weights are widened inside the kernel
         # and multiplied with FP16 activations, or expanded to FP16 for a tensor-core product,
         # so the FP16 ceiling applies to all. The ceiling is FP16 accumulate, the faster of the
         # two FP16 modes, so the result stays a lower bound for kernels that accumulate in FP32.
-        weight_bytes = {"fp16": 2.0, "int8_pc": 1.0, "int4_g": 0.5 + 2 / 128}
+        weight_bytes = {"fp16": 2.0, "int8_pc": 1.0, "int4_g": 0.5 + 2 / group_size}
         kv_bytes = {"fp16": 2.0, "int8": 1.0 + 2 / head_dim, "fp8": 1.0}
         return cls(weight_bytes[weights.removesuffix(".mse")], kv_bytes[kv], "fp16_acc16")
 

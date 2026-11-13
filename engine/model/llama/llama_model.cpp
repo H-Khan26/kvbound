@@ -70,15 +70,18 @@ DeviceWeights load_weights(const std::filesystem::path& model_dir, const Program
     const std::int64_t out_cols = program.values[op.out].cols;
     const std::string& name = program.weights[op.weight];
     const TensorView& tensor = file.at(name);
+    const bool integers = tensor.dtype == DType::I8 || tensor.dtype == DType::U8;
     std::vector<std::int64_t> expected;
     if (op.kind == OpKind::RmsNorm) {
+      // Only matrices are quantized: the norm kernel reads its weight as FP16.
+      if (integers) throw Error(name + ": a one-dimensional weight must be floating point");
       expected = {out_cols};
     } else {
       // A matrix [rows, cols]: the embedding table, or a linear layer's weight.
       const std::int64_t rows = op.kind == OpKind::Embed ? cfg.vocab_size : out_cols;
       const std::int64_t cols = op.kind == OpKind::Embed ? out_cols : program.values[op.in0].cols;
       expected = {rows, cols};
-      if (tensor.dtype == DType::I8 || tensor.dtype == DType::U8) {
+      if (integers) {
         expected = stored_shape(format, rows, cols);
         if (file.at(name + ".scale").shape != scale_shape(format, rows, cols)) {
           throw Error(name + ".scale: shape does not match the weight format");
@@ -90,8 +93,8 @@ DeviceWeights load_weights(const std::filesystem::path& model_dir, const Program
   return DeviceWeights(file, program.weights, stream);
 }
 
-// Bytes of the largest quantized matrix a step may have to expand to FP16: those multiplied
-// with more rows than the in-place kernel takes.
+// Bytes of scratch for expanding quantized matrices: the largest one a step may multiply with
+// more rows than the in-place kernel takes, up to one slice.
 std::size_t dequant_scratch_bytes(const Program& program, const DeviceWeights& weights,
                                   const LlamaModelConfig& limits) {
   std::size_t bytes = 0;
@@ -100,8 +103,9 @@ std::size_t dequant_scratch_bytes(const Program& program, const DeviceWeights& w
     const Value& out = program.values[op.out];
     const int max_rows = out.rows == RowKind::Token ? limits.max_step_tokens : limits.max_outputs;
     if (max_rows <= limits.quantized_gemm_rows) continue;
-    bytes = std::max(bytes, static_cast<std::size_t>(out.cols * program.values[op.in0].cols) *
-                                sizeof(std::uint16_t));
+    const std::size_t row_bytes = program.values[op.in0].cols * sizeof(std::uint16_t);
+    const std::size_t matrix = static_cast<std::size_t>(out.cols) * row_bytes;
+    bytes = std::max(bytes, std::min(matrix, std::max(limits.dequant_slice_bytes, row_bytes)));
   }
   return bytes;
 }
@@ -167,9 +171,16 @@ void LlamaModel::run(const StepRow* rows, const std::int32_t* out_rows, int n_to
           kernels::linear_quantized(weight, value<f16>(op.in0), value<void>(op.out), n_rows, n_in,
                                     n_out_cols, out->dtype == DType::F32, stream);
         } else {
-          kernels::dequantize(weight, dequant_.as<f16>(), n_in, n_out_cols, stream);
-          blas_.linear(dequant_.as<f16>(), value<f16>(op.in0), value<void>(op.out), n_rows, n_in,
-                       n_out_cols, out->dtype);
+          // Expanded and multiplied a slice of output channels at a time.
+          const int slice = static_cast<int>(dequant_.bytes() / sizeof(f16) / n_in);
+          const std::size_t element = size_bytes(out->dtype);
+          for (int first = 0; first < n_out_cols; first += slice) {
+            const int count = std::min(slice, n_out_cols - first);
+            kernels::dequantize(weight, dequant_.as<f16>(), n_in, first, count, stream);
+            blas_.linear(dequant_.as<f16>(), value<f16>(op.in0),
+                         value<std::byte>(op.out) + first * element, n_rows, n_in, count,
+                         out->dtype, n_out_cols);
+          }
         }
         break;
       }

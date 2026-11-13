@@ -1,4 +1,4 @@
-.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters microbench quantize eval report predict lint format typecheck clean
+.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters microbench quantize eval precision report predict lint format typecheck clean
 
 # torch wheel: cu128 on GPU machines, cpu in CI and on machines without a GPU
 TORCH ?= cu128
@@ -13,6 +13,8 @@ RATES ?= 2 4 8 16
 # Weight variant and KV dtype for `make eval`: fp16 | int8_pc | int4_g | int4_g.mse, fp16 | int8
 WEIGHTS ?= fp16
 KV ?= fp16
+# The weights:kv pairs `make precision` measures
+PRECISIONS ?= fp16:fp16 fp16:int8 int8_pc:fp16 int8_pc:int8 int4_g:fp16 int4_g:int8
 
 # On Windows, recipes need a POSIX sh (Git Bash) and cmake/ctest run inside the MSVC environment.
 ifeq ($(OS),Windows_NT)
@@ -113,6 +115,15 @@ quantize:         ## quantized checkpoints: INT8 per channel and INT4 in groups 
 eval:             ## WikiText-2 perplexity of the engine at one precision (MODEL=... WEIGHTS=fp16 KV=fp16)
 	$(MAKE) build PRESET=cuda
 	uv run python -m kvbound.evals.perplexity --model $(MODEL) --weights $(WEIGHTS) --kv $(KV)
+
+precision:        ## every pair in PRECISIONS: perplexity, per-layer error, decode speed, concurrency (MODEL=...)
+	$(MAKE) build PRESET=cuda
+	for p in $(PRECISIONS); do w=$${p%%:*}; k=$${p##*:}; \
+	  uv run python -m kvbound.evals.perplexity --model $(MODEL) --weights $$w --kv $$k || exit 1; \
+	  uv run python -m kvbound.evals.sites --model $(MODEL) --weights $$w --kv $$k || exit 1; \
+	  uv run python -m kvbound.bench --model $(MODEL) --weights $$w --kv $$k --prompt-len 128 || exit 1; \
+	  $(SERVE) --weights $$w --kv $$k --workload fixed --requests 96 $(PAGED) || exit 1; \
+	done
 
 report:           ## roofline, bandwidth and latency figures from the records (MODEL=... DEVICE=...)
 	uv run python -m kvbound.report --device $(DEVICE) --model $(MODEL)

@@ -79,9 +79,10 @@ inline constexpr int kQuantizedLinearMaxRows = 16;
 void linear_quantized(const WeightRef& w, const f16* x, void* y, int n_rows, int n_in, int n_out,
                       bool f32_out, cudaStream_t stream);
 
-// out [n_out, n_in] = W as FP16, for steps wide enough that a tensor-core product on the
-// expanded matrix is faster.
-void dequantize(const WeightRef& w, f16* out, int n_in, int n_out, cudaStream_t stream);
+// out [n_channels, n_in] = output channels first_channel onward of W as FP16, for steps wide
+// enough that a tensor-core product on the expanded matrix is faster.
+void dequantize(const WeightRef& w, f16* out, int n_in, int first_channel, int n_channels,
+                cudaStream_t stream);
 
 // out[t] = row rows[t].token_id of a quantized table [vocab, dim], as FP16.
 void embedding_quantized(const WeightRef& table, const StepRow* rows, f16* out, int n_tokens,

@@ -73,8 +73,7 @@ WeightFormat weight_format_from_metadata(
   return format;
 }
 
-std::vector<std::int64_t> stored_shape(const WeightFormat& format, std::int64_t out,
-                                       std::int64_t in) {
+void check_row_length(const WeightFormat& format, std::int64_t in) {
   switch (format.scheme) {
     case WeightScheme::F16:
       break;
@@ -89,9 +88,14 @@ std::vector<std::int64_t> stored_shape(const WeightFormat& format, std::int64_t 
             "int4_g needs a group size that is a power of two, at least 32, and divides "
             "the row");
       }
-      return {out, in / 2};
+      break;
   }
-  return {out, in};
+}
+
+std::vector<std::int64_t> stored_shape(const WeightFormat& format, std::int64_t out,
+                                       std::int64_t in) {
+  check_row_length(format, in);
+  return {out, format.scheme == WeightScheme::Int4Grouped ? in / 2 : in};
 }
 
 std::vector<std::int64_t> scale_shape(const WeightFormat& format, std::int64_t out,
@@ -105,19 +109,6 @@ std::vector<std::int64_t> scale_shape(const WeightFormat& format, std::int64_t o
       return {out, in / format.group_size};
   }
   return {};
-}
-
-double bytes_per_weight(const WeightFormat& format, std::int64_t in) noexcept {
-  constexpr double kScaleBytes = 2.0;
-  switch (format.scheme) {
-    case WeightScheme::F16:
-      return 2.0;
-    case WeightScheme::Int8PerChannel:
-      return 1.0 + kScaleBytes / static_cast<double>(in);
-    case WeightScheme::Int4Grouped:
-      return 0.5 + kScaleBytes / format.group_size;
-  }
-  return 0.0;
 }
 
 }  // namespace kvb
