@@ -6,8 +6,8 @@ work), then quantizes and profiles both against the roofline of an RTX 3060 Ti (
 
 **Status:** Phases 0 to 3 are done on the RTX 3060 Ti: reference model, golden tensors, hardware ceilings, the
 analytical performance model, an FP16 engine that generates the same tokens as the reference model, and the static
-memory design (preallocated KV slots, static batching, planned activation arena). The paged KV cache is next.
-The RTX 4070 Ti runs are pending.
+memory design (preallocated KV slots, static batching, planned activation arena), measured on TinyLlama 1.1B and
+Llama 3.2 1B. The paged KV cache is next. The RTX 4070 Ti runs are pending.
 
 ## Where things stand (RTX 3060 Ti, TinyLlama 1.1B, FP16)
 
@@ -60,6 +60,25 @@ Two more results from this phase:
 
 Known gaps: prefill attention is still the simple per-query kernel (201 ms for 1,024 tokens against a 36 ms bound), and
 cuBLAS is slower per token at batch 8 than at batch 1.
+
+### The same engine on Llama 3.2 1B
+
+Llama 3.2 1B (16 layers, 8 KV heads, tied embeddings, Llama 3 RoPE scaling) runs on the same code with no changes.
+Greedy output matches the reference token for token on every golden prompt, and the worst intermediate activation is at
+18% of its FP16 limit, as on TinyLlama.
+
+| Quantity (RTX 3060 Ti, FP16) | Llama 3.2 1B | TinyLlama 1.1B |
+| --- | --- | --- |
+| Weights read per token | 2.47 GB | 2.07 GB |
+| Decode ceiling, batch 1 | 168 tokens/s | 200 tokens/s |
+| kvbound decode, batch 1 | 144 tokens/s, 86% of the ceiling | 144 tokens/s, 72% |
+| kvbound decode without CUDA graphs | 136 tokens/s | 128 tokens/s |
+| Time to first token, 128 / 1,024 prompt tokens | 13 ms / 147 ms | 15 ms / 201 ms |
+| Static batching, 8 slots: `fixed` / `uniform` / `longtail` | 841 / 621 / 371 tokens/s | 792 / 599 / 360 tokens/s |
+| Hugging Face Transformers decode, batch 1 | 47 tokens/s | 17 to 33 tokens/s |
+
+Both models take 6.9 ms per token although Llama 3.2 reads 19% more weight bytes. It has 16 layers instead of 22, so a
+decode step is about 278 kernels instead of 357, and less of the step goes to work that is not reading weights.
 
 These runs come from Windows (WDDM), where GPU clocks cannot be locked, so every record is tagged `os=windows`, and
 `clock_varied` when the clock moved during the run. Numbers meant for publication come from native Ubuntu with locked
