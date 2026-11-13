@@ -1,6 +1,7 @@
 #include "kvbound/cuda/engine.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <numeric>
 
@@ -22,6 +23,8 @@ EngineConfig resolved(EngineConfig config) {
   if (config.kv_block_size > config.max_ctx) throw Error("kv_block_size exceeds max_ctx");
   const int blocks_per_seq = (config.max_ctx + config.kv_block_size - 1) / config.kv_block_size;
   if (config.kv_blocks <= 0) config.kv_blocks = config.max_seqs * blocks_per_seq;
+  if (config.kv_blocks < blocks_per_seq) throw Error("the KV pool cannot hold one full sequence");
+  if (config.use_graph && config.max_graphs <= 0) throw Error("max_graphs must be > 0");
   return config;
 }
 
@@ -63,7 +66,7 @@ Engine::Engine(const std::filesystem::path& model_dir, const EngineConfig& confi
 }
 
 Engine::~Engine() {
-  for (const auto& [key, graph] : graphs_) cudaGraphExecDestroy(graph);
+  for (const auto& [key, graph] : graphs_) cudaGraphExecDestroy(graph.exec);
   model_.reset();
   kv_.reset();
   if (stream_ != nullptr) cudaStreamDestroy(stream_);
@@ -117,9 +120,11 @@ void Engine::forward(std::span<const StepRow> rows, std::span<const std::int32_t
   if (config_.use_graph && !hooked && n_out == n_tokens && n_tokens <= config_.max_seqs) {
     run_graph(n_tokens, n_out);
   } else if (!hooked) {
+    graph_stats_.eager += 1;
     model_->run(rows_dev_.as<StepRow>(), out_rows_dev_.as<std::int32_t>(), n_tokens, n_out, *kv_,
                 stream_);
   } else {
+    graph_stats_.eager += 1;
     RunHooks hooks;
     hooks.times = options.times;
     if (options.capture != nullptr) {
@@ -161,6 +166,15 @@ void Engine::run_graph(int n_tokens, int n_out) {
   const std::int64_t key = static_cast<std::int64_t>(n_tokens) << 32 | n_out;
   auto it = graphs_.find(key);
   if (it == graphs_.end()) {
+    const auto start = std::chrono::steady_clock::now();
+    if (static_cast<int>(graphs_.size()) >= config_.max_graphs) {
+      const auto oldest = std::min_element(
+          graphs_.begin(), graphs_.end(),
+          [](const auto& a, const auto& b) { return a.second.last_used < b.second.last_used; });
+      KVB_CUDA(cudaGraphExecDestroy(oldest->second.exec));
+      graphs_.erase(oldest);
+      graph_stats_.evicted += 1;
+    }
     cudaGraph_t graph = nullptr;
     KVB_CUDA(cudaStreamBeginCapture(stream_, cudaStreamCaptureModeGlobal));
     try {
@@ -176,9 +190,14 @@ void Engine::run_graph(int n_tokens, int n_out) {
     const cudaError_t status = cudaGraphInstantiate(&exec, graph, 0);
     cudaGraphDestroy(graph);
     KVB_CUDA(status);
-    it = graphs_.emplace(key, exec).first;
+    it = graphs_.emplace(key, Graph{.exec = exec}).first;
+    graph_stats_.captured += 1;
+    graph_stats_.capture_s +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
   }
-  KVB_CUDA(cudaGraphLaunch(it->second, stream_));
+  KVB_CUDA(cudaGraphLaunch(it->second.exec, stream_));
+  graph_stats_.replayed += 1;
+  it->second.last_used = graph_stats_.replayed;
 }
 
 std::vector<float> Engine::logits() {
@@ -213,13 +232,20 @@ void Engine::add_sequence(int seq, std::span<const std::int32_t> prompt,
                                    .sampler = Sampler(sampler)});
 }
 
+void Engine::release_cache(Sequence& s) {
+  for (const int block : s.blocks) blocks_.free(block);
+  s.blocks.clear();
+  if (s.row >= 0) rows_.free(s.row);
+  s.row = -1;
+  s.n_cached = 0;
+}
+
 StepResult Engine::execute(const StepPlan& plan) {
   for (const int seq : plan.free) {
-    Sequence& s = sequence(seq);
-    for (const int block : s.blocks) blocks_.free(block);
-    if (s.row >= 0) rows_.free(s.row);
+    release_cache(sequence(seq));
     sequences_.erase(seq);
   }
+  for (const int seq : plan.preempt) release_cache(sequence(seq));
   for (const StepPlan::Alloc& alloc : plan.alloc) {
     Sequence& s = sequence(alloc.seq);
     if (s.row < 0) s.row = rows_.allocate();

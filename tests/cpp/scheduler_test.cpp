@@ -1,4 +1,5 @@
-// Static batching, driven the way the engine drives it but with a stand-in that only counts.
+// Both scheduling policies, driven the way the engine drives them but with a stand-in that only
+// counts tokens and blocks.
 
 #include "kvbound/scheduler.h"
 
@@ -12,29 +13,50 @@
 namespace {
 
 using kvb::Request;
+using kvb::SchedulePolicy;
 using kvb::Scheduler;
 using kvb::StepPlan;
 using kvb::StepResult;
 
-// Stands in for the engine: tracks how many tokens each sequence has and emits a token whenever
-// a plan processes a sequence's last known token.
+// Stands in for the engine: tracks how many tokens and blocks each sequence has, checks that
+// plans stay within the pool, and emits a token whenever a plan processes a sequence's last
+// known token.
 struct FakeEngine {
   struct Seq {
     int known = 0;
     int cached = 0;
+    int blocks = 0;
   };
   std::map<int, Seq> seqs;
   std::map<int, int> prompts;
+  int block_size = 0;
+  int free_blocks = 0;
   std::int32_t next_token = 100;
 
   StepResult execute(const StepPlan& plan) {
-    for (const int id : plan.free) EXPECT_EQ(seqs.erase(id), 1u);
-    for (const StepPlan::Alloc& alloc : plan.alloc) seqs[alloc.seq] = {prompts.at(alloc.seq), 0};
+    for (const int id : plan.free) {
+      free_blocks += seqs.at(id).blocks;
+      EXPECT_EQ(seqs.erase(id), 1u);
+    }
+    for (const int id : plan.preempt) {
+      Seq& s = seqs.at(id);
+      free_blocks += s.blocks;
+      s.blocks = 0;
+      s.cached = 0;
+    }
+    for (const StepPlan::Alloc& alloc : plan.alloc) {
+      // A sequence is registered by its first allocation.
+      Seq& s = seqs.try_emplace(alloc.seq, Seq{prompts.at(alloc.seq), 0, 0}).first->second;
+      s.blocks += alloc.n_blocks;
+      free_blocks -= alloc.n_blocks;
+      EXPECT_GE(free_blocks, 0) << "plan allocates more blocks than the pool has";
+    }
     StepResult result;
     for (const StepPlan::Run& run : plan.run) {
       Seq& s = seqs.at(run.seq);
       s.cached += run.n_tokens;
       EXPECT_LE(s.cached, s.known);
+      EXPECT_LE(s.cached, s.blocks * block_size) << "sequence runs past its blocks";
       if (s.cached == s.known) {
         s.known += 1;
         result.tokens.push_back({run.seq, next_token++});
@@ -50,14 +72,23 @@ struct Trace {
   std::vector<kvb::KvUsage> usage;
 };
 
-Trace drive(Scheduler& scheduler, const std::vector<Request>& requests) {
+// Runs the requests to completion. `late` holds requests submitted just before the plan with
+// that index instead of at the start.
+Trace drive(Scheduler& scheduler, const std::vector<Request>& requests,
+            const std::map<std::size_t, Request>& late = {}) {
   FakeEngine engine;
+  engine.block_size = scheduler.config().block_size;
+  engine.free_blocks = scheduler.config().n_blocks;
   for (const Request& r : requests) {
     engine.prompts[r.id] = r.prompt_tokens;
     scheduler.submit(r);
   }
   Trace trace;
-  while (!scheduler.done()) {
+  while (!scheduler.done() || late.lower_bound(trace.plans.size()) != late.end()) {
+    if (const auto it = late.find(trace.plans.size()); it != late.end()) {
+      engine.prompts[it->second.id] = it->second.prompt_tokens;
+      scheduler.submit(it->second);
+    }
     const StepPlan plan = scheduler.next();
     const StepResult result = engine.execute(plan);
     if (!plan.run.empty()) scheduler.complete(result);
@@ -65,8 +96,19 @@ Trace drive(Scheduler& scheduler, const std::vector<Request>& requests) {
     trace.plans.push_back(plan);
     trace.usage.push_back(scheduler.usage());
     EXPECT_LT(trace.plans.size(), 10000u) << "scheduler does not terminate";
+    if (trace.plans.size() >= 10000u) break;
   }
+  EXPECT_EQ(engine.free_blocks, scheduler.config().n_blocks);
+  EXPECT_EQ(scheduler.free_blocks(), scheduler.config().n_blocks);
   return trace;
+}
+
+std::vector<int> allocations(const StepPlan& plan, int seq) {
+  std::vector<int> blocks;
+  for (const StepPlan::Alloc& alloc : plan.alloc) {
+    if (alloc.seq == seq) blocks.push_back(alloc.n_blocks);
+  }
+  return blocks;
 }
 
 int rows(const StepPlan& plan) {
@@ -157,6 +199,126 @@ TEST(StaticScheduler, RejectsWhatCannotRun) {
   const StepPlan plan = scheduler.next();
   EXPECT_THROW(scheduler.next(), kvb::Error);
   EXPECT_FALSE(plan.run.empty());
+}
+
+Scheduler continuous(int n_slots, int max_ctx, int block_size, int n_blocks, int max_step_tokens) {
+  return Scheduler({.policy = SchedulePolicy::Continuous,
+                    .n_slots = n_slots,
+                    .max_ctx = max_ctx,
+                    .block_size = block_size,
+                    .n_blocks = n_blocks,
+                    .max_step_tokens = max_step_tokens});
+}
+
+TEST(ContinuousScheduler, AdmitsARequestAsSoonAsASequenceFinishes) {
+  // The same requests as the static test above, with one block per sequence.
+  Scheduler scheduler = continuous(2, 64, 64, 0, 64);
+  const Trace trace = drive(scheduler, {{0, 4, 2}, {1, 4, 6}, {2, 4, 1}});
+
+  EXPECT_EQ(trace.plans[0].alloc.size(), 2u);
+  // Request 0 finishes in the second step. The third plan frees it and admits request 2, which
+  // prefills next to request 1's decode row instead of waiting for request 1 to finish.
+  EXPECT_EQ(trace.plans[2].free, (std::vector<int>{0}));
+  EXPECT_EQ(allocations(trace.plans[2], 2), (std::vector<int>{1}));
+  EXPECT_EQ(rows(trace.plans[2]), 5);
+  EXPECT_EQ(trace.usage[2].waiting, 0);
+  EXPECT_EQ(trace.generated.at(1), 6);
+  EXPECT_EQ(trace.generated.at(2), 1);
+  EXPECT_EQ(trace.plans.size(), 7u);
+}
+
+TEST(ContinuousScheduler, AllocatesBlocksAsASequenceGrows) {
+  Scheduler scheduler = continuous(1, 32, 4, 0, 32);
+  const Trace trace = drive(scheduler, {{0, 5, 6}});
+  // Five prompt tokens take two 4-token blocks. The third block arrives with the ninth token.
+  EXPECT_EQ(allocations(trace.plans[0], 0), (std::vector<int>{2}));
+  for (int step = 1; step <= 3; ++step) EXPECT_TRUE(trace.plans[step].alloc.empty()) << step;
+  EXPECT_EQ(allocations(trace.plans[4], 0), (std::vector<int>{1}));
+  EXPECT_EQ(trace.usage[3].reserved, 8);
+  EXPECT_EQ(trace.usage[3].used, 8);
+  EXPECT_EQ(trace.usage[4].reserved, 12);
+  EXPECT_EQ(trace.usage[4].used, 9);
+  EXPECT_EQ(trace.generated.at(0), 6);
+}
+
+TEST(ContinuousScheduler, KeepsASpareBlockForEverySequenceThatCanGrow) {
+  // Five 4-token blocks; each request needs one block for its prompt and three in the end.
+  Scheduler scheduler = continuous(4, 16, 4, 5, 16);
+  const Trace trace = drive(scheduler, {{0, 4, 8}, {1, 4, 8}, {2, 4, 8}});
+  // Two requests leave three blocks free, enough for request 2's prompt. It still waits: with
+  // three sequences growing the pool would need a fourth spare block.
+  EXPECT_EQ(trace.plans[0].alloc.size(), 2u);
+  EXPECT_EQ(trace.usage[0].waiting, 1);
+  EXPECT_EQ(trace.usage[0].reserved, 8);
+  for (const auto& [id, n] : trace.generated) EXPECT_EQ(n, 8) << id;
+}
+
+TEST(ContinuousScheduler, PreemptsTheYoungestSequenceWhenThePoolRunsDry) {
+  Scheduler scheduler = continuous(2, 16, 4, 5, 16);
+  const Trace trace = drive(scheduler, {{0, 4, 8}, {1, 4, 8}});
+  // Both prompts fit, and each sequence takes a second block for its fifth token.
+  EXPECT_EQ(trace.plans[1].alloc.size(), 2u);
+  for (int step = 0; step <= 4; ++step) EXPECT_TRUE(trace.plans[step].preempt.empty()) << step;
+  // At nine tokens each wants a third block and one is free. Request 0 is older and gets it;
+  // request 1 gives up its two blocks and waits.
+  EXPECT_EQ(allocations(trace.plans[5], 0), (std::vector<int>{1}));
+  EXPECT_EQ(trace.plans[5].preempt, (std::vector<int>{1}));
+  EXPECT_EQ(trace.plans[5].run.size(), 1u);
+  EXPECT_EQ(trace.usage[5].running, 1);
+  EXPECT_EQ(trace.usage[5].waiting, 1);
+  EXPECT_EQ(trace.usage[5].reserved, 12);
+  // Two free blocks do not hold request 1's nine tokens, so it stays out until request 0 ends.
+  EXPECT_TRUE(trace.plans[6].alloc.empty());
+  EXPECT_TRUE(trace.plans[7].alloc.empty());
+  EXPECT_EQ(trace.plans[8].free, (std::vector<int>{0}));
+  EXPECT_EQ(allocations(trace.plans[8], 1), (std::vector<int>{3}));
+  // Readmitted, it recomputes all nine tokens it had in one prefill step, then decodes on.
+  EXPECT_EQ(rows(trace.plans[8]), 9);
+  EXPECT_EQ(trace.generated.at(0), 8);
+  EXPECT_EQ(trace.generated.at(1), 8);
+  int total_rows = 0;
+  for (const StepPlan& plan : trace.plans) total_rows += rows(plan);
+  EXPECT_EQ(total_rows, 2 * (4 + 7) + 8);  // eight of request 1's rows ran twice
+}
+
+TEST(ContinuousScheduler, EveryRequestGetsExactlyItsTokensInATightPool) {
+  // Twelve 8-token blocks for requests that need up to eight each: preemption is unavoidable.
+  Scheduler scheduler = continuous(4, 64, 8, 12, 16);
+  const std::vector<Request> requests = {{0, 5, 3},  {1, 9, 30},  {2, 1, 1}, {3, 20, 12},
+                                         {4, 4, 40}, {5, 30, 30}, {6, 3, 50}};
+  const Trace trace = drive(scheduler, requests, {{3, {7, 40, 20}}, {200, {8, 2, 2}}});
+  for (const Request& r : requests) EXPECT_EQ(trace.generated.at(r.id), r.max_new_tokens);
+  EXPECT_EQ(trace.generated.at(7), 20);
+  EXPECT_EQ(trace.generated.at(8), 2);
+  int preemptions = 0;
+  for (std::size_t i = 0; i < trace.plans.size(); ++i) {
+    preemptions += static_cast<int>(trace.plans[i].preempt.size());
+    EXPECT_LE(rows(trace.plans[i]), 16);
+    EXPECT_LE(trace.usage[i].reserved, 12 * 8);
+    EXPECT_LE(trace.usage[i].running, 4);
+  }
+  EXPECT_GT(preemptions, 0);
+  EXPECT_TRUE(scheduler.done());
+  EXPECT_EQ(scheduler.usage().reserved, 0);
+}
+
+TEST(ContinuousScheduler, AdmitsRequestsThatArriveWhileOthersRun) {
+  Scheduler scheduler = continuous(2, 64, 16, 0, 64);
+  // Request 1 is submitted before the fourth plan, while request 0 is decoding.
+  const Trace trace = drive(scheduler, {{0, 4, 10}}, {{3, {1, 6, 2}}});
+  EXPECT_EQ(allocations(trace.plans[3], 1), (std::vector<int>{1}));
+  EXPECT_EQ(rows(trace.plans[3]), 1 + 6);
+  EXPECT_EQ(trace.generated.at(1), 2);
+}
+
+TEST(Scheduler, RejectsAPoolTooSmallForItsPolicy) {
+  // Static batching needs every slot's full context; continuous batching needs one.
+  EXPECT_THROW(
+      Scheduler(
+          {.n_slots = 4, .max_ctx = 64, .block_size = 16, .n_blocks = 15, .max_step_tokens = 64}),
+      kvb::Error);
+  EXPECT_THROW(continuous(4, 64, 16, 3, 64), kvb::Error);
+  EXPECT_NO_THROW(continuous(4, 64, 16, 4, 64));
 }
 
 }  // namespace

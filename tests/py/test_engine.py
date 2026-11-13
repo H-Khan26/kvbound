@@ -129,6 +129,38 @@ def test_static_batches_match_reference(kvb):
         assert engine.serve(prompts[:2], lengths[:2]) == expected[:2]  # the engine is reusable
 
 
+def test_continuous_batches_match_reference(kvb):
+    """Continuous batching over 4-token blocks gives each request the reference's tokens: in a
+    roomy pool, in one tight enough to preempt and recompute sequences, with staggered arrivals,
+    and when the engine may keep only one CUDA graph."""
+    model = load_llama(FIXTURE_DIR)
+    prompts = [*fixture_prompts(), [9, 8, 7], [200, 3], list(range(40, 60)), [5]]
+    lengths = [12, 3, 25, 1, 17, 6, 9]
+    expected = [reference_greedy(model, p, n)[0] for p, n in zip(prompts, lengths, strict=True)]
+    options = {"max_ctx": 64, "max_seqs": 4, "kv_block_size": 4}
+
+    engine = kvb.Engine(str(FIXTURE_DIR), **options)
+    assert engine.serve(prompts, lengths, policy="continuous") == expected
+    stats = engine.serve_stats()
+    assert stats["preemptions"] == 0 and stats["max_running"] == 4
+    static_steps = (engine.serve(prompts, lengths), engine.serve_stats()["steps"])[1]
+    assert stats["steps"] < static_steps  # no slot idles until its batch ends
+
+    # 16 blocks hold 64 tokens, one full sequence; the requests running together need more.
+    tight = kvb.Engine(str(FIXTURE_DIR), kv_blocks=16, max_step_tokens=9, **options)
+    assert tight.serve(prompts, lengths, policy="continuous") == expected
+    assert tight.serve_stats()["preemptions"] > 0
+    arrivals = [0.0, 0.0, 0.01, 0.02, 0.02, 0.05, 0.3]
+    assert tight.serve(prompts, lengths, policy="continuous", arrivals_s=arrivals) == expected
+    assert engine.serve(prompts, lengths, arrivals_s=arrivals) == expected  # static, as they come
+
+    one_graph = kvb.Engine(str(FIXTURE_DIR), max_graphs=1, **options)
+    assert one_graph.serve(prompts, lengths, policy="continuous") == expected
+    graphs = one_graph.graph_stats()
+    assert graphs["evicted"] > 0 and graphs["captured"] == graphs["evicted"] + 1
+    assert graphs["replayed"] > 0
+
+
 def test_generation_is_the_same_on_every_path(kvb):
     """Graphs, chunked prefill, small KV blocks and the CPU sampler all give the greedy tokens."""
     prompt = fixture_prompts()[-1]

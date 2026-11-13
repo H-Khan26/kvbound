@@ -1,14 +1,21 @@
-"""Runs a workload through the engine with static batching and records throughput and memory use.
+"""Runs a workload through the engine under one scheduling policy and records throughput,
+latency and memory use.
 
-Every request of the workload is queued at time zero. The engine serves them in batches of up
-to --slots sequences; a batch runs until its longest sequence finishes. The record carries
-throughput, per-request latency, and how much of the preallocated KV cache held tokens.
+The KV pool is the same number of token positions under every policy (--pool-seqs sequences of
+--max-ctx tokens), so runs compare what a policy does with the same memory:
 
-Usage: python -m kvbound.serve --model tinyllama-1.1b --workload longtail --slots 8
+  static      --slots sequences form a batch that runs until its longest member finishes; each
+              holds one block of max_ctx tokens.
+  continuous  requests join and leave between steps. With --kv-block-size 16 this is the paged
+              design: up to --slots sequences share the pool block by block.
+
+Requests are queued at time zero, or arrive as a Poisson process with --rate requests per second.
+
+Usage: python -m kvbound.serve --model tinyllama-1.1b --workload longtail --policy continuous \
+           --slots 64 --kv-block-size 16
 """
 
 import argparse
-import itertools
 from typing import Any
 
 from kvbound import bench, record, workload
@@ -23,34 +30,61 @@ def weighted_mean(values: list[float], weights: list[float]) -> float:
 def pass_metrics(run: dict[str, Any], config: dict[str, Any]) -> dict[str, float]:
     """Metrics of one pass over the workload.
 
-    KV occupancy is sampled after every step and weighted by the step's duration.
+    Latency is per request, from its arrival: TTFT to its first token, TPOT between its tokens
+    (requests with one token have none), latency to its last token.
+
+    KV occupancy is sampled after every step and weighted by the step's duration, so time the
+    engine spends idle between arrivals does not count.
       kv_used_of_reserved  share of the cache positions held by admitted sequences that contain a
                            token; one minus this is the internal fragmentation.
       kv_used_of_pool      the same against the whole preallocated pool.
+      running_peak         most sequences processed in one step: the concurrency reached.
       slot_occupancy       share of slot-time during which the slot's sequence was still running.
+      recomputed_tokens    rows processed beyond one per cached token: the cost of preemption.
     """
     steps = run["steps"]
-    durations = [b - a for a, b in itertools.pairwise([0.0, *steps["end_s"]])]
+    durations = [end - start for start, end in zip(steps["start_s"], steps["end_s"], strict=True)]
     total = run["total_s"]
     pool_tokens = config["kv_blocks"] * config["kv_block_size"]
     used = weighted_mean(steps["used_tokens"], durations)
     reserved = weighted_mean(steps["reserved_tokens"], durations)
-    first = sorted(r["token_times_s"][0] for r in run["requests"])
-    last = sorted(r["token_times_s"][-1] for r in run["requests"])
-    generated = sum(len(r["token_times_s"]) for r in run["requests"])
+    requests = run["requests"]
+    first = sorted(r["token_times_s"][0] - r["arrival_s"] for r in requests)
+    last = sorted(r["token_times_s"][-1] - r["arrival_s"] for r in requests)
+    tpot = sorted(
+        (r["token_times_s"][-1] - r["token_times_s"][0]) / (len(r["token_times_s"]) - 1)
+        for r in requests
+        if len(r["token_times_s"]) > 1
+    )
+    generated = sum(len(r["token_times_s"]) for r in requests)
+    needed_rows = sum(r["n_prompt"] + len(r["token_times_s"]) - 1 for r in requests)
+    graphs = run["graphs"]
     return {
         "total_s": total,
+        "busy_s": sum(durations),
         "throughput_tok_s": generated / total,
         "ttft_p50_s": record.percentile(first, 50),
         "ttft_p90_s": record.percentile(first, 90),
+        "tpot_p50_s": record.percentile(tpot, 50),
+        "tpot_p90_s": record.percentile(tpot, 90),
         "latency_p50_s": record.percentile(last, 50),
         "latency_p90_s": record.percentile(last, 90),
         "kv_used_mean_tokens": used,
         "kv_reserved_mean_tokens": reserved,
         "kv_used_peak_tokens": max(steps["used_tokens"]),
+        "kv_reserved_peak_tokens": max(steps["reserved_tokens"]),
         "kv_used_of_reserved": used / reserved,
-        "kv_used_of_pool": used * sum(durations) / (pool_tokens * total),
+        "kv_used_of_pool": used / pool_tokens,
+        "kv_reserved_of_pool": reserved / pool_tokens,
+        "running_mean": weighted_mean(steps["seqs"], durations),
+        "running_peak": max(steps["seqs"]),
         "slot_occupancy": weighted_mean(steps["running"], durations) / config["slots"],
+        "preemptions": sum(steps["preempted"]),
+        "recomputed_tokens": sum(steps["rows"]) - needed_rows,
+        "steps": len(durations),
+        "graph_replayed_share": graphs["replayed_steps"] / len(durations),
+        "graphs_captured": graphs["captured"],
+        "graph_capture_s": graphs["capture_s"],
     }
 
 
@@ -58,12 +92,18 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     spec = load_spec(args.model)
     arch = Arch.from_table(spec.arch)
     load = workload.load(args.workload)
-    trace = workload.trace(load, arch.vocab_size, args.max_ctx)
+    trace = workload.trace(load, arch.vocab_size, args.max_ctx, args.rate)
+    block_size = args.kv_block_size or args.max_ctx
+    pool_seqs = args.pool_seqs or args.slots
     options = {
+        "policy": args.policy,
         "slots": args.slots,
         "max-ctx": args.max_ctx,
         "max-step-tokens": args.max_step_tokens,
+        "kv-block-size": block_size,
+        "kv-blocks": pool_seqs * args.max_ctx // block_size,
         "kv-layout": args.kv_layout,
+        "max-graphs": args.max_graphs,
         "warmup": args.warmup,
         "iters": args.iters,
     }
@@ -81,6 +121,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "id": r["id"],
             "n_prompt": r["n_prompt"],
             "n_new": len(r["token_times_s"]),
+            "arrival_s": r["arrival_s"],
             "first_token_s": r["token_times_s"][0],
             "last_token_s": r["token_times_s"][-1],
         }
@@ -96,7 +137,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "workload": load.name,
             "workload_seed": load.seed,
             "n_requests": load.n_requests,
-            "policy": "static",
+            "arrival_rate": trace["arrival_rate"],
             "sampling": "greedy",
             **raw["config"],
         },
@@ -110,10 +151,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True)
     parser.add_argument("--workload", required=True, help="name from configs/workloads/")
-    parser.add_argument("--slots", type=int, default=8)
+    parser.add_argument("--policy", choices=["static", "continuous"], default="static")
+    parser.add_argument("--slots", type=int, default=8, help="sequences cached at the same time")
+    parser.add_argument(
+        "--pool-seqs", type=int, default=0,
+        help="KV pool size in sequences of max-ctx tokens; default: --slots",
+    )  # fmt: skip
+    parser.add_argument("--kv-block-size", type=int, default=0, help="default: max-ctx")
+    parser.add_argument("--rate", type=float, default=None, help="arrivals per second")
     parser.add_argument("--max-ctx", type=int, default=1024)
     parser.add_argument("--max-step-tokens", type=int, default=1024)
     parser.add_argument("--kv-layout", default="head_major")
+    parser.add_argument("--max-graphs", type=int, default=16)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--iters", type=int, default=3)
     parser.add_argument("--preset", default="cuda")
@@ -125,10 +174,14 @@ def main() -> None:
     path = record.write_record(**result)
     m = result["metrics"]
     print(
-        f"{args.workload}, {args.slots} slots: {m['throughput_tok_s']['p50']:.0f} tok/s"
+        f"{args.workload}, {args.policy}, {args.slots} slots:"
+        f" {m['throughput_tok_s']['p50']:.0f} tok/s"
+        f" | up to {m['running_peak']['p50']:.0f} sequences at once"
         f" | TTFT p50 {m['ttft_p50_s']['p50']:.2f} s"
-        f" | KV in use {m['kv_used_of_reserved']['p50']:.0%} of reserved"
-        f" | slots busy {m['slot_occupancy']['p50']:.0%}\n{path}"
+        f" | TPOT p50 {m['tpot_p50_s']['p50'] * 1e3:.1f} ms"
+        f" | KV in use {m['kv_used_of_reserved']['p50']:.0%} of reserved,"
+        f" {m['kv_used_of_pool']['p50']:.0%} of the pool"
+        f" | {m['preemptions']['p50']:.0f} preemptions\n{path}"
     )
 
 

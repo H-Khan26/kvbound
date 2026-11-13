@@ -1,4 +1,4 @@
-.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve profile counters microbench report predict lint format typecheck clean
+.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters microbench report predict lint format typecheck clean
 
 # torch wheel: cu128 on GPU machines, cpu in CI and on machines without a GPU
 TORCH ?= cu128
@@ -8,6 +8,8 @@ PRESET ?= cpu
 MODEL ?= tinyllama-1.1b
 # Device name from configs/devices/
 DEVICE ?= rtx3060ti
+# Arrival rates of serve-load, in requests per second
+RATES ?= 2 4 8 12
 
 # On Windows, recipes need a POSIX sh (Git Bash) and cmake/ctest run inside the MSVC environment.
 ifeq ($(OS),Windows_NT)
@@ -66,11 +68,27 @@ bench:            ## kvbound engine: batch 1 decode and a long prompt, like benc
 	uv run python -m kvbound.bench --model $(MODEL) --prompt-len 128 --no-graph
 	uv run python -m kvbound.bench --model $(MODEL) --prompt-len 1024
 
-serve:            ## static batching on the three workloads, 1 and 8 slots (MODEL=...)
+# The KV pool of every serve run: 8 sequences of 1,024 tokens.
+SERVE = uv run python -m kvbound.serve --model $(MODEL) --pool-seqs 8
+# The paged design: the same pool in 16-token blocks, shared by up to this many sequences.
+PAGED = --policy continuous --kv-block-size 16 --slots $(PAGED_SLOTS)
+PAGED_SLOTS ?= 32
+
+serve:            ## the three workloads in one KV pool: static, continuous over slots, paged (MODEL=...)
 	$(MAKE) build PRESET=cuda
-	for w in fixed uniform longtail; do for s in 1 8; do \
-	  uv run python -m kvbound.serve --model $(MODEL) --workload $$w --slots $$s || exit 1; \
-	done; done
+	for w in fixed uniform longtail; do \
+	  uv run python -m kvbound.serve --model $(MODEL) --workload $$w --slots 1 || exit 1; \
+	  $(SERVE) --workload $$w --slots 8 || exit 1; \
+	  $(SERVE) --workload $$w --slots 8 --policy continuous || exit 1; \
+	  $(SERVE) --workload $$w $(PAGED) || exit 1; \
+	done
+
+serve-load:       ## static against paged as longtail requests arrive at a growing rate (MODEL=...)
+	$(MAKE) build PRESET=cuda
+	for r in $(RATES); do \
+	  $(SERVE) --workload longtail --rate $$r --slots 8 || exit 1; \
+	  $(SERVE) --workload longtail --rate $$r $(PAGED) || exit 1; \
+	done
 
 profile:          ## Nsight Systems decode profile, with and without CUDA graphs (MODEL=...)
 	$(MAKE) build PRESET=cuda

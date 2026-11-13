@@ -207,7 +207,7 @@ class PyEngine {
  public:
   PyEngine(const std::string& model_dir, int max_ctx, int max_seqs, int max_step_tokens,
            int kv_block_size, const std::string& kv_layout, const std::string& gemm, bool graph,
-           const std::string& plan, bool wide_key_loads)
+           const std::string& plan, bool wide_key_loads, int kv_blocks, int max_graphs)
       : engine_(model_dir, kvb::cuda::EngineConfig{
                                .max_ctx = max_ctx,
                                .max_seqs = max_seqs,
@@ -215,12 +215,14 @@ class PyEngine {
                                // feed() asks for the logits of every row.
                                .max_outputs = max_step_tokens > 0 ? max_step_tokens : max_ctx,
                                .kv_block_size = kv_block_size,
+                               .kv_blocks = kv_blocks,
                                .kv_layout = layout_from(kv_layout),
                                .plan = plan == "naive" ? kvb::PlanStrategy::Naive
                                                        : kvb::PlanStrategy::GreedyBySize,
                                .gemm = accumulate_from(gemm),
                                .wide_key_loads = wide_key_loads,
                                .use_graph = graph,
+                               .max_graphs = max_graphs,
                            }) {}
 
   // Processes `ids` as positions start, start + 1, ... of block-table row `seq`, with every row
@@ -264,18 +266,31 @@ class PyEngine {
          .eos_token_id = eos_token_id});
   }
 
-  // Serves the prompts with static batching over the engine's max_seqs slots; returns each
-  // request's new tokens, in request order.
+  // Serves the prompts over the engine's max_seqs block-table rows under the given scheduling
+  // policy; returns each request's new tokens, in request order. arrivals_s, when given, holds
+  // one arrival time per prompt.
   std::vector<std::vector<std::int32_t>> serve(
-      const std::vector<std::vector<std::int32_t>>& prompts,
-      const std::vector<int>& max_new_tokens) {
+      const std::vector<std::vector<std::int32_t>>& prompts, const std::vector<int>& max_new_tokens,
+      const std::string& policy, const std::vector<double>& arrivals_s) {
     if (prompts.size() != max_new_tokens.size()) throw kvb::Error("one length per prompt");
+    if (!arrivals_s.empty() && arrivals_s.size() != prompts.size()) {
+      throw kvb::Error("one arrival time per prompt");
+    }
+    const auto parsed = kvb::schedule_policy_from_name(policy);
+    if (!parsed) throw kvb::Error("unknown scheduling policy " + policy);
     std::vector<kvb::cuda::ServeRequest> requests;
     for (std::size_t i = 0; i < prompts.size(); ++i) {
-      requests.push_back({static_cast<int>(i), prompts[i], max_new_tokens[i]});
+      requests.push_back({.id = static_cast<int>(i),
+                          .prompt = prompts[i],
+                          .max_new_tokens = max_new_tokens[i],
+                          .arrival_s = arrivals_s.empty() ? 0.0 : arrivals_s[i]});
     }
     std::vector<std::vector<std::int32_t>> tokens(prompts.size());
-    kvb::cuda::serve(engine_, requests, [&](const kvb::cuda::ServeStep& step) {
+    serve_stats_ = {};
+    kvb::cuda::serve(engine_, requests, {.policy = *parsed}, [&](const kvb::cuda::ServeStep& step) {
+      serve_stats_["steps"] += 1;
+      serve_stats_["preemptions"] += static_cast<int>(step.plan.preempt.size());
+      serve_stats_["max_running"] = std::max(serve_stats_["max_running"], step.usage.running);
       for (const kvb::StepResult::Token& token : step.result.tokens) {
         tokens[token.seq].push_back(token.token);
       }
@@ -283,8 +298,20 @@ class PyEngine {
     return tokens;
   }
 
+  // Counters of the latest serve(): steps, preemptions, max_running.
+  std::map<std::string, int> serve_stats() const { return serve_stats_; }
+  // Graphs the engine holds launch counters for: replayed, eager, captured, evicted.
+  std::map<std::string, std::int64_t> graph_stats() const {
+    const kvb::cuda::GraphStats& stats = engine_.graph_stats();
+    return {{"replayed", stats.replayed},
+            {"eager", stats.eager},
+            {"captured", stats.captured},
+            {"evicted", stats.evicted}};
+  }
+
  private:
   kvb::cuda::Engine engine_;
+  std::map<std::string, int> serve_stats_;
 };
 
 }  // namespace
@@ -304,12 +331,15 @@ NB_MODULE(_kvb, m) {
 
   nb::class_<PyEngine>(m, "Engine")
       .def(nb::init<const std::string&, int, int, int, int, const std::string&, const std::string&,
-                    bool, const std::string&, bool>(),
+                    bool, const std::string&, bool, int, int>(),
            "model_dir"_a, "max_ctx"_a = 2048, "max_seqs"_a = 1, "max_step_tokens"_a = 0,
            "kv_block_size"_a = 0, "kv_layout"_a = "head_major", "gemm"_a = "fp32", "graph"_a = true,
-           "plan"_a = "greedy", "wide_key_loads"_a = true)
+           "plan"_a = "greedy", "wide_key_loads"_a = true, "kv_blocks"_a = 0, "max_graphs"_a = 16)
       .def("feed", &PyEngine::feed, "ids"_a, "start"_a = 0, "seq"_a = 0, "capture"_a = false)
       .def("generate", &PyEngine::generate, "prompt"_a, "max_new_tokens"_a, "temperature"_a = 0.0f,
            "top_k"_a = 0, "top_p"_a = 1.0f, "seed"_a = 0, "eos_token_id"_a = -1)
-      .def("serve", &PyEngine::serve, "prompts"_a, "max_new_tokens"_a);
+      .def("serve", &PyEngine::serve, "prompts"_a, "max_new_tokens"_a, "policy"_a = "static",
+           "arrivals_s"_a = std::vector<double>{})
+      .def("serve_stats", &PyEngine::serve_stats)
+      .def("graph_stats", &PyEngine::graph_stats);
 }

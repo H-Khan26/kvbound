@@ -36,6 +36,19 @@ struct EngineConfig {
   bool wide_key_loads = true;
   // Replays decode-shaped steps from a captured CUDA graph instead of launching each kernel.
   bool use_graph = true;
+  // Graphs kept at once. A graph serves one row count, and continuous batching changes the row
+  // count whenever a sequence joins or leaves, so the least recently used graph is dropped when
+  // a new row count needs one.
+  int max_graphs = 16;
+};
+
+// How the engine launched its steps so far.
+struct GraphStats {
+  std::int64_t replayed = 0;  // steps launched from a graph
+  std::int64_t eager = 0;     // steps launched kernel by kernel
+  int captured = 0;           // graphs built, counting a row count again after its eviction
+  int evicted = 0;
+  double capture_s = 0.0;  // time spent capturing and instantiating
 };
 
 // Capture-site name to values, row-major with one row per token (or per output), as FP32.
@@ -73,6 +86,7 @@ class Engine {
   const std::vector<std::size_t>& value_sizes() const noexcept { return model_->value_sizes(); }
   int kv_block_size() const noexcept { return static_cast<int>(kv_->dims().block_size); }
   int kv_free_blocks() const noexcept { return blocks_.n_free(); }
+  const GraphStats& graph_stats() const noexcept { return graph_stats_; }
 
   // --- Raw step -------------------------------------------------------------------------------
 
@@ -95,8 +109,10 @@ class Engine {
   // a plan allocates them, so more sequences can be registered than fit in the cache at once.
   void add_sequence(int seq, std::span<const std::int32_t> prompt,
                     const SamplerConfig& sampler = {});
-  // Applies one plan: frees, allocations, then a forward step over the planned tokens. Each
-  // sequence whose known tokens are all processed gets a sampled token appended.
+  // Applies one plan: frees, preemptions, allocations, then a forward step over the planned
+  // tokens. Each sequence whose known tokens are all processed gets a sampled token appended. A
+  // preempted sequence keeps its tokens and sampler but holds no cache until blocks are
+  // allocated again.
   StepResult execute(const StepPlan& plan);
   bool has_sequence(int seq) const noexcept { return sequences_.contains(seq); }
   std::size_t n_sequences() const noexcept { return sequences_.size(); }
@@ -114,7 +130,13 @@ class Engine {
     Sampler sampler;
   };
 
+  struct Graph {
+    cudaGraphExec_t exec = nullptr;
+    std::int64_t last_used = 0;  // value of graph_stats_.replayed at the latest launch
+  };
+
   Sequence& sequence(int seq);
+  void release_cache(Sequence& s);
   void run_graph(int n_tokens, int n_out);
 
   EngineConfig config_;
@@ -130,7 +152,8 @@ class Engine {
   DeviceBuffer rows_dev_, out_rows_dev_;
   std::size_t last_n_out_ = 0;
   OpTimes* op_times_ = nullptr;
-  std::unordered_map<std::int64_t, cudaGraphExec_t> graphs_;  // keyed by (n_tokens, n_out)
+  std::unordered_map<std::int64_t, Graph> graphs_;  // keyed by (n_tokens, n_out)
+  GraphStats graph_stats_;
 };
 
 }  // namespace kvb::cuda

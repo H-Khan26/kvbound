@@ -1,11 +1,11 @@
-"""Synthetic workloads: a list of requests with prompt and output lengths drawn from a
-distribution described in configs/workloads/<name>.toml.
+"""Synthetic workloads: a list of requests with arrival times and with prompt and output
+lengths drawn from a distribution described in configs/workloads/<name>.toml.
 
 A trace stores token ids, not text, so every engine that replays it processes the same tokens.
 Prompt ids are random: with a fixed output length (EOS ignored) their content does not change
-the amount of work.
+the amount of work. Requests arrive all at once, or as a Poisson process when a rate is given.
 
-Usage: python -m kvbound.workload <name> [--max-ctx 1024]   # prints a summary of the lengths
+Usage: python -m kvbound.workload <name> [--max-ctx 1024] [--rate 4]   # prints a summary
 """
 
 import argparse
@@ -49,6 +49,7 @@ class Workload:
     seed: int
     prompt: Lengths
     output: Lengths
+    arrival_rate: float = 0.0  # requests per second; 0 queues every request at time zero
 
 
 def load(name: str) -> Workload:
@@ -64,18 +65,34 @@ def load(name: str) -> Workload:
         seed=raw["seed"],
         prompt=Lengths(**raw["prompt"]),
         output=Lengths(**raw["output"]),
+        arrival_rate=raw.get("arrival", {}).get("rate", 0.0),
     )
 
 
-def trace(workload: Workload, vocab_size: int, max_ctx: int) -> dict[str, Any]:
+def arrival_times(seed: int, n: int, rate: float) -> list[float]:
+    """Arrival times in seconds of a Poisson process with `rate` requests per second, the first
+    at zero. A rate of 0 puts every arrival at zero."""
+    if rate <= 0:
+        return [0.0] * n
+    # A separate stream, so a workload's lengths and token ids do not depend on the rate.
+    gaps = np.random.default_rng([seed, 1]).exponential(1.0 / rate, n)
+    gaps[0] = 0.0
+    return [float(t) for t in np.cumsum(gaps)]
+
+
+def trace(
+    workload: Workload, vocab_size: int, max_ctx: int, arrival_rate: float | None = None
+) -> dict[str, Any]:
     """The requests of a workload, in arrival order, as kvb-bench reads them.
 
     A request longer than max_ctx keeps its prompt (cut to leave room for two tokens) and loses
-    output length.
+    output length. arrival_rate overrides the workload's own rate.
     """
+    rate = workload.arrival_rate if arrival_rate is None else arrival_rate
     rng = np.random.default_rng(workload.seed)
     prompts = workload.prompt.sample(rng, workload.n_requests)
     outputs = workload.output.sample(rng, workload.n_requests)
+    arrivals = arrival_times(workload.seed, workload.n_requests, rate)
     requests = []
     for i, (drawn_prompt, drawn_output) in enumerate(zip(prompts, outputs, strict=True)):
         n_prompt = min(drawn_prompt, max_ctx - 2)
@@ -84,19 +101,27 @@ def trace(workload: Workload, vocab_size: int, max_ctx: int) -> dict[str, Any]:
                 "id": i,
                 "prompt": rng.integers(0, vocab_size, n_prompt).tolist(),
                 "max_new_tokens": max(2, min(drawn_output, max_ctx - n_prompt)),
+                "arrival_s": arrivals[i],
             }
         )
-    return {"name": workload.name, "seed": workload.seed, "requests": requests}
+    return {
+        "name": workload.name,
+        "seed": workload.seed,
+        "arrival_rate": rate,
+        "requests": requests,
+    }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("name")
     parser.add_argument("--max-ctx", type=int, default=1024)
+    parser.add_argument("--rate", type=float, default=None, help="arrivals per second")
     args = parser.parse_args()
     workload = load(args.name)
-    requests = trace(workload, 32000, args.max_ctx)["requests"]
+    requests = trace(workload, 32000, args.max_ctx, args.rate)["requests"]
     print(f"{workload.name}: {workload.description}")
+    print(f"  arrivals over {requests[-1]['arrival_s']:.1f} s")
     for label, values in (
         ("prompt", [len(r["prompt"]) for r in requests]),
         ("output", [r["max_new_tokens"] for r in requests]),

@@ -3,10 +3,12 @@
 // wrapper (kvbound.bench) derives TTFT/TPOT and memory use, adds the machine fingerprint and
 // writes the result record.
 //
-// Every request is queued at time zero. With --slots 1 they run one after another; with more
-// slots they run in static batches.
+// A request is queued at its arrival time, zero unless the trace says otherwise. --policy picks
+// how the --slots sequences that fit in the cache are chosen: static batches, or continuous
+// batching, which is meant to run with small KV blocks (--kv-block-size, --kv-blocks).
 //
-// Trace file: {"requests": [{"id": 0, "prompt": [1, 2, ...], "max_new_tokens": 64}, ...]}
+// Trace file: {"requests": [{"id": 0, "prompt": [1, 2, ...], "max_new_tokens": 64,
+//                            "arrival_s": 0.0}, ...]}
 
 #include <chrono>
 #include <cstdio>
@@ -42,6 +44,9 @@ std::vector<Request> load_trace(const std::string& path) {
     Request request;
     request.id = static_cast<int>(entry.at("id").as_int());
     request.max_new_tokens = static_cast<int>(entry.at("max_new_tokens").as_int());
+    if (const kvb::json::Value* arrival = entry.find("arrival_s")) {
+      request.arrival_s = arrival->as_number();
+    }
     for (const kvb::json::Value& token : entry.at("prompt").as_array()) {
       request.prompt.push_back(static_cast<std::int32_t>(token.as_int()));
     }
@@ -119,16 +124,19 @@ struct OpProfile {
 // One pass over the trace. Times are seconds from the start of the pass.
 struct Pass {
   double total_s = 0.0;
-  // Per step: when it finished, the rows it processed, and cache occupancy after it.
-  std::vector<double> step_end_s;
-  std::vector<int> step_rows, step_running;
+  // Per step: when it was planned and when it finished, the rows it processed and the sequences
+  // they belong to, the sequences it preempted, and the queue and cache occupancy after it.
+  std::vector<double> step_start_s, step_end_s;
+  std::vector<int> step_rows, step_seqs, step_preempted, step_running, step_waiting;
   std::vector<long long> step_reserved, step_used;
+  kvb::cuda::GraphStats graphs;  // of this pass alone
   // Per request, in trace order.
   std::vector<std::vector<double>> token_times;
   std::vector<std::vector<std::int32_t>> tokens;
 };
 
-Pass run_trace(Engine& engine, const std::vector<Request>& requests, OpProfile* profile) {
+Pass run_trace(Engine& engine, const std::vector<Request>& requests,
+               const kvb::cuda::ServeOptions& options, OpProfile* profile) {
   std::map<int, std::size_t> index;
   for (std::size_t i = 0; i < requests.size(); ++i) index[requests[i].id] = i;
 
@@ -138,9 +146,10 @@ Pass run_trace(Engine& engine, const std::vector<Request>& requests, OpProfile* 
   OpTimes times;
   std::set<int> emitted;  // sequences that have produced a token: they are decoding
   if (profile != nullptr) engine.set_op_times(&times);
+  const kvb::cuda::GraphStats before = engine.graph_stats();
   const Clock::time_point start = Clock::now();
-  kvb::cuda::serve(engine, requests, [&](const kvb::cuda::ServeStep& step) {
-    const double now = seconds_since(start);
+  kvb::cuda::serve(engine, requests, options, [&](const kvb::cuda::ServeStep& step) {
+    const double now = step.time_s;
     std::vector<int> emitted_now;
     int rows = 0;
     for (const kvb::StepPlan::Run& run : step.plan.run) rows += run.n_tokens;
@@ -149,9 +158,13 @@ Pass run_trace(Engine& engine, const std::vector<Request>& requests, OpProfile* 
       pass.token_times[index.at(token.seq)].push_back(now);
       pass.tokens[index.at(token.seq)].push_back(token.token);
     }
+    pass.step_start_s.push_back(step.start_s);
     pass.step_end_s.push_back(now);
     pass.step_rows.push_back(rows);
+    pass.step_seqs.push_back(static_cast<int>(step.plan.run.size()));
+    pass.step_preempted.push_back(static_cast<int>(step.plan.preempt.size()));
     pass.step_running.push_back(step.usage.running);
+    pass.step_waiting.push_back(step.usage.waiting);
     pass.step_reserved.push_back(step.usage.reserved);
     pass.step_used.push_back(step.usage.used);
 
@@ -172,24 +185,44 @@ Pass run_trace(Engine& engine, const std::vector<Request>& requests, OpProfile* 
   });
   pass.total_s = seconds_since(start);
   engine.set_op_times(nullptr);
+  const kvb::cuda::GraphStats& after = engine.graph_stats();
+  pass.graphs = {.replayed = after.replayed - before.replayed,
+                 .eager = after.eager - before.eager,
+                 .captured = after.captured - before.captured,
+                 .evicted = after.evicted - before.evicted,
+                 .capture_s = after.capture_s - before.capture_s};
   return pass;
 }
 
 void print_pass(const Pass& pass, const std::vector<Request>& requests, bool last) {
-  std::printf("    {\"total_s\": %.9f,\n     \"steps\": {", pass.total_s);
+  std::printf("    {\"total_s\": %.9f,\n", pass.total_s);
+  std::printf(
+      "     \"graphs\": {\"replayed_steps\": %lld, \"eager_steps\": %lld, \"captured\": %d, "
+      "\"evicted\": %d, \"capture_s\": %.6f},\n     \"steps\": {",
+      static_cast<long long>(pass.graphs.replayed), static_cast<long long>(pass.graphs.eager),
+      pass.graphs.captured, pass.graphs.evicted, pass.graphs.capture_s);
+  const auto print_int = [](int n) { std::printf("%d", n); };
+  print_array("start_s", pass.step_start_s, [](double t) { std::printf("%.6f", t); });
+  std::printf(", ");
   print_array("end_s", pass.step_end_s, [](double t) { std::printf("%.6f", t); });
   std::printf(", ");
-  print_array("rows", pass.step_rows, [](int n) { std::printf("%d", n); });
+  print_array("rows", pass.step_rows, print_int);
   std::printf(", ");
-  print_array("running", pass.step_running, [](int n) { std::printf("%d", n); });
+  print_array("seqs", pass.step_seqs, print_int);
+  std::printf(", ");
+  print_array("preempted", pass.step_preempted, print_int);
+  std::printf(", ");
+  print_array("running", pass.step_running, print_int);
+  std::printf(", ");
+  print_array("waiting", pass.step_waiting, print_int);
   std::printf(", ");
   print_array("reserved_tokens", pass.step_reserved, [](long long n) { std::printf("%lld", n); });
   std::printf(", ");
   print_array("used_tokens", pass.step_used, [](long long n) { std::printf("%lld", n); });
   std::printf("},\n     \"requests\": [\n");
   for (std::size_t r = 0; r < requests.size(); ++r) {
-    std::printf("      {\"id\": %d, \"n_prompt\": %zu, ", requests[r].id,
-                requests[r].prompt.size());
+    std::printf("      {\"id\": %d, \"n_prompt\": %zu, \"arrival_s\": %.6f, ", requests[r].id,
+                requests[r].prompt.size(), requests[r].arrival_s);
     print_array("token_times_s", pass.token_times[r], [](double t) { std::printf("%.9f", t); });
     std::printf(", ");
     print_array("tokens", pass.tokens[r], [](std::int32_t t) { std::printf("%d", t); });
@@ -210,7 +243,11 @@ int run(int argc, char** argv) {
   config.max_seqs = args.integer("slots", 1);
   config.max_ctx = args.integer("max-ctx", 2048);
   config.max_step_tokens = args.integer("max-step-tokens", 0);
+  config.kv_block_size = args.integer("kv-block-size", 0);
+  config.kv_blocks = args.integer("kv-blocks", 0);
   config.use_graph = args.integer("graph", 1) != 0;
+  config.max_graphs = args.integer("max-graphs", config.max_graphs);
+  const std::string policy = args.str("policy", "static");
   const std::string layout = args.str("kv-layout", "head_major");
   const std::string gemm = args.str("gemm", "fp32");
   const std::string plan = args.str("plan", "greedy");
@@ -224,6 +261,12 @@ int run(int argc, char** argv) {
     config.gemm = *value;
   } else {
     throw kvb::Error("unknown --gemm " + gemm);
+  }
+  kvb::cuda::ServeOptions serve_options;
+  if (const auto value = kvb::schedule_policy_from_name(policy)) {
+    serve_options.policy = *value;
+  } else {
+    throw kvb::Error("unknown --policy " + policy);
   }
   if (plan != "greedy" && plan != "naive") throw kvb::Error("unknown --plan " + plan);
   config.plan = plan == "naive" ? kvb::PlanStrategy::Naive : kvb::PlanStrategy::GreedyBySize;
@@ -239,12 +282,14 @@ int run(int argc, char** argv) {
   KVB_CUDA(cudaMemGetInfo(&free_after, &total));
 
   const kvb::cuda::EngineConfig& resolved = engine.config();
-  for (int i = 0; i < warmup; ++i) run_trace(engine, requests, nullptr);
+  for (int i = 0; i < warmup; ++i) run_trace(engine, requests, serve_options, nullptr);
   std::vector<Pass> passes;
-  for (int i = 0; i < iters; ++i) passes.push_back(run_trace(engine, requests, nullptr));
+  for (int i = 0; i < iters; ++i) {
+    passes.push_back(run_trace(engine, requests, serve_options, nullptr));
+  }
   // One more pass with every op synchronized and timed.
   OpProfile profile;
-  if (profile_ops) run_trace(engine, requests, &profile);
+  if (profile_ops) run_trace(engine, requests, serve_options, &profile);
 
   const kvb::ModelConfig& model = engine.model_config();
   const kvb::cuda::EngineMemory memory = engine.memory();
@@ -254,14 +299,15 @@ int run(int argc, char** argv) {
       "\"total_memory_bytes\": %zu},\n",
       prop.name, prop.major, prop.minor, prop.totalGlobalMem);
   std::printf(
-      "  \"config\": {\"slots\": %d, \"max_ctx\": %d, \"max_step_tokens\": %d, "
-      "\"max_outputs\": %d, "
+      "  \"config\": {\"policy\": \"%s\", \"slots\": %d, \"max_ctx\": %d, "
+      "\"max_step_tokens\": %d, \"max_outputs\": %d, "
       "\"kv_block_size\": %d, \"kv_blocks\": %d, \"kv_layout\": \"%s\", "
-      "\"gemm_accumulate\": \"%s\", \"graph\": %s, \"plan\": \"%s\", \"warmup\": %d, "
-      "\"iters\": %d},\n",
-      resolved.max_seqs, resolved.max_ctx, resolved.max_step_tokens, resolved.max_outputs,
-      resolved.kv_block_size, resolved.kv_blocks, layout.c_str(), gemm.c_str(),
-      resolved.use_graph ? "true" : "false", plan.c_str(), warmup, iters);
+      "\"gemm_accumulate\": \"%s\", \"graph\": %s, \"max_graphs\": %d, \"plan\": \"%s\", "
+      "\"warmup\": %d, \"iters\": %d},\n",
+      policy.c_str(), resolved.max_seqs, resolved.max_ctx, resolved.max_step_tokens,
+      resolved.max_outputs, resolved.kv_block_size, resolved.kv_blocks, layout.c_str(),
+      gemm.c_str(), resolved.use_graph ? "true" : "false", resolved.max_graphs, plan.c_str(),
+      warmup, iters);
   std::printf(
       "  \"model\": {\"vocab_size\": %lld, \"hidden_size\": %lld, \"n_layers\": %lld, "
       "\"n_heads\": %lld, \"n_kv_heads\": %lld, \"intermediate_size\": %lld},\n",
