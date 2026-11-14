@@ -1,0 +1,20 @@
+# Spec-sheet ceilings. Measured ceilings live in the microbenchmark records under results/raw/.
+name = "NVIDIA GeForce RTX 4070"
+arch = "ada"
+compute_capability = "8.9"
+sm_count = 46
+tensor_cores = 184
+boost_clock_mhz = 2475
+memory_gb = 12
+memory_type = "GDDR6X"
+memory_bus_bits = 192
+memory_bandwidth_gbs = 504
+l2_cache_mb = 36
+
+[spec_peak_dense]
+fp32_tflops = 29.1
+fp16_tensor_fp16acc_tflops = 116.6
+fp16_tensor_fp32acc_tflops = 58.3  # GeForce runs FP32 accumulate at half rate
+int8_tensor_tops = 233.2
+fp8_tensor_fp16acc_tflops = 233.2
+fp8_tensor_fp32acc_tflops = 116.6
