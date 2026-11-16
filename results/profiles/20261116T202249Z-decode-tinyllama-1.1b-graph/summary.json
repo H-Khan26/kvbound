@@ -1,0 +1,22 @@
+{
+  "steps": 256,
+  "gpu_ms_per_step": {},
+  "gpu_ms_per_step_total": 0,
+  "api_per_step": {
+    "cudaStreamSynchronize": {
+      "ms": 4.86713133203125,
+      "calls": 1.0078125,
+      "median_us": 4860.7415
+    },
+    "cudaGraphLaunch": {
+      "ms": 0.06787773046875,
+      "calls": 1.0,
+      "median_us": 56.9555
+    },
+    "cudaLaunchKernel": {
+      "ms": 0.02099362890625,
+      "calls": 2.18359375,
+      "median_us": 0.618
+    }
+  }
+}

@@ -1,0 +1,301 @@
+{
+  "schema_version": 1,
+  "run_id": "20261114T033541Z-microbench-gemm_peak-528d",
+  "kind": "microbench.gemm_peak",
+  "created_utc": "2026-11-14T03:35:41+00:00",
+  "tags": [
+    "os=windows",
+    "clock_varied"
+  ],
+  "engine": {
+    "name": "kvb-gemm_peak.exe",
+    "preset": "cuda"
+  },
+  "model": null,
+  "params": {
+    "library": "cublasLt",
+    "target_seconds": 0.25,
+    "repeats": 5
+  },
+  "metrics": {
+    "peak_tops": {
+      "fp32": 20.28,
+      "fp16_acc16": 91.45,
+      "fp16_acc32": 59.12,
+      "int8": 215.19,
+      "fp8_e4m3": 118.26
+    },
+    "unsupported": {},
+    "decode_gemm_weight_gbs": 382.85
+  },
+  "samples": {
+    "device": {
+      "name": "NVIDIA GeForce RTX 4070",
+      "compute_capability": "8.9",
+      "sm_count": 46,
+      "l2_cache_bytes": 37748736,
+      "total_memory_bytes": 12878086144
+    },
+    "peak": [
+      {
+        "precision": "fp32",
+        "n": 2048,
+        "status": "success",
+        "best_tops": 16.24,
+        "median_tops": 16.04
+      },
+      {
+        "precision": "fp32",
+        "n": 4096,
+        "status": "success",
+        "best_tops": 20.18,
+        "median_tops": 20.11
+      },
+      {
+        "precision": "fp32",
+        "n": 8192,
+        "status": "success",
+        "best_tops": 20.28,
+        "median_tops": 20.09
+      },
+      {
+        "precision": "fp16_acc16",
+        "n": 2048,
+        "status": "success",
+        "best_tops": 87.33,
+        "median_tops": 87.17
+      },
+      {
+        "precision": "fp16_acc16",
+        "n": 4096,
+        "status": "success",
+        "best_tops": 90.37,
+        "median_tops": 89.68
+      },
+      {
+        "precision": "fp16_acc16",
+        "n": 8192,
+        "status": "success",
+        "best_tops": 91.45,
+        "median_tops": 90.86
+      },
+      {
+        "precision": "fp16_acc32",
+        "n": 2048,
+        "status": "success",
+        "best_tops": 55.51,
+        "median_tops": 55.08
+      },
+      {
+        "precision": "fp16_acc32",
+        "n": 4096,
+        "status": "success",
+        "best_tops": 59.12,
+        "median_tops": 58.33
+      },
+      {
+        "precision": "fp16_acc32",
+        "n": 8192,
+        "status": "success",
+        "best_tops": 58.55,
+        "median_tops": 58.5
+      },
+      {
+        "precision": "int8",
+        "n": 2048,
+        "status": "success",
+        "best_tops": 177.49,
+        "median_tops": 175.89
+      },
+      {
+        "precision": "int8",
+        "n": 4096,
+        "status": "success",
+        "best_tops": 195.0,
+        "median_tops": 193.42
+      },
+      {
+        "precision": "int8",
+        "n": 8192,
+        "status": "success",
+        "best_tops": 215.19,
+        "median_tops": 214.41
+      },
+      {
+        "precision": "fp8_e4m3",
+        "n": 2048,
+        "status": "success",
+        "best_tops": 107.0,
+        "median_tops": 105.87
+      },
+      {
+        "precision": "fp8_e4m3",
+        "n": 4096,
+        "status": "success",
+        "best_tops": 115.37,
+        "median_tops": 114.4
+      },
+      {
+        "precision": "fp8_e4m3",
+        "n": 8192,
+        "status": "success",
+        "best_tops": 118.26,
+        "median_tops": 116.98
+      }
+    ],
+    "shapes": {
+      "precision": "fp16_acc32",
+      "rows": 2048,
+      "cols": 2048,
+      "distinct_weight_matrices": 127,
+      "points": [
+        {
+          "tokens": 1,
+          "status": "success",
+          "best_gflops": 382.85,
+          "median_gflops": 381.62,
+          "weight_gbs": 382.85
+        },
+        {
+          "tokens": 2,
+          "status": "success",
+          "best_gflops": 740.12,
+          "median_gflops": 735.82,
+          "weight_gbs": 370.06
+        },
+        {
+          "tokens": 4,
+          "status": "success",
+          "best_gflops": 1485.89,
+          "median_gflops": 1477.37,
+          "weight_gbs": 371.47
+        },
+        {
+          "tokens": 8,
+          "status": "success",
+          "best_gflops": 2964.74,
+          "median_gflops": 2939.26,
+          "weight_gbs": 370.59
+        },
+        {
+          "tokens": 16,
+          "status": "success",
+          "best_gflops": 5898.12,
+          "median_gflops": 5851.72,
+          "weight_gbs": 368.63
+        },
+        {
+          "tokens": 32,
+          "status": "success",
+          "best_gflops": 11985.58,
+          "median_gflops": 11858.79,
+          "weight_gbs": 374.55
+        },
+        {
+          "tokens": 64,
+          "status": "success",
+          "best_gflops": 23262.48,
+          "median_gflops": 23081.56,
+          "weight_gbs": 363.48
+        },
+        {
+          "tokens": 128,
+          "status": "success",
+          "best_gflops": 36355.4,
+          "median_gflops": 36280.27,
+          "weight_gbs": 284.03
+        },
+        {
+          "tokens": 256,
+          "status": "success",
+          "best_gflops": 36618.91,
+          "median_gflops": 36284.73,
+          "weight_gbs": 143.04
+        },
+        {
+          "tokens": 512,
+          "status": "success",
+          "best_gflops": 50373.33,
+          "median_gflops": 49921.99,
+          "weight_gbs": 98.39
+        },
+        {
+          "tokens": 1024,
+          "status": "success",
+          "best_gflops": 53445.92,
+          "median_gflops": 52949.9,
+          "weight_gbs": 52.19
+        }
+      ]
+    }
+  },
+  "nvml": {
+    "interval_s": 1.0,
+    "n_samples": 39,
+    "sm_clock_mhz": {
+      "min": 2430,
+      "mean": 2698.4615384615386,
+      "max": 2805
+    },
+    "mem_clock_mhz": {
+      "min": 10251,
+      "mean": 10251.0,
+      "max": 10251
+    },
+    "temp_c": {
+      "min": 46,
+      "mean": 64.74358974358974,
+      "max": 71
+    },
+    "power_w": {
+      "min": 55.091,
+      "mean": 174.10892307692308,
+      "max": 199.345
+    },
+    "util_pct": {
+      "min": 50,
+      "mean": 98.71794871794872,
+      "max": 100
+    },
+    "mem_used_mib": {
+      "min": 1501,
+      "mean": 3156.8205128205127,
+      "max": 3248
+    },
+    "sm_clock_mhz_busy": {
+      "min": 2430,
+      "max": 2805,
+      "n": 39
+    }
+  },
+  "fingerprint": {
+    "device_id": "rtx4070-d6f35005",
+    "device_config": "rtx4070",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 4070",
+      "uuid": "GPU-d6f35005-b318-2764-14fe-29fbe7c71b7f",
+      "compute_capability": "8.9",
+      "memory_total_mib": 12282,
+      "driver_version": "617.42",
+      "sm_clock_max_mhz": 3105,
+      "pcie_gen_max": 4,
+      "pcie_width_max": 16,
+      "power_limit_w": 200.0,
+      "persistence_mode": null
+    },
+    "software": {
+      "os_class": "windows",
+      "os": "Windows 11 (10.0.26200)",
+      "cpu": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+      "python": "3.12.15",
+      "torch": "2.11.0+cu128",
+      "torch_cuda": "12.8",
+      "nvcc": "12.9",
+      "cmake": "4.4.4"
+    },
+    "git": {
+      "sha": "1f50c54e3fdb3b4ae9ccac985ceb689c0ef60b54",
+      "dirty": false
+    }
+  }
+}

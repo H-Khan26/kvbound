@@ -1,0 +1,199 @@
+{
+  "schema_version": 1,
+  "run_id": "20261114T033504Z-microbench-pointer_chase-c2b5",
+  "kind": "microbench.pointer_chase",
+  "created_utc": "2026-11-14T03:35:04+00:00",
+  "tags": [
+    "os=windows"
+  ],
+  "engine": {
+    "name": "kvb-pointer_chase.exe",
+    "preset": "cuda"
+  },
+  "model": null,
+  "params": {
+    "node_bytes": 128,
+    "measured_hops": 1048576,
+    "repeats": 3
+  },
+  "metrics": {
+    "l1_ns": 14.33,
+    "l2_ns": 171.9,
+    "dram_ns": 246.96
+  },
+  "samples": {
+    "device": {
+      "name": "NVIDIA GeForce RTX 4070",
+      "compute_capability": "8.9",
+      "sm_count": 46,
+      "l2_cache_bytes": 37748736,
+      "total_memory_bytes": 12878086144
+    },
+    "points": [
+      {
+        "working_set_bytes": 4096,
+        "best_ns_per_hop": 14.33,
+        "median_ns_per_hop": 15.07
+      },
+      {
+        "working_set_bytes": 8192,
+        "best_ns_per_hop": 14.33,
+        "median_ns_per_hop": 14.73
+      },
+      {
+        "working_set_bytes": 16384,
+        "best_ns_per_hop": 14.34,
+        "median_ns_per_hop": 15.27
+      },
+      {
+        "working_set_bytes": 32768,
+        "best_ns_per_hop": 14.36,
+        "median_ns_per_hop": 15.98
+      },
+      {
+        "working_set_bytes": 65536,
+        "best_ns_per_hop": 14.37,
+        "median_ns_per_hop": 15.6
+      },
+      {
+        "working_set_bytes": 131072,
+        "best_ns_per_hop": 86.75,
+        "median_ns_per_hop": 86.95
+      },
+      {
+        "working_set_bytes": 262144,
+        "best_ns_per_hop": 107.05,
+        "median_ns_per_hop": 107.9
+      },
+      {
+        "working_set_bytes": 524288,
+        "best_ns_per_hop": 111.03,
+        "median_ns_per_hop": 113.03
+      },
+      {
+        "working_set_bytes": 1048576,
+        "best_ns_per_hop": 115.62,
+        "median_ns_per_hop": 115.85
+      },
+      {
+        "working_set_bytes": 2097152,
+        "best_ns_per_hop": 123.45,
+        "median_ns_per_hop": 123.52
+      },
+      {
+        "working_set_bytes": 4194304,
+        "best_ns_per_hop": 141.23,
+        "median_ns_per_hop": 153.44
+      },
+      {
+        "working_set_bytes": 8388608,
+        "best_ns_per_hop": 171.9,
+        "median_ns_per_hop": 194.42
+      },
+      {
+        "working_set_bytes": 16777216,
+        "best_ns_per_hop": 234.53,
+        "median_ns_per_hop": 242.09
+      },
+      {
+        "working_set_bytes": 33554432,
+        "best_ns_per_hop": 244.38,
+        "median_ns_per_hop": 245.0
+      },
+      {
+        "working_set_bytes": 67108864,
+        "best_ns_per_hop": 244.78,
+        "median_ns_per_hop": 246.65
+      },
+      {
+        "working_set_bytes": 134217728,
+        "best_ns_per_hop": 244.73,
+        "median_ns_per_hop": 246.08
+      },
+      {
+        "working_set_bytes": 268435456,
+        "best_ns_per_hop": 248.37,
+        "median_ns_per_hop": 248.48
+      },
+      {
+        "working_set_bytes": 536870912,
+        "best_ns_per_hop": 246.96,
+        "median_ns_per_hop": 247.4
+      },
+      {
+        "working_set_bytes": 1073741824,
+        "best_ns_per_hop": 246.58,
+        "median_ns_per_hop": 247.03
+      }
+    ]
+  },
+  "nvml": {
+    "interval_s": 1.0,
+    "n_samples": 12,
+    "sm_clock_mhz": {
+      "min": 2790,
+      "mean": 2793.75,
+      "max": 2805
+    },
+    "mem_clock_mhz": {
+      "min": 10251,
+      "mean": 10251.0,
+      "max": 10251
+    },
+    "temp_c": {
+      "min": 47,
+      "mean": 47.916666666666664,
+      "max": 53
+    },
+    "power_w": {
+      "min": 55.045,
+      "mean": 63.67308333333333,
+      "max": 140.989
+    },
+    "util_pct": {
+      "min": 99,
+      "mean": 99.91666666666667,
+      "max": 100
+    },
+    "mem_used_mib": {
+      "min": 1501,
+      "mean": 2470.1666666666665,
+      "max": 2664
+    },
+    "sm_clock_mhz_busy": {
+      "min": 2790,
+      "max": 2805,
+      "n": 12
+    }
+  },
+  "fingerprint": {
+    "device_id": "rtx4070-d6f35005",
+    "device_config": "rtx4070",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 4070",
+      "uuid": "GPU-d6f35005-b318-2764-14fe-29fbe7c71b7f",
+      "compute_capability": "8.9",
+      "memory_total_mib": 12282,
+      "driver_version": "617.42",
+      "sm_clock_max_mhz": 3105,
+      "pcie_gen_max": 4,
+      "pcie_width_max": 16,
+      "power_limit_w": 200.0,
+      "persistence_mode": null
+    },
+    "software": {
+      "os_class": "windows",
+      "os": "Windows 11 (10.0.26200)",
+      "cpu": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+      "python": "3.12.15",
+      "torch": "2.11.0+cu128",
+      "torch_cuda": "12.8",
+      "nvcc": "12.9",
+      "cmake": "4.4.4"
+    },
+    "git": {
+      "sha": "1f50c54e3fdb3b4ae9ccac985ceb689c0ef60b54",
+      "dirty": false
+    }
+  }
+}
