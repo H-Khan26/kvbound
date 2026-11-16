@@ -1,7 +1,7 @@
 """The engine end to end: every capture site against the goldens, and greedy generation against
 the reference model token for token."""
 
-import gc
+import warnings
 
 import numpy as np
 import pytest
@@ -101,6 +101,11 @@ def reference_greedy(model, prompt, n_new):
         gaps.append(float(top.values[0] - top.values[1]))
         ids.append(int(top.indices[0]))
     return ids[len(prompt) :], gaps
+
+
+# About one FP16 step at logit magnitudes 16 to 32 (2**-6). Where the reference's best choice
+# leads the engine's by less than this, FP16 rounding can explain the difference.
+TIE_GAP = 0.02
 
 
 def fixture_prompts():
@@ -276,18 +281,24 @@ def test_real_model_matches_goldens_and_reference(kvb, name):
     prompts = [tensors[f"{p['id']}/input_ids"].tolist() for p in manifest["prompts"]]
     n_new = 48
 
-    # The FP32 reference and the engine do not fit in 8 GB together, so the reference goes first.
-    model = load_llama(spec.checkpoint_dir).to("cuda")
-    expected = [reference_greedy(model, prompt, n_new) for prompt in prompts]
-    del model
-    gc.collect()
-    torch.cuda.empty_cache()
-
     engine = kvb.Engine(str(spec.checkpoint_dir), max_ctx=256)
     assert_matches_goldens(engine, manifest, tensors, SPLITS[:2])
-    for prompt, (tokens, gaps) in zip(prompts, expected, strict=True):
-        actual = engine.generate(prompt, n_new)
-        if actual != tokens:
-            # FP16 arithmetic may flip a choice only where the reference itself was nearly tied.
-            first = next(i for i, (a, b) in enumerate(zip(actual, tokens, strict=True)) if a != b)
-            pytest.fail(f"diverged at new token {first}, reference top-2 gap {gaps[first]:.4f}")
+    outputs = [engine.generate(prompt, n_new) for prompt in prompts]
+
+    # The FP32 reference scores the engine's own continuations on the CPU, so it never shares the
+    # GPU with the engine and every new token is checked against the prefix the engine produced.
+    model = load_llama(spec.checkpoint_dir)
+    for meta, prompt, actual in zip(manifest["prompts"], prompts, outputs, strict=True):
+        assert len(actual) == n_new, meta["id"]
+        with torch.inference_mode():
+            logits = model(torch.tensor([prompt + actual]))[0, len(prompt) - 1 : -1].float()
+        # How far the reference's best choice leads the engine's choice; 0 where they agree.
+        lead = logits.max(-1).values - logits.gather(1, torch.tensor(actual)[:, None])[:, 0]
+        for i in torch.nonzero(lead).flatten().tolist():
+            if lead[i] >= TIE_GAP:
+                pytest.fail(f"{meta['id']} diverged at new token {i}, reference lead {lead[i]:.4f}")
+            warnings.warn(
+                f"{name} {meta['id']}: new token {i} is within {TIE_GAP} of the reference's "
+                f"choice (lead {lead[i]:.4f})",
+                stacklevel=1,
+            )
