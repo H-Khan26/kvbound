@@ -8,8 +8,10 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <initializer_list>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -224,12 +226,14 @@ Out<f16> embedding_quantized(const std::string& scheme, In<std::uint8_t> data, I
 
 // Writes k and v [tokens, kv_heads, head_dim] into a fresh cache at each token's kv_slot, then
 // attends q [tokens, heads, head_dim] over it for the tokens from query_from on.
-// block_table is [sequences, blocks_per_seq].
+// block_table is [sequences, blocks_per_seq]. kernel "decode" runs attention(); "prefill" plans
+// tiles over the query rows and runs attention_prefill().
 Out<f16> kv_attention(In<f16> q, In<f16> k, In<f16> v, In<std::int32_t> positions,
                       In<std::int32_t> seqs, In<std::int32_t> kv_slots,
                       In<std::int32_t> block_table, int block_size, int n_blocks,
                       const std::string& layout, int query_from, bool wide_key_loads,
-                      const std::string& kv_dtype) {
+                      const std::string& kv_dtype, const std::string& kernel) {
+  if (kernel != "decode" && kernel != "prefill") throw kvb::Error("unknown kernel " + kernel);
   const int n_tokens = static_cast<int>(q.shape(0)), n_heads = static_cast<int>(q.shape(1));
   const int head_dim = static_cast<int>(q.shape(2)), n_kv_heads = static_cast<int>(k.shape(1));
   const int blocks_per_seq = static_cast<int>(block_table.shape(1));
@@ -260,12 +264,23 @@ Out<f16> kv_attention(In<f16> q, In<f16> k, In<f16> v, In<std::int32_t> position
   kvb::kernels::kv_write(dk.as<f16>(), dv.as<f16>(), dr.as<StepRow>(), view, n_tokens, n_kv_heads,
                          head_dim, nullptr);
   const int n_query = n_tokens - query_from;
-  kvb::kernels::attention(dq.as<f16>() + static_cast<std::size_t>(query_from) * n_heads * head_dim,
-                          out.as<f16>(), dr.as<StepRow>() + query_from, view, n_query, n_heads,
-                          n_kv_heads, head_dim, max_ctx,
-                          wide_key_loads ? kvb::kernels::widest_key_loads(view, head_dim)
-                                         : kvb::kernels::KeyLoads::Scalar,
-                          nullptr);
+  const f16* query = dq.as<f16>() + static_cast<std::size_t>(query_from) * n_heads * head_dim;
+  if (kernel == "prefill") {
+    const std::vector<kvb::AttnTile> tiles =
+        kvb::plan_attention_tiles(std::span(rows).subspan(query_from), kvb::kernels::kAttnTileRows);
+    DeviceBuffer dt(std::max<std::size_t>(tiles.size(), 1) * sizeof(kvb::AttnTile));
+    KVB_CUDA(cudaMemcpy(dt.as(), tiles.data(), tiles.size() * sizeof(kvb::AttnTile),
+                        cudaMemcpyHostToDevice));
+    kvb::kernels::attention_prefill(query, out.as<f16>(), dr.as<StepRow>() + query_from,
+                                    dt.as<kvb::AttnTile>(), static_cast<int>(tiles.size()), view,
+                                    n_heads, n_kv_heads, head_dim, nullptr);
+  } else {
+    kvb::kernels::attention(query, out.as<f16>(), dr.as<StepRow>() + query_from, view, n_query,
+                            n_heads, n_kv_heads, head_dim, max_ctx,
+                            wide_key_loads ? kvb::kernels::widest_key_loads(view, head_dim)
+                                           : kvb::kernels::KeyLoads::Scalar,
+                            nullptr);
+  }
   return download<f16>(out.as(), {static_cast<std::size_t>(n_query), q.shape(1), q.shape(2)});
 }
 
@@ -413,7 +428,8 @@ NB_MODULE(_kvb, m) {
   m.def("linear", &linear, "weight"_a, "x"_a, "accumulate"_a = "fp32", "f32_out"_a = false);
   m.def("kv_attention", &kv_attention, "q"_a, "k"_a, "v"_a, "positions"_a, "seqs"_a, "kv_slots"_a,
         "block_table"_a, "block_size"_a, "n_blocks"_a, "layout"_a = "head_major",
-        "query_from"_a = 0, "wide_key_loads"_a = true, "kv_dtype"_a = "fp16");
+        "query_from"_a = 0, "wide_key_loads"_a = true, "kv_dtype"_a = "fp16",
+        "kernel"_a = "decode");
   m.def("linear_quantized", &linear_quantized, "scheme"_a, "data"_a, "scale"_a, "x"_a,
         "group_size"_a = 0, "f32_out"_a = false);
   m.def("dequantize", &dequantize, "scheme"_a, "data"_a, "scale"_a, "group_size"_a = 0,

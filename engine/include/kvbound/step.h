@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace kvb {
@@ -14,6 +15,17 @@ struct StepRow {
   std::int32_t seq;       // row of the KV block table
   std::int32_t kv_slot;   // physical cache slot: block * block_size + offset in block
 };
+
+// A run of consecutive step rows of one sequence at consecutive positions: prefill attention
+// handles one per block.
+struct AttnTile {
+  std::int32_t first_row;
+  std::int32_t n_rows;
+};
+
+// Splits rows, in order, into tiles of at most max_rows rows. A row joins the current tile while
+// it has the tile's seq, the position after the previous row's, and the tile has room.
+std::vector<AttnTile> plan_attention_tiles(std::span<const StepRow> rows, int max_rows);
 
 // What the engine does in one iteration, in the order free, preempt, alloc, run. Produced on the
 // CPU; carries no device state.

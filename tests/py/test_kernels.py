@@ -253,3 +253,104 @@ def test_attention_long_context_single_query(kvb, gen, layout, wide, kv_dtype):
         k, v = int8_readback(k), int8_readback(v)
     expected = reference_attention(q, k, v, positions, seqs, n_heads // n_kv_heads, ctx - 1)[-1:]
     assert tolerance.rel_rms(actual, expected) < 2 * F16_ROUNDING
+
+
+def masked_reference(q, k, v, positions, seqs, n_rep):
+    """reference_attention over every row at once: one mask over (query, key) pairs."""
+    q = q.float()
+    k, v = (x.float().repeat_interleave(n_rep, 1) for x in (k, v))
+    visible = (seqs[:, None] == seqs[None, :]) & (positions[None, :] <= positions[:, None])
+    scores = torch.einsum("thd,uhd->htu", q, k) / math.sqrt(q.shape[2])
+    weights = torch.softmax(scores.masked_fill(~visible, float("-inf")), dim=-1)
+    return torch.einsum("htu,uhd->thd", weights, v)
+
+
+def check_prefill(kvb, gen, steps, *, n_heads, n_kv_heads, head_dim, block_size, kv_dtype,
+                  layout="head_major", query_from=0):  # fmt: skip
+    """Runs both attention kernels over the rows (seq, position) of `steps`, from query_from on,
+    and compares each with the reference. Every sequence gets blocks in a random physical order.
+    """
+    seqs = torch.tensor([s for s, _ in steps], dtype=torch.int32)
+    positions = torch.tensor([p for _, p in steps], dtype=torch.int32)
+    n_seqs = int(seqs.max()) + 1
+    blocks_per_seq = math.ceil((int(positions.max()) + 1) / block_size)
+    n_blocks = n_seqs * blocks_per_seq
+    physical = torch.randperm(n_blocks, generator=gen).view(n_seqs, blocks_per_seq)
+    slots = (
+        physical[seqs.long(), (positions // block_size).long()] * block_size
+        + positions % block_size
+    ).to(torch.int32)
+    n = len(steps)
+    q, k, v = (rand_f16(gen, n, h, head_dim) for h in (n_heads, n_kv_heads, n_kv_heads))
+
+    def run(kernel):
+        return from_bits(
+            kvb.kv_attention(
+                bits(q), bits(k), bits(v), positions.numpy(), seqs.numpy(), slots.numpy(),
+                physical.to(torch.int32).numpy(), block_size, n_blocks, layout,
+                query_from=query_from, kv_dtype=kv_dtype, kernel=kernel,
+            )
+        )  # fmt: skip
+
+    prefill, decode = run("prefill"), run("decode")
+    if kv_dtype == "int8":
+        k, v = int8_readback(k), int8_readback(v)
+    expected = masked_reference(q, k, v, positions, seqs, n_heads // n_kv_heads)[query_from:]
+    assert tolerance.rel_rms(prefill, expected) < 2 * F16_ROUNDING
+    assert tolerance.rel_rms(prefill, decode) < 2 * F16_ROUNDING
+
+
+@pytest.mark.parametrize("kv_dtype", ["fp16", "int8"])
+@pytest.mark.parametrize("head_dim", [64, 128])
+@pytest.mark.parametrize(("n_heads", "n_kv_heads"), [(8, 2), (16, 2), (3, 3)])
+@pytest.mark.parametrize("length", [1, 17, 64, 65, 300])
+def test_prefill_attention_one_sequence(kvb, gen, length, n_heads, n_kv_heads, head_dim, kv_dtype):
+    """A prompt in one cache block, under GQA ratios 4, 8 and 1 (an odd one)."""
+    check_prefill(
+        kvb, gen, [(0, p) for p in range(length)], n_heads=n_heads, n_kv_heads=n_kv_heads,
+        head_dim=head_dim, block_size=length, kv_dtype=kv_dtype,
+    )  # fmt: skip
+
+
+@pytest.mark.parametrize("kv_dtype", ["fp16", "int8"])
+@pytest.mark.parametrize("layout", ["head_major", "token_major"])
+def test_prefill_attention_paged_sequences(kvb, gen, layout, kv_dtype):
+    """Four prompts of different lengths in one step, over scattered 16-position blocks."""
+    steps = [(s, p) for s, length in enumerate([5, 64, 130, 300]) for p in range(length)]
+    check_prefill(
+        kvb, gen, steps, n_heads=8, n_kv_heads=2, head_dim=64, block_size=16, kv_dtype=kv_dtype,
+        layout=layout,
+    )  # fmt: skip
+
+
+@pytest.mark.parametrize("kv_dtype", ["fp16", "int8"])
+@pytest.mark.parametrize("block_size", [16, 256])
+@pytest.mark.parametrize("cached", [37, 128])
+def test_prefill_attention_chunked(kvb, gen, cached, block_size, kv_dtype):
+    """A chunk of 150 rows whose first position is `cached`, over keys already in the cache."""
+    check_prefill(
+        kvb, gen, [(0, p) for p in range(cached + 150)], n_heads=8, n_kv_heads=2, head_dim=64,
+        block_size=block_size, kv_dtype=kv_dtype, query_from=cached,
+    )  # fmt: skip
+
+
+@pytest.mark.parametrize("kv_dtype", ["fp16", "int8"])
+@pytest.mark.parametrize("head_dim", [64, 128])
+def test_prefill_attention_mixed_step(kvb, gen, head_dim, kv_dtype):
+    """A prompt split by decode rows of two sequences with cached history: one-row tiles."""
+    history = [(1, p) for p in range(50)] + [(2, p) for p in range(81)]
+    step = [(0, p) for p in range(60)] + [(1, 50)] + [(0, p) for p in range(60, 100)] + [(2, 81)]
+    check_prefill(
+        kvb, gen, history + step, n_heads=32, n_kv_heads=4, head_dim=head_dim, block_size=16,
+        kv_dtype=kv_dtype, query_from=len(history),
+    )  # fmt: skip
+
+
+def test_prefill_attention_needs_adjacent_key_dimensions(kvb, gen):
+    q, k = rand_f16(gen, 4, 2, 64), rand_f16(gen, 4, 1, 64)
+    positions = np.arange(4, dtype=np.int32)
+    with pytest.raises(RuntimeError, match="adjacent key dimensions"):
+        kvb.kv_attention(
+            bits(q), bits(k), bits(k), positions, np.zeros(4, dtype=np.int32), positions,
+            np.zeros((1, 1), dtype=np.int32), 4, 1, "dim_major", kernel="prefill",
+        )  # fmt: skip

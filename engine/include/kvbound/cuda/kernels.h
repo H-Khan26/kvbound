@@ -68,6 +68,22 @@ void attention(const f16* q, f16* out, const StepRow* rows, const KvView& kv, in
 // 0 when head_dim itself is unsupported.
 int attention_max_positions(int head_dim);
 
+// Rows per AttnTile that attention_prefill() takes: plan tiles with this max_rows.
+inline constexpr int kAttnTileRows = 64;
+
+// Causal attention of each tile's query rows over its sequence's cached keys and values, on
+// tensor cores. Same contract as attention(): q, out [n_tokens, n_heads, head_dim]; row r attends
+// positions 0..rows[r].position; scores and the softmax are FP32. `tiles` is a device array from
+// plan_attention_tiles(rows, kAttnTileRows). q, out and the cache pools must be 16-byte aligned.
+// The context length is not bounded by shared memory.
+void attention_prefill(const f16* q, f16* out, const StepRow* rows, const AttnTile* tiles,
+                       int n_tiles, const KvView& kv, int n_heads, int n_kv_heads, int head_dim,
+                       cudaStream_t stream);
+
+// Whether attention_prefill() handles this cache and head_dim (else callers use attention()):
+// adjacent key dimensions (dim_stride 1) and head_dim 64 or 128.
+bool attention_prefill_supports(const KvView& kv, int head_dim);
+
 // --- Quantized weights ---------------------------------------------------------------------
 
 // Rows of x one pass over a quantized matrix serves. More rows mean more passes.
