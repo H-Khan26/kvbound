@@ -11,10 +11,11 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 
-# Model weights and real-model goldens (manifests are committed)
+# Model weights and real-model goldens (manifests are committed, golden ones per device)
 data/**
 !data/**/
 !data/**/manifest.json
+!data/golden/*/*.json
 
 # Profiler reports go to GitHub Release assets; CSV summaries are committed
 *.nsys-rep

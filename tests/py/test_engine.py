@@ -22,9 +22,8 @@ def captured_sites(engine, ids, split):
     return {site: np.concatenate([part[site] for part in parts]) for site in parts[0]}
 
 
-def assert_matches_goldens(engine, golden_dir, splits):
+def assert_matches_goldens(engine, manifest, tensors, splits):
     """Per-site rel-RMS, pooled top-1 mismatches and mean KL within the manifest's FP16 limits."""
-    manifest, tensors = golden.load(golden_dir)
     limits = manifest["thresholds"]["fp16"]
     for split_of in splits:
         mismatches = 0
@@ -59,7 +58,7 @@ SPLITS = (lambda n: n, lambda n: 1, lambda n: max(1, n // 2))
 )
 def test_fixture_sites_match_goldens(kvb, options):
     engine = kvb.Engine(str(FIXTURE_DIR), max_ctx=64, **options)
-    assert_matches_goldens(engine, FIXTURE_DIR, SPLITS)
+    assert_matches_goldens(engine, *golden.load(FIXTURE_DIR), SPLITS)
 
 
 def test_graph_replay_matches_goldens(kvb):
@@ -273,7 +272,7 @@ def test_real_model_matches_goldens_and_reference(kvb, name):
     spec = load_spec(name)
     if not (spec.golden_dir / golden.GOLDEN_FILE).exists():
         pytest.skip(f"{name} has no goldens; run `make fetch golden MODEL={name}`")
-    manifest, tensors = golden.load(spec.golden_dir)
+    manifest, tensors = golden.load_for_model(name)
     prompts = [tensors[f"{p['id']}/input_ids"].tolist() for p in manifest["prompts"]]
     n_new = 48
 
@@ -285,7 +284,7 @@ def test_real_model_matches_goldens_and_reference(kvb, name):
     torch.cuda.empty_cache()
 
     engine = kvb.Engine(str(spec.checkpoint_dir), max_ctx=256)
-    assert_matches_goldens(engine, spec.golden_dir, SPLITS[:2])
+    assert_matches_goldens(engine, manifest, tensors, SPLITS[:2])
     for prompt, (tokens, gaps) in zip(prompts, expected, strict=True):
         actual = engine.generate(prompt, n_new)
         if actual != tokens:

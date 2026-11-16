@@ -1,8 +1,13 @@
 """Golden tensors: FP32 per-site activations and logits for a fixed prompt set.
 
 A golden directory holds goldens.safetensors (tensors named "<prompt>/<site>", no batch dim) and
-manifest.json, which lists the prompts and carries the pass/fail thresholds. C++ and Python tests
-both read their thresholds from the manifest, so the two sides cannot drift apart.
+a manifest, which lists the prompts, carries the hash of the tensor file and the pass/fail
+thresholds. C++ and Python tests both read their thresholds from the manifest, so the two sides
+cannot drift apart.
+
+The committed fixture's manifest is manifest.json. Real-model goldens are computed on each machine
+and FP32 CPU math differs in the last bits between machines, so data/golden/<model> holds one
+manifest per GPU, named <device id>.json (see fingerprint.device_id).
 
 Usage: python -m kvbound.golden <model-name>
 """
@@ -19,7 +24,7 @@ from safetensors.torch import load_file, save_file
 from torch import Tensor
 from transformers import AutoTokenizer
 
-from kvbound import tolerance
+from kvbound import fingerprint, tolerance
 from kvbound.models import load_spec, sha256_file
 from kvbound.ref import LAYER_SITES, Llama, load_llama
 
@@ -118,8 +123,9 @@ def dump(
     out_dir: Path,
     model_meta: dict[str, Any],
     fp16_device: str = "cpu",
+    manifest_file: str = MANIFEST_FILE,
 ) -> None:
-    """Writes goldens.safetensors and manifest.json.
+    """Writes goldens.safetensors and the manifest named manifest_file.
 
     Goldens come from `model` as given (FP32, on the CPU so they do not depend on a GPU). The
     model is then converted to FP16 in place and moved to `fp16_device` to calibrate thresholds.
@@ -150,22 +156,43 @@ def dump(
         },
         "torch_version": torch.__version__,
     }
-    with (out_dir / MANIFEST_FILE).open("w", encoding="utf-8", newline="\n") as f:
+    with (out_dir / manifest_file).open("w", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps(manifest, indent=2) + "\n")
 
 
-def load(golden_dir: Path) -> tuple[dict[str, Any], dict[str, Tensor]]:
+def load(
+    golden_dir: Path, manifest_file: str = MANIFEST_FILE
+) -> tuple[dict[str, Any], dict[str, Tensor]]:
     """Returns (manifest, tensors) after checking the tensor file against the manifest hash."""
-    manifest = json.loads((golden_dir / MANIFEST_FILE).read_text(encoding="utf-8"))
+    manifest = json.loads((golden_dir / manifest_file).read_text(encoding="utf-8"))
     path = golden_dir / manifest["golden_file"]
     if sha256_file(path) != manifest["golden_sha256"]:
         raise ValueError(f"{path} does not match the hash in its manifest; regenerate the goldens")
     return manifest, load_file(str(path))
 
 
+def device_manifest(device: str | None = None) -> str:
+    """Manifest file name of a GPU's real-model goldens; by default this machine's first GPU."""
+    return f"{device or fingerprint.device_id(fingerprint.gpu_info())}.json"
+
+
+def load_for_model(
+    name: str, device: str | None = None
+) -> tuple[dict[str, Any], dict[str, Tensor]]:
+    """Loads data/golden/<name> through the manifest of `device` (default: this machine's GPU)."""
+    golden_dir = load_spec(name).golden_dir
+    manifest_file = device_manifest(device)
+    if not (golden_dir / manifest_file).exists():
+        raise FileNotFoundError(
+            f"{golden_dir / manifest_file} not found; run `make golden MODEL={name}` on this device"
+        )
+    return load(golden_dir, manifest_file)
+
+
 def dump_for_model(name: str) -> Path:
-    """Dumps goldens for a fetched real model into data/golden/<name>."""
+    """Dumps goldens for a fetched real model into data/golden/<name>; returns the manifest path."""
     spec = load_spec(name)
+    manifest_file = device_manifest()
     checkpoint = spec.checkpoint_dir
     tokenizer = AutoTokenizer.from_pretrained(checkpoint)
     prompts = [
@@ -181,8 +208,8 @@ def dump_for_model(name: str) -> Path:
     }
     model = load_llama(checkpoint, weights="fp16")
     fp16_device = "cuda" if torch.cuda.is_available() else "cpu"
-    dump(model, prompts, spec.golden_dir, meta, fp16_device)
-    return spec.golden_dir
+    dump(model, prompts, spec.golden_dir, meta, fp16_device, manifest_file)
+    return spec.golden_dir / manifest_file
 
 
 def main() -> None:

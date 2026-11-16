@@ -213,7 +213,7 @@ On Windows, `make` needs Git Bash on `PATH` and finds MSVC through `scripts/vsen
 ```sh
 make doctor                          # GPU, toolchain, profilers, clock state
 make fetch MODEL=tinyllama-1.1b      # pinned checkpoint into data/models/
-make golden MODEL=tinyllama-1.1b     # golden tensors into data/golden/ (manifest is committed)
+make golden MODEL=tinyllama-1.1b     # golden tensors into data/golden/ (the per-GPU manifest is committed)
 make quantize MODEL=tinyllama-1.1b   # INT8 and INT4 copies of the checkpoint into data/models/
 make test-real                       # reference vs Hugging Face, engine vs reference, on the real checkpoint
 make bench-hf MODEL=tinyllama-1.1b   # Hugging Face baseline records

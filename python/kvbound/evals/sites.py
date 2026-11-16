@@ -28,7 +28,7 @@ def evaluate(
     """Per-site errors and sample text of one model at one precision, as write_record arguments."""
     spec = load_spec(model)
     model_dir = bench.checkpoint_dir(model, weights)
-    manifest, tensors = golden.load(spec.golden_dir)
+    manifest, tensors = golden.load_for_model(model)
     n_layers = manifest["model"]["config"]["n_layers"]
     tokenizer = AutoTokenizer.from_pretrained(spec.checkpoint_dir)
     options = {"kv_dtype": kv} if kv != "fp16" else {}
