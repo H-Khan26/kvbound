@@ -2,12 +2,43 @@
 
 A from-scratch LLM inference engine in C++ and CUDA. It implements two KV-cache designs for the same engine, a static
 preallocated one (how phone NPU runtimes work) and a paged one with continuous batching (how GPU serving systems
-work), then quantizes and profiles both against the roofline of an RTX 3060 Ti (Ampere) and an RTX 4070 Ti (Ada).
+work), then quantizes and profiles both against the roofline of an RTX 3060 Ti (Ampere) and an RTX 4070 (Ada).
 
-**Status:** Phases 0 to 5 are done on the RTX 3060 Ti, measured on TinyLlama 1.1B and Llama 3.2 1B: reference model,
-golden tensors, hardware ceilings, the analytical performance model, an FP16 engine that generates the same tokens as
-the reference model, the static memory design, the paged KV cache with continuous batching, and quantization (INT8
-and INT4 weights, an INT8 KV cache). Profiling and optimization (Phase 6) is next. The RTX 4070 Ti runs are pending.
+**Status:** Phases 0 to 5 are done on the RTX 3060 Ti and the RTX 4070, measured on TinyLlama 1.1B and Llama 3.2 1B:
+reference model, golden tensors, hardware ceilings, the analytical performance model, an FP16 engine that generates the
+same tokens as the reference model, the static memory design, the paged KV cache with continuous batching, and
+quantization (INT8 and INT4 weights, an INT8 KV cache). Phase 6, profiling and optimization, is done on the RTX 4070
+and summarized next; its log is [`docs/optimization-log.md`](docs/optimization-log.md). The sections after it describe
+Phases 2 to 5 on the RTX 3060 Ti.
+
+## Phase 6: profile and optimize (RTX 4070)
+
+Six changes, each an engine option so that its before and after ran back to back at one commit (the Phase 5 paths are
+`--no-fuse --f16-gemv-rows 0 --no-prefill-attention --expand-quantized`):
+
+- **A fused decode step** (`fuse`): q|k|v and gate|up stacked into one product each at load time, residual adds folded
+  into the norm after them, RoPE folded into the KV-cache write. 9 ops per layer instead of 16.
+- **kvbound's own FP16 GEMV** (`f16_gemv_rows`, 4) instead of cuBLAS for decode-shaped steps. It streams matrices at 436
+  to 477 GB/s of the measured 475.
+- **Streaming loads** in the quantized GEMV and a **register-resident RMSNorm** (no switch).
+- **Quantized weights on tensor cores** (`quantized_gemm_rows`, 3; `expand_quantized` for the old path): a W8A16/W4A16
+  `mma.sync` product that expands weights in registers and reads each matrix once at its packed size.
+- **Prefill attention on tensor cores** (`prefill_attention`): flash attention over tiles of query rows, through the
+  paged block table, FP16 or INT8 cache. 3.8 ms to 0.11 ms per layer at 1,024 tokens.
+
+| RTX 4070 | Phase 5 paths | Phase 6 |
+| --- | --- | --- |
+| TinyLlama decode, batch 1, FP16 / INT8 / INT4 | 202 / 370 / 610 tok/s | **212 / 391 / 673 tok/s** (92% / 86% / 76% of the ceiling) |
+| Llama 3.2 decode, batch 1, FP16 / INT8 / INT4 | 178 / 336 / 585 tok/s | **183 / 348 / 624 tok/s** (96% / 91% / 85%) |
+| TinyLlama / Llama 3.2 time to first token, 1,024-token prompt | 115.8 / 94.7 ms | **38.6 / 39.6 ms** |
+| TinyLlama serving 96 requests, FP16 / INT8 / INT4 | 2,320 / 1,979 / 1,797 tok/s | **2,824 / 3,623 / 3,943 tok/s** |
+| Llama 3.2 serving 96 requests, FP16 / INT8 / INT4 | 2,298 / 1,592 / 1,657 tok/s | **2,608 / 3,562 / 4,017 tok/s** |
+
+Quantized weights went from 15% to 31% slower than FP16 under load to 28% to 54% faster. WikiText-2 perplexity is
+unchanged (8.8723 and 9.9563 for TinyLlama FP16 and INT4, 10.9867 and 14.7617 for Llama 3.2), and both models still
+match the reference token for token. The 1,024-token prompt is now 95% matrix products, at the 59 TFLOPS FP16 peak
+with FP32 accumulation. Per-kernel Nsight Compute counters of one step (`make step-counters`) are in
+`results/profiles/*-counters-*`.
 
 ## Where things stand (RTX 3060 Ti, TinyLlama 1.1B)
 
@@ -141,9 +172,9 @@ Read against the roofline:
 - The engine and the dequantizing reference agree on every capture site within the FP16 limits (`make test-gpu`); the
   reference model scores 8.87 on the FP16 checkpoint where the engine scores 8.87.
 
-Known gaps: prefill attention is still the simple per-query kernel (204 ms for 1,024 tokens against a 36 ms bound),
-cuBLAS is slower per token at batch 8 than at batch 1, INT4 needs better scales, prefix sharing is not built, and the
-FP8 KV cache waits for the RTX 4070 Ti.
+Known gaps at the end of Phase 5, before Phase 6 on the RTX 4070: prefill attention was the simple per-query kernel
+(204 ms for 1,024 tokens against a 36 ms bound), cuBLAS was slower per token at batch 8 than at batch 1, INT4 needs
+better scales, prefix sharing is not built, and the FP8 KV cache is not built.
 
 ### The same engine on Llama 3.2 1B
 
@@ -180,7 +211,7 @@ clocks. Exact values are in `results/raw/` and the figures in `reports/`.
 | Path | What lives there |
 | --- | --- |
 | `engine/` | the C++ side. `kvbound` (CPU only): safetensors and JSON loaders, the weight format, the op program, the activation memory planner, the scheduler (static and continuous), the sampler, cache bookkeeping. `kvbound_cuda`: kernels, device weights, KV pool, the engine |
-| `engine/kernels/` | CUDA kernels: embedding, RMSNorm, RoPE, SwiGLU gate, residual add, attention over an FP16 or INT8 KV cache, argmax, products and lookups on INT8 and INT4 weights; cuBLAS for FP16 matrix products |
+| `engine/kernels/` | CUDA kernels: embedding, RMSNorm (also fused with the residual add), RoPE (also fused with the cache write), SwiGLU gate, residual add, decode attention and tiled tensor-core prefill attention over an FP16 or INT8 KV cache, argmax, an FP16 GEMV, products and lookups on INT8 and INT4 weights in place and on tensor cores; cuBLAS for wide FP16 products |
 | `apps/` | `kvb-bench` runs a trace of requests through the scheduler and prints raw timings; `kvb-kv_layout` times attention on each KV layout, on 16-token blocks and on an INT8 cache |
 | `bindings/` | `_kvb`, the engine and each kernel as a Python extension, for tests and evals |
 | `microbench/` | standalone CUDA binaries that measure bandwidth, latency and GEMM peaks |
@@ -192,7 +223,8 @@ clocks. Exact values are in `results/raw/` and the figures in `reports/`.
 | `tests/py/` | pytest: reference vs Hugging Face, the quantizer, the perplexity arithmetic; under the `gpu` marker, each kernel vs torch and the engine vs the goldens, FP16 and quantized |
 | `configs/` | model, device and workload descriptions |
 | `results/raw/<device>/` | one JSON record per benchmark or evaluation run, written only by `kvbound.record` |
-| `results/profiles/` | Nsight Systems summaries (CSV) of decode runs; Nsight Compute counters of the attention kernel |
+| `results/profiles/` | Nsight Systems summaries (CSV) of decode runs; Nsight Compute counters of the attention kernel and of every kernel in one step |
+| `docs/` | `optimization-log.md`: each Phase 6 change with its hypothesis, before and after, and profiler evidence |
 | `reports/<device>/` | figures generated from the records |
 
 ## Build and test
@@ -224,6 +256,7 @@ make serve-load MODEL=tinyllama-1.1b # static against paged as requests arrive a
 make precision MODEL=tinyllama-1.1b  # each weight and KV precision: perplexity, per-layer error, decode, concurrency
 make profile MODEL=tinyllama-1.1b    # Nsight Systems decode profiles
 make counters                        # Nsight Compute counters of the attention kernel (needs GPU counter access)
+make step-counters MODEL=tinyllama-1.1b WEIGHTS=int4_g   # Nsight Compute counters of one decode and one prefill step
 make report MODEL=tinyllama-1.1b DEVICE=rtx3060ti   # figures into reports/
 make predict MODEL=llama-3.2-1b DEVICE=rtx3060ti
 ```

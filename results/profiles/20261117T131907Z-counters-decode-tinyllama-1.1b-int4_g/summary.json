@@ -1,0 +1,131 @@
+{
+  "tool": "Version 2026.3.1.0 (build 38829034) (public-release)",
+  "gpu": "NVIDIA GeForce RTX 4070",
+  "git": {
+    "sha": "7908c8391f01f493aefc0e6424ed499fc5dd9c31",
+    "dirty": false
+  },
+  "model": "tinyllama-1.1b",
+  "weights": "int4_g",
+  "kv": "fp16",
+  "phase": "decode",
+  "prompt_len": 128,
+  "options": {
+    "max-ctx": 130,
+    "graph": 0,
+    "kv-dtype": "fp16",
+    "warmup": 0
+  },
+  "measured_dram_gbs": 475.005,
+  "step_time_us": 1718.24,
+  "metrics": {
+    "time_ns": "gpu__time_duration.sum",
+    "dram_bytes_read": "dram__bytes_read.sum",
+    "dram_bytes_write": "dram__bytes_write.sum",
+    "dram_pct_of_peak": "dram__throughput.avg.pct_of_peak_sustained_elapsed",
+    "tensor_pipe_pct": "sm__pipe_tensor_op_hmma_cycles_active.avg.pct_of_peak_sustained_active",
+    "warps_active_pct": "sm__warps_active.avg.pct_of_peak_sustained_active",
+    "registers_per_thread": "launch__registers_per_thread"
+  },
+  "kernels": [
+    {
+      "kernel": "linear_quantized_kernel",
+      "launches": 89,
+      "time_us": 1331.296,
+      "dram_mb_read": 534.463616,
+      "dram_gb_per_s": 401.4611446289931,
+      "of_measured_ceiling": 0.8451724605614532,
+      "tensor_pipe_pct": 0.0,
+      "warps_active_pct": 83.55303370786517,
+      "registers_per_thread": 40.0
+    },
+    {
+      "kernel": "attention_kernel",
+      "launches": 22,
+      "time_us": 171.68,
+      "dram_mb_read": 3.646592,
+      "dram_gb_per_s": 21.240633737185462,
+      "of_measured_ceiling": 0.04471665295562249,
+      "tensor_pipe_pct": 0.0,
+      "warps_active_pct": 65.03545454545454,
+      "registers_per_thread": 56.0
+    },
+    {
+      "kernel": "rms_norm_wide_kernel",
+      "launches": 45,
+      "time_us": 105.536,
+      "dram_mb_read": 1.076864,
+      "dram_gb_per_s": 10.203759854457246,
+      "of_measured_ceiling": 0.02148137357387237,
+      "tensor_pipe_pct": 0.0,
+      "warps_active_pct": 16.34911111111111,
+      "registers_per_thread": 52.0
+    },
+    {
+      "kernel": "rope_kv_write_kernel",
+      "launches": 22,
+      "time_us": 52.064,
+      "dram_mb_read": 0.496256,
+      "dram_gb_per_s": 9.531653349723417,
+      "of_measured_ceiling": 0.02006642740544503,
+      "tensor_pipe_pct": 0.0,
+      "warps_active_pct": 16.605,
+      "registers_per_thread": 40.0
+    },
+    {
+      "kernel": "silu_mul_kernel",
+      "launches": 22,
+      "time_us": 46.496,
+      "dram_mb_read": 0.644864,
+      "dram_gb_per_s": 13.869236063317274,
+      "of_measured_ceiling": 0.02919808436399043,
+      "tensor_pipe_pct": 0.0,
+      "warps_active_pct": 16.349545454545453,
+      "registers_per_thread": 18.0
+    },
+    {
+      "kernel": "argmax_kernel",
+      "launches": 1,
+      "time_us": 5.664,
+      "dram_mb_read": 0.13504,
+      "dram_gb_per_s": 23.84180790960452,
+      "of_measured_ceiling": 0.05019275146494146,
+      "tensor_pipe_pct": 0.0,
+      "warps_active_pct": 16.36,
+      "registers_per_thread": 40.0
+    },
+    {
+      "kernel": "embedding_quantized_kernel",
+      "launches": 1,
+      "time_us": 1.952,
+      "dram_mb_read": 0.00576,
+      "dram_gb_per_s": 2.9508196721311477,
+      "of_measured_ceiling": 0.006212186549891365,
+      "tensor_pipe_pct": 0.0,
+      "warps_active_pct": 16.58,
+      "registers_per_thread": 16.0
+    },
+    {
+      "kernel": "gather_rows_kernel",
+      "launches": 1,
+      "time_us": 1.92,
+      "dram_mb_read": 0.008832,
+      "dram_gb_per_s": 4.6,
+      "of_measured_ceiling": 0.009684108588330648,
+      "tensor_pipe_pct": 0.0,
+      "warps_active_pct": 16.55,
+      "registers_per_thread": 16.0
+    },
+    {
+      "kernel": "add_kernel",
+      "launches": 1,
+      "time_us": 1.632,
+      "dram_mb_read": 0.011008,
+      "dram_gb_per_s": 6.745098039215686,
+      "of_measured_ceiling": 0.014200056924065401,
+      "tensor_pipe_pct": 0.0,
+      "warps_active_pct": 16.4,
+      "registers_per_thread": 16.0
+    }
+  ]
+}
