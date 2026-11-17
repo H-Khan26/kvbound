@@ -194,6 +194,19 @@ nb::object linear_quantized(const std::string& scheme, In<std::uint8_t> data, In
   return nb::cast(download<f16>(out.as(), {x.shape(0), data.shape(0)}));
 }
 
+// The same product as linear_quantized on tensor cores, for wide steps.
+nb::object gemm_quantized(const std::string& scheme, In<std::uint8_t> data, In<f16> scale,
+                          In<f16> x, int group_size, bool f32_out) {
+  const DeviceWeight w(scheme, data, scale, group_size);
+  const int n_out = static_cast<int>(data.shape(0)), n_in = w.n_in(data);
+  const int rows = static_cast<int>(x.shape(0));
+  const std::size_t n = static_cast<std::size_t>(rows) * n_out;
+  const DeviceBuffer dx = upload(x), out(n * (f32_out ? sizeof(float) : sizeof(f16)));
+  kvb::kernels::gemm_quantized(w.ref, dx.as<f16>(), out.as(), rows, n_in, n_out, f32_out, nullptr);
+  if (f32_out) return nb::cast(download<float>(out.as(), {x.shape(0), data.shape(0)}));
+  return nb::cast(download<f16>(out.as(), {x.shape(0), data.shape(0)}));
+}
+
 // Output channels first_channel onward of the quantized matrix, expanded to FP16
 // [n_channels, n_in]. n_channels 0 means every channel from first_channel.
 Out<f16> dequantize(const std::string& scheme, In<std::uint8_t> data, In<f16> scale, int group_size,
@@ -415,6 +428,8 @@ NB_MODULE(_kvb, m) {
         "block_table"_a, "block_size"_a, "n_blocks"_a, "layout"_a = "head_major",
         "query_from"_a = 0, "wide_key_loads"_a = true, "kv_dtype"_a = "fp16");
   m.def("linear_quantized", &linear_quantized, "scheme"_a, "data"_a, "scale"_a, "x"_a,
+        "group_size"_a = 0, "f32_out"_a = false);
+  m.def("gemm_quantized", &gemm_quantized, "scheme"_a, "data"_a, "scale"_a, "x"_a,
         "group_size"_a = 0, "f32_out"_a = false);
   m.def("dequantize", &dequantize, "scheme"_a, "data"_a, "scale"_a, "group_size"_a = 0,
         "first_channel"_a = 0, "n_channels"_a = 0);

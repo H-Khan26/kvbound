@@ -147,6 +147,47 @@ def test_linear_quantized(kvb, gen, scheme, rows, n_out, n_in, group):
     assert np.array_equal(part, bits(expanded.to(torch.float16))[3:7])
 
 
+@pytest.mark.parametrize(
+    ("n_out", "n_in", "group"),
+    [
+        (8, 64, 32),
+        (200, 96, 32),
+        (300, 2048, 128),
+        (2056, 512, 64),
+        (130, 5632, 128),
+        (5000, 128, 32),
+    ],
+)
+@pytest.mark.parametrize("rows", [1, 17, 40, 64, 80, 300])
+@pytest.mark.parametrize("scheme", ["int8_pc", "int4_g"])
+def test_gemm_quantized(kvb, gen, scheme, rows, n_out, n_in, group):
+    """Every tile shape the kernel picks, with partial tiles of rows, channels and inputs."""
+    w = rand_f16(gen, n_out, n_in, scale=1 / math.sqrt(n_in))
+    x = rand_f16(gen, rows, n_in)
+    data, scale, deq = quantized(w, scheme, group)
+    # The kernel multiplies by the FP16 weights the expanded matrix holds.
+    expected = x.float() @ deq.to(torch.float16).float().T
+
+    f32_out = kvb.gemm_quantized(scheme, data, scale, bits(x), group_size=group, f32_out=True)
+    assert tolerance.rel_rms(torch.from_numpy(f32_out), expected) < 1e-5
+    f16_out = kvb.gemm_quantized(scheme, data, scale, bits(x), group_size=group)
+    assert tolerance.rel_rms(from_bits(f16_out), expected) < F16_ROUNDING
+
+
+@pytest.mark.parametrize("rows", [5, 300])
+@pytest.mark.parametrize("scheme", ["int8_pc", "int4_g"])
+def test_gemm_quantized_weights_equal_dequantized(kvb, gen, scheme, rows):
+    """Rows of the identity pick out single weights: each is the FP16 value dequantize writes."""
+    n_out, n_in, group = 136, 512, 32
+    w = rand_f16(gen, n_out, n_in, scale=1 / math.sqrt(n_in))
+    data, scale, _ = quantized(w, scheme, group)
+    picks = torch.randperm(n_in, generator=gen)[:rows]
+    x = torch.eye(n_in, dtype=torch.float16)[picks]
+    expanded = kvb.dequantize(scheme, data, scale, group_size=group)
+    actual = kvb.gemm_quantized(scheme, data, scale, bits(x), group_size=group)
+    assert np.array_equal(actual, np.ascontiguousarray(expanded[:, picks.numpy()].T))
+
+
 @pytest.mark.parametrize("scheme", ["int8_pc", "int4_g"])
 def test_embedding_quantized_reads_dequantized_rows(kvb, gen, scheme):
     table = rand_f16(gen, 50, 64)
