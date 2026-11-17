@@ -1,0 +1,32 @@
+# Primary speech model: Whisper base fine-tuned on Quran recitation. Apache-2.0.
+# The repository ships pytorch_model.bin only; fetching converts it (kvbound.models).
+name = "whisper-base-ar-quran"
+family = "whisper"
+hf_repo = "tarteel-ai/whisper-base-ar-quran"
+revision = "5c3c53fdf9272c4f6ee0bee09a1e5a4a615ee25c"
+gated = false
+
+# Checked against config.json when the checkpoint is fetched.
+[arch]
+vocab_size = 51865
+d_model = 512
+n_mels = 80
+encoder_layers = 6
+encoder_heads = 8
+encoder_ffn_dim = 2048
+decoder_layers = 6
+decoder_heads = 8
+decoder_ffn_dim = 2048
+max_source_positions = 1500
+max_target_positions = 448
+
+# Greedy decoding rules, written to generation.json. They are what Hugging Face `generate` does
+# with this checkpoint, which has no generation_config.json: the prompt is the start token alone
+# (the model emits its own language and task tokens) and nothing is suppressed but the two
+# first-token ids. max_length is min(config max_length + 1, max_target_positions).
+[generation]
+prompt = [50258]
+suppress_tokens = []
+begin_suppress_tokens = [220, 50257]
+eos_token_id = 50257
+max_length = 448
