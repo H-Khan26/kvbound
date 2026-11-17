@@ -45,10 +45,14 @@ METRICS = {
 
 
 def kernel_name(demangled: str) -> str:
-    """The engine's kernels by name, cuBLAS kernels by their short name."""
-    if own := re.search(r"kvb::kernels::.*?(\w+_kernel)", demangled):
+    """The engine's kernels by name, cuBLAS kernels by their short name. Nsight Compute shows an
+    anonymous namespace as `<unnamed>` and may leave out enclosing namespaces."""
+    if own := re.search(r"kvb::.*?(\w+_kernel)[<(]", demangled):
         return own.group(1)
-    return re.split(r"[(<]", demangled, maxsplit=1)[0].rsplit("::", maxsplit=1)[-1][:60]
+    if "gemvx::kernel" in demangled:
+        return "cublas_gemv"
+    name = re.split(r"[(<]", demangled.replace("<unnamed>", ""), maxsplit=1)[0]
+    return name.rsplit("::")[-1][:60]
 
 
 def split_steps(points: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
