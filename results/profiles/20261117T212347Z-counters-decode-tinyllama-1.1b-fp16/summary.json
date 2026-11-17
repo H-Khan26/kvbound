@@ -1,0 +1,131 @@
+{
+  "tool": "Version 2025.2.0.0 (build 35613519) (public-release)",
+  "gpu": "NVIDIA GeForce RTX 3060 Ti",
+  "git": {
+    "sha": "c4427594fea69e2880833cb8b60de78dc6c75368",
+    "dirty": false
+  },
+  "model": "tinyllama-1.1b",
+  "weights": "fp16",
+  "kv": "fp16",
+  "phase": "decode",
+  "prompt_len": 128,
+  "options": {
+    "max-ctx": 130,
+    "graph": 0,
+    "kv-dtype": "fp16",
+    "warmup": 0
+  },
+  "measured_dram_gbs": 415.35,
+  "step_time_us": 5873.984,
+  "metrics": {
+    "time_ns": "gpu__time_duration.sum",
+    "dram_bytes_read": "dram__bytes_read.sum",
+    "dram_bytes_write": "dram__bytes_write.sum",
+    "dram_pct_of_peak": "dram__throughput.avg.pct_of_peak_sustained_elapsed",
+    "tensor_pipe_pct": "sm__pipe_tensor_op_hmma_cycles_active.avg.pct_of_peak_sustained_active",
+    "warps_active_pct": "sm__warps_active.avg.pct_of_peak_sustained_active",
+    "registers_per_thread": "launch__registers_per_thread"
+  },
+  "kernels": [
+    {
+      "kernel": "linear_f16_kernel",
+      "launches": 89,
+      "time_us": 5281.344,
+      "dram_mb_read": 2082.76864,
+      "dram_gb_per_s": 394.363374171423,
+      "of_measured_ceiling": 0.9494724308930371,
+      "tensor_pipe_pct": 0.0,
+      "warps_active_pct": 88.10303370786517,
+      "registers_per_thread": 34.0
+    },
+    {
+      "kernel": "attention_kernel",
+      "launches": 22,
+      "time_us": 271.744,
+      "dram_mb_read": 4.07936,
+      "dram_gb_per_s": 15.011775788977861,
+      "of_measured_ceiling": 0.03614247210539993,
+      "tensor_pipe_pct": 0.0,
+      "warps_active_pct": 64.92318181818182,
+      "registers_per_thread": 56.0
+    },
+    {
+      "kernel": "rms_norm_wide_kernel",
+      "launches": 45,
+      "time_us": 158.912,
+      "dram_mb_read": 1.387264,
+      "dram_gb_per_s": 8.729762384212647,
+      "of_measured_ceiling": 0.021017846115836392,
+      "tensor_pipe_pct": 0.0,
+      "warps_active_pct": 16.386222222222223,
+      "registers_per_thread": 52.0
+    },
+    {
+      "kernel": "rope_kv_write_kernel",
+      "launches": 22,
+      "time_us": 79.84,
+      "dram_mb_read": 0.710016,
+      "dram_gb_per_s": 8.892985971943888,
+      "of_measured_ceiling": 0.02141082453820606,
+      "tensor_pipe_pct": 0.0,
+      "warps_active_pct": 16.596818181818183,
+      "registers_per_thread": 40.0
+    },
+    {
+      "kernel": "silu_mul_kernel",
+      "launches": 22,
+      "time_us": 66.112,
+      "dram_mb_read": 0.733056,
+      "dram_gb_per_s": 11.08809293320426,
+      "of_measured_ceiling": 0.026695781709893486,
+      "tensor_pipe_pct": 0.0,
+      "warps_active_pct": 16.36909090909091,
+      "registers_per_thread": 18.0
+    },
+    {
+      "kernel": "argmax_kernel",
+      "launches": 1,
+      "time_us": 8.064,
+      "dram_mb_read": 0.13504,
+      "dram_gb_per_s": 16.746031746031747,
+      "of_measured_ceiling": 0.04031788069346755,
+      "tensor_pipe_pct": 0.0,
+      "warps_active_pct": 16.29,
+      "registers_per_thread": 40.0
+    },
+    {
+      "kernel": "embedding_kernel",
+      "launches": 1,
+      "time_us": 2.816,
+      "dram_mb_read": 0.008832,
+      "dram_gb_per_s": 3.1363636363636362,
+      "of_measured_ceiling": 0.007551134311697691,
+      "tensor_pipe_pct": 0.0,
+      "warps_active_pct": 16.55,
+      "registers_per_thread": 16.0
+    },
+    {
+      "kernel": "gather_rows_kernel",
+      "launches": 1,
+      "time_us": 2.784,
+      "dram_mb_read": 0.008832,
+      "dram_gb_per_s": 3.1724137931034484,
+      "of_measured_ceiling": 0.007637928958958585,
+      "tensor_pipe_pct": 0.0,
+      "warps_active_pct": 16.53,
+      "registers_per_thread": 16.0
+    },
+    {
+      "kernel": "add_kernel",
+      "launches": 1,
+      "time_us": 2.368,
+      "dram_mb_read": 0.01088,
+      "dram_gb_per_s": 4.594594594594595,
+      "of_measured_ceiling": 0.011061982892968808,
+      "tensor_pipe_pct": 0.0,
+      "warps_active_pct": 16.46,
+      "registers_per_thread": 16.0
+    }
+  ]
+}
