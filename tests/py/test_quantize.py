@@ -1,4 +1,5 @@
-"""Weight quantization: the INT8 and INT4 schemes, the file format, and the quantized fixture."""
+"""Weight quantization: the INT8 and INT4 schemes, the file format, the quantized fixture, and
+activation-aware (AWQ) scales and clipping."""
 
 import json
 import shutil
@@ -9,25 +10,46 @@ from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 
 from kvbound import golden, tolerance
-from kvbound.fixture import FIXTURE_DIR
+from kvbound.awq import (
+    CALIB_IDS,
+    CLIP_RATIOS,
+    SCALES_FILE,
+    AwqResult,
+    act_clip_scales,
+    apply_scales,
+    collect_and_search,
+    norm_site_scales,
+    pick_windows,
+    rescaled_norm,
+)
+from kvbound.fixture import FIXTURE_DIR, HF_CONFIG
 from kvbound.models import sha256_file
+from kvbound.perfmodel.model import Precision
 from kvbound.quantize import (
     MANIFEST_FILE,
     convert,
     dequantize_int4_g,
     dequantize_int8_pc,
+    f16_scales,
     load_dequantized,
     pack_int4,
     quantize_int4_g,
+    quantize_int4_g_with_scales,
     quantize_int8_pc,
     unpack_int4,
 )
 from kvbound.ref import load_llama
 from kvbound.weight_format import (
+    KEY_ACT_SCALES,
+    KEY_CALIB_DATASET,
+    KEY_CALIB_SEED,
+    KEY_CALIB_WINDOW,
+    KEY_CALIB_WINDOWS,
     KEY_SCHEME,
     KEY_SOURCE,
     KEY_SOURCE_SHA256,
     KEY_VERSION,
+    VARIANTS,
     WeightFormat,
 )
 
@@ -260,3 +282,289 @@ def test_convert_refuses_a_quantized_source(tmp_path):
     convert(FIXTURE_DIR, tmp_path / "q", "int8_pc", device="cpu")
     with pytest.raises(ValueError, match="already quantized"):
         convert(tmp_path / "q", tmp_path / "qq", "int8_pc", device="cpu")
+
+
+def test_act_scales_metadata(tmp_path):
+    path = tmp_path / "x.safetensors"
+    awq = WeightFormat.make("int4_g", 32, "awq", "awq")
+    noclip = WeightFormat.make("int4_g", 32, "minmax", "awq")
+    for fmt in (awq, noclip):
+        save_file({"x": torch.zeros(2)}, str(path), metadata=fmt.to_metadata())
+        with safe_open(str(path), framework="pt") as f:
+            assert WeightFormat.from_metadata(f.metadata()) == fmt
+        assert fmt.to_metadata()[KEY_ACT_SCALES] == "awq"
+    assert awq.variant == "int4_g.awq" and noclip.variant == "int4_g.awq-noclip"
+    assert {awq.variant, noclip.variant} <= set(VARIANTS)
+
+    # Formats without activation scales write the header they always did, and read back from it.
+    plain = WeightFormat.make("int4_g", 32, "mse")
+    assert plain.to_metadata() == {
+        "kvbound.format_version": "1",
+        "kvbound.scheme": "int4_g",
+        "kvbound.group_size": "32",
+        "kvbound.pack_order": "lo_nibble_first",
+        "kvbound.scale_dtype": "F16",
+        "kvbound.clip": "mse",
+    }
+    assert WeightFormat.from_metadata(plain.to_metadata()) == plain and plain.act_scales == ""
+    assert KEY_ACT_SCALES not in WeightFormat.make("int8_pc").to_metadata()
+
+    for scheme, clip, act_scales in (
+        ("int8_pc", "minmax", "awq"),
+        ("fp16", "minmax", "awq"),
+        ("int4_g", "mse", "awq"),
+        ("int4_g", "awq", ""),  # the awq clip search needs the scaled activations
+        ("int4_g", "minmax", "other"),
+    ):
+        with pytest.raises(ValueError):
+            WeightFormat.make(scheme, 32, clip, act_scales)
+
+
+def test_perf_model_counts_a_variant_by_its_scheme():
+    int4 = Precision.named("int4_g", "fp16")
+    for variant in ("int4_g.awq", "int4_g.awq-noclip", "int4_g.mse"):
+        assert Precision.named(variant, "fp16") == int4
+    assert set(VARIANTS) >= {"fp16", "int8_pc", "int4_g", "int4_g.mse"}
+    for variant in VARIANTS:
+        Precision.named(variant, "int8")
+
+
+# The capture site of each layer norm whose weight activation scales are folded into.
+NORM_SITES = {"attn_norm": "input_layernorm", "mlp_norm": "post_attention_layernorm"}
+
+
+def calibration_ids(n=8, length=32, seed=0):
+    """Seeded random tokens of the fixture's vocabulary, int32 [n, length]."""
+    gen = torch.Generator().manual_seed(seed)
+    return torch.randint(HF_CONFIG["vocab_size"], (n, length), generator=gen, dtype=torch.int32)
+
+
+def test_calibration_windows_are_whole_distinct_and_seeded():
+    ids = list(range(1000))
+    windows = pick_windows(ids, 5, 64, seed=0)
+    assert windows.dtype == torch.int32 and windows.shape == (5, 64)
+    starts = windows[:, 0].tolist()
+    assert len(set(starts)) == 5 and all(start % 64 == 0 for start in starts)
+    assert torch.equal(windows, torch.tensor(starts)[:, None] + torch.arange(64))
+    assert torch.equal(windows, pick_windows(ids, 5, 64, seed=0))
+    assert not torch.equal(windows, pick_windows(ids, 5, 64, seed=1))
+    with pytest.raises(ValueError, match="fewer"):
+        pick_windows(ids, 16, 64, seed=0)  # 1,000 tokens hold 15 whole windows
+
+
+def test_rescaled_norm_absorbs_f16_rounding():
+    gen = torch.Generator().manual_seed(5)
+    gamma = (1.0 + 0.1 * torch.randn(64, generator=gen)).half().float()
+    gamma[3] = 0.0
+    s = 8 ** (2 * torch.rand(64, generator=gen) - 1)
+    gamma_q, s_eff = rescaled_norm(gamma, s)
+    assert torch.equal(gamma_q, gamma_q.half().float())
+    assert torch.allclose(gamma_q * s_eff, gamma, rtol=1e-6, atol=0)
+    assert torch.allclose(s_eff, s, rtol=1e-3) and not torch.equal(s_eff, s)
+    assert gamma_q[3] == 0 and s_eff[3] == s[3]
+    # The realized scale is a fixed point: it gives the same stored weight and itself.
+    again = rescaled_norm(gamma, s_eff)
+    assert torch.equal(again[0], gamma_q) and torch.equal(again[1], s_eff)
+
+    # A weight pushed out of the normal F16 range is refused; an untouched one never is.
+    assert rescaled_norm(torch.tensor([1e-3, 1.0]), torch.tensor([100.0, 1.0])) is None
+    assert rescaled_norm(torch.tensor([1e3, 1.0]), torch.tensor([1e-3, 1.0])) is None
+    tiny = torch.tensor([2.0**-20, 1.0])
+    assert torch.equal(rescaled_norm(tiny, torch.ones(2))[1], torch.ones(2))
+
+
+def test_awq_clip_minimizes_each_groups_output_error():
+    gen = torch.Generator().manual_seed(6)
+    w = weights_with_outliers((16, 128), seed=4)
+    x = torch.randn(50, 128, generator=gen) * torch.rand(128, generator=gen).pow(4)
+    x[:, GROUP : 2 * GROUP] = 0.0  # a group no activation reaches
+    groups, x_groups = w.reshape(16, -1, GROUP), x.reshape(50, -1, GROUP)
+    scale, minmax_error, error = act_clip_scales(groups, x_groups)
+    assert scale.dtype == torch.float16 and scale.shape == (16, 4)
+
+    def output_error(scale):
+        """Sum over tokens of (x . (w - w_hat))^2 per group, as llm-awq computes it."""
+        deq = dequantize_int4_g(quantize_int4_g_with_scales(w, scale), scale, GROUP)
+        d = (w - deq).reshape(16, -1, GROUP).double()
+        return torch.einsum("tgi,ogi->otg", x_groups.double(), d).pow(2).sum(1)
+
+    amax = groups.abs().amax(-1)
+    by_ratio = torch.stack([output_error(f16_scales(ratio * amax, 7)) for ratio in CLIP_RATIOS])
+    assert CLIP_RATIOS[0] == 1.0 and len(CLIP_RATIOS) == 10 and min(CLIP_RATIOS) > 0.54
+    assert torch.allclose(minmax_error, by_ratio[0], rtol=1e-9, atol=1e-18)
+    assert torch.allclose(error, by_ratio.amin(0), rtol=1e-9, atol=1e-18)
+    assert torch.allclose(error, output_error(scale), rtol=1e-9, atol=1e-18)
+    assert error.sum() < minmax_error.sum()
+    # Ties keep min-max: a group whose activations are all zero is not clipped.
+    assert torch.equal(scale[:, 1], f16_scales(amax, 7)[:, 1])
+
+
+def test_awq_scales_leave_the_function_unchanged(tmp_path):
+    source = load_file(str(FIXTURE_DIR / "model.safetensors"))
+    reference = load_llama(FIXTURE_DIR)
+    cfg = reference.cfg
+    gen = torch.Generator().manual_seed(1)
+    sizes = (cfg.hidden_size, cfg.hidden_size, cfg.intermediate_size)
+    # Log-uniform in [1/8, 8], far wider than a search picks.
+    random = AwqResult(
+        GROUP,
+        *([8 ** (2 * torch.rand(size, generator=gen) - 1) for _ in range(cfg.n_layers)]
+          for size in sizes),
+    )  # fmt: skip
+    searched = collect_and_search(load_llama(FIXTURE_DIR), calibration_ids(), GROUP, "cpu")
+    assert len(searched.s_attn) == len(searched.s_mlp) == len(searched.s_down) == cfg.n_layers
+
+    manifest, goldens = golden.load(FIXTURE_DIR)
+    for label, result in (("random", random), ("searched", searched)):
+        scaled = apply_scales(source, result)
+        assert set(scaled) == set(source)
+        assert all(tensor.dtype == torch.float32 for tensor in scaled.values())
+        for name in ("model.embed_tokens.weight", "model.norm.weight"):
+            assert torch.equal(scaled[name], source[name].float())
+        # The scale each norm weight realizes; a searched scale is already that one.
+        s_eff = {}
+        for i in range(cfg.n_layers):
+            for site, norm in NORM_SITES.items():
+                name = f"model.layers.{i}.{norm}.weight"
+                assert torch.equal(scaled[name], scaled[name].half().float())
+                s_eff[f"layers.{i}.{site}"] = source[name].float() / scaled[name]
+            if label == "searched":
+                assert torch.equal(s_eff[f"layers.{i}.attn_norm"], result.s_attn[i])
+                assert torch.equal(s_eff[f"layers.{i}.mlp_norm"], result.s_mlp[i])
+
+        out = tmp_path / label
+        out.mkdir()
+        shutil.copyfile(FIXTURE_DIR / "config.json", out / "config.json")
+        save_file(scaled, str(out / "model.safetensors"))
+        model = load_llama(out, "native")
+        for prompt in manifest["prompts"]:
+            ids = goldens[f"{prompt['id']}/input_ids"].tolist()
+            actual = golden.capture_sites(model, ids)
+            expected = golden.capture_sites(reference, ids)
+            assert tolerance.rel_rms(actual["logits"], expected["logits"]) <= 1e-5, prompt["id"]
+            assert tolerance.rel_rms(actual["logits"], goldens[f"{prompt['id']}/logits"]) <= 1e-5
+            for site, s in s_eff.items():
+                assert tolerance.rel_rms(actual[site] * s, expected[site]) <= 1e-5, site
+                assert tolerance.rel_rms(actual[site], expected[site]) > 1e-3, site
+
+
+@pytest.mark.parametrize("clip", ["awq", "minmax"])
+def test_convert_with_awq(tmp_path, clip):
+    ids = calibration_ids()
+    calib_meta = {
+        KEY_CALIB_DATASET: "random",
+        KEY_CALIB_WINDOWS: "8",
+        KEY_CALIB_WINDOW: "32",
+        KEY_CALIB_SEED: "0",
+    }
+    out, plain_dir = tmp_path / "awq", tmp_path / "plain"
+    manifest = convert(
+        FIXTURE_DIR, out, "int4_g", GROUP, clip, device="cpu", awq=ids, calib_meta=calib_meta
+    )
+    convert(FIXTURE_DIR, plain_dir, "int4_g", GROUP, device="cpu")
+    source = load_file(str(FIXTURE_DIR / "model.safetensors"))
+    stored = load_file(str(out / "model.safetensors"))
+    plain = load_file(str(plain_dir / "model.safetensors"))
+    n_layers = load_llama(FIXTURE_DIR).cfg.n_layers
+
+    # The header names the scales and where the calibration tokens came from.
+    fmt = WeightFormat.make("int4_g", GROUP, clip, "awq")
+    with safe_open(str(out / "model.safetensors"), framework="pt") as f:
+        metadata = f.metadata()
+    assert WeightFormat.from_metadata(metadata) == fmt
+    assert metadata[KEY_ACT_SCALES] == "awq" and calib_meta.items() <= metadata.items()
+    written = json.loads((out / MANIFEST_FILE).read_text(encoding="utf-8"))
+    assert written["variant"] == fmt.variant
+    assert fmt.variant == ("int4_g.awq" if clip == "awq" else "int4_g.awq-noclip")
+    assert written["awq"]["calib_windows"] == 8 and written["awq"]["calib_window"] == 32
+
+    # No group's calibration loss is above plain rounding's, and no clip raises a matrix's.
+    assert manifest["awq"]["layers"] == written["awq"]["layers"]
+    assert len(written["awq"]["layers"]) == n_layers
+    for layer in written["awq"]["layers"]:
+        for group in ("attn", "mlp", "down"):
+            assert layer[group]["loss"] <= layer[group]["loss_rtn"]
+            assert layer[group]["loss"] == min(layer[group]["losses"])
+            assert layer[group]["losses"][0] == layer[group]["loss_rtn"]
+            assert layer[group]["s_min"] <= 1 <= layer[group]["s_max"]
+        if clip == "awq":
+            assert set(layer["clip"]) == {
+                "self_attn.v_proj", "self_attn.o_proj", "mlp.gate_proj", "mlp.up_proj",
+                "mlp.down_proj",
+            }  # fmt: skip
+            assert all(c["loss"] < c["loss_minmax"] for c in layer["clip"].values())
+        else:
+            assert "clip" not in layer
+    assert any(layer["down"]["alpha"] > 0 for layer in written["awq"]["layers"])
+
+    # The side file holds the tokens and the scales the stored norm weights realize.
+    side = load_file(str(out / SCALES_FILE))
+    assert torch.equal(side[CALIB_IDS], ids) and side[CALIB_IDS].dtype == torch.int32
+    assert len(side) == 1 + 3 * n_layers
+    result = AwqResult(GROUP, *([side[f"layers.{i}.{g}"] for i in range(n_layers)]
+                                for g in ("s_attn", "s_mlp", "s_down")))  # fmt: skip
+    site_scales = norm_site_scales(out)
+    assert set(site_scales) == {f"layers.{i}.{s}" for i in range(n_layers)
+                                for s in ("attn_norm", "mlp_norm")}  # fmt: skip
+    assert norm_site_scales(plain_dir) == {} and norm_site_scales(FIXTURE_DIR) == {}
+    for i in range(n_layers):
+        for site, norm in NORM_SITES.items():
+            name = f"model.layers.{i}.{norm}.weight"
+            assert stored[name].dtype == torch.float16
+            s_eff = plain[name].float() / stored[name].float()
+            assert torch.equal(s_eff, site_scales[f"layers.{i}.{site}"])
+
+    # Tensors no scale or clip touches are the bytes plain int4_g writes; the others are the
+    # scaled weights rounded against min-max scales or, when clipped, smaller ones.
+    assert set(stored) == set(plain)
+    scaled = apply_scales(source, result)
+    clipped = ("v_proj", "o_proj", "gate_proj", "up_proj", "down_proj") if clip == "awq" else ()
+    for name, w in source.items():
+        if w.ndim == 1:
+            continue
+        scale = stored[f"{name}.scale"]
+        untouched = not name.startswith("model.layers.") or "o_proj" in name
+        if any(proj in name for proj in clipped):
+            minmax = quantize_int4_g(scaled[name], GROUP)[1]
+            assert (scale <= minmax).all() and (scale < minmax).any(), name
+            assert torch.equal(stored[name], quantize_int4_g_with_scales(scaled[name], scale))
+        elif untouched:
+            assert torch.equal(stored[name], plain[name]), name
+            assert torch.equal(scale, plain[f"{name}.scale"]), name
+        else:
+            q, minmax = quantize_int4_g(scaled[name], GROUP)
+            assert torch.equal(stored[name], q) and torch.equal(scale, minmax), name
+            assert not torch.equal(stored[name], plain[name]), name
+    assert torch.equal(stored["model.norm.weight"], plain["model.norm.weight"])
+
+    # The reference runs it as any int4_g checkpoint, within the limits of plain int4_g.
+    model, reference = load_llama(out), load_llama(FIXTURE_DIR)
+    _, goldens = golden.load(FIXTURE_DIR)
+    for prompt in golden.load(FIXTURE_DIR)[0]["prompts"]:
+        prompt_ids = torch.tensor([goldens[f"{prompt['id']}/input_ids"].tolist()])
+        actual, expected = model(prompt_ids)[0], reference(prompt_ids)[0]
+        assert tolerance.rel_rms(actual, expected) <= LOGIT_REL_RMS_MAX["int4_g"], prompt["id"]
+        assert tolerance.top1_agreement(actual, expected) == 1.0, prompt["id"]
+
+    # The header says the norm sites are scaled, so the scales may not go missing.
+    alone = tmp_path / "alone"
+    alone.mkdir()
+    shutil.copyfile(out / "model.safetensors", alone / "model.safetensors")
+    with pytest.raises(FileNotFoundError, match="activation scales"):
+        norm_site_scales(alone)
+
+
+def test_convert_rejects_awq_combinations(tmp_path):
+    ids = calibration_ids()
+    for scheme, clip in (("int8_pc", "minmax"), ("int4_g", "mse")):
+        with pytest.raises(ValueError, match="inconsistent"):
+            convert(FIXTURE_DIR, tmp_path / "q", scheme, GROUP, clip, device="cpu", awq=ids)
+    with pytest.raises(ValueError, match="inconsistent"):
+        convert(FIXTURE_DIR, tmp_path / "q", "int4_g", GROUP, "awq", device="cpu")
+    with pytest.raises(ValueError, match="calib_meta"):
+        convert(FIXTURE_DIR, tmp_path / "q", "int4_g", GROUP, device="cpu",
+                calib_meta={KEY_CALIB_SEED: "0"})  # fmt: skip
+    with pytest.raises(ValueError, match="calib_meta"):
+        convert(FIXTURE_DIR, tmp_path / "q", "int4_g", GROUP, device="cpu", awq=ids,
+                calib_meta={KEY_SOURCE: "x"})  # fmt: skip
+    assert not (tmp_path / "q").exists()

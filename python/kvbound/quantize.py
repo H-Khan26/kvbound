@@ -5,6 +5,9 @@ the integers are computed from it, so a stored (q, scale) pair reproduces exactl
 engine multiplies by, and load_dequantized() returns those values for the reference model. The
 format itself is described in kvbound.weight_format.
 
+With --awq, int4_g weights are rescaled by activation statistics of calibration text before they
+are rounded, and clipped by their effect on the output (kvbound.awq).
+
 Usage: python -m kvbound.quantize tinyllama-1.1b --scheme int4_g --group-size 128
 """
 
@@ -23,7 +26,9 @@ from safetensors.torch import save_file
 from torch import Tensor
 
 from kvbound.models import load_spec, sha256_file
+from kvbound.ref import load_llama
 from kvbound.weight_format import (
+    CALIB_KEYS,
     CLIPS,
     DEFAULT_GROUP_SIZE,
     INT4_G,
@@ -45,6 +50,9 @@ COPIED_FILES = (
     "special_tokens_map.json",
     "tokenizer.model",
 )
+
+# Tensors of the transformer layers, the ones activation scales are folded into.
+LAYER_PREFIX = "model.layers."
 
 # Clip ratios the mse search tries per group, largest first; 1.0 is plain min-max.
 CLIP_RATIOS = tuple(1.0 - 0.5 * i / 19 for i in range(20))
@@ -124,8 +132,22 @@ def quantize_int4_g(w: Tensor, group_size: int, clip: str = "minmax") -> tuple[T
     groups = w.float().reshape(out_features, in_features // group_size, group_size)
     amax = groups.abs().amax(dim=-1)
     scale = mse_clip_scales(groups, amax) if clip == "mse" else f16_scales(amax, QMAX[INT4_G])
+    return quantize_int4_g_with_scales(w, scale), scale
+
+
+def quantize_int4_g_with_scales(w: Tensor, scale: Tensor) -> Tensor:
+    """w [out, in] packed as uint8 [out, in / 2] against given F16 scales [out, in / group].
+
+    Weights beyond 7 scales saturate, which is how a scale below a group's min-max one clips.
+    """
+    out_features, in_features = w.shape
+    if scale.dtype != torch.float16 or scale.ndim != 2 or scale.shape[0] != out_features:
+        raise ValueError(
+            f"expected F16 scales [{out_features}, groups], got {scale.dtype} {tuple(scale.shape)}"
+        )
+    groups = w.float().reshape(out_features, scale.shape[1], -1)
     q = round_to_grid(groups, scale, QMAX[INT4_G]).reshape(out_features, in_features)
-    return pack_int4(q), scale
+    return pack_int4(q)
 
 
 def dequantize_int4_g(packed: Tensor, scale: Tensor, group_size: int) -> Tensor:
@@ -148,10 +170,11 @@ def dequantize(q: Tensor, scale: Tensor, fmt: WeightFormat) -> Tensor:
 
 
 def quantize_tensor(
-    w: Tensor, fmt: WeightFormat, device: str
+    w: Tensor, fmt: WeightFormat, device: str, given_scale: Tensor | None = None
 ) -> tuple[Tensor, Tensor, float | None]:
     """Quantizes w [out, in] a block of rows at a time on `device`.
 
+    The scales are those of fmt's clip, or given_scale (int4_g, F16 [out, in / group]) when set.
     Returns q and scale on the CPU and the SQNR in dB (None when there is no error to measure).
     """
     rows = max(1, CHUNK_ELEMENTS // w.shape[1])
@@ -159,7 +182,11 @@ def quantize_tensor(
     signal = noise = 0.0
     for start in range(0, w.shape[0], rows):
         chunk = w[start : start + rows].to(device).float()
-        q, scale = quantize(chunk, fmt)
+        if given_scale is None:
+            q, scale = quantize(chunk, fmt)
+        else:
+            scale = given_scale[start : start + rows].to(device)
+            q = quantize_int4_g_with_scales(chunk, scale)
         error = chunk - dequantize(q, scale, fmt)
         signal += chunk.double().pow(2).sum().item()
         noise += error.double().pow(2).sum().item()
@@ -184,6 +211,8 @@ def convert(
     clip: str = "minmax",
     source: str = "",
     device: str | None = None,
+    awq: Tensor | None = None,
+    calib_meta: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Writes a quantized copy of the plain checkpoint in src_dir to out_dir; returns its manifest.
 
@@ -191,10 +220,19 @@ def convert(
     are stored as F16. Tensors are converted one at a time, a block of rows at a time on `device`
     (the GPU when available). out_dir also gets config.json, the tokenizer files and
     quantize_manifest.json (format, per-tensor SQNR and bits per weight, sizes, source hash).
+
+    awq, calibration token ids [n, len], makes an activation-aware int4_g checkpoint (kvbound.awq):
+    scales searched on those tokens on `device` are folded into the layers' tensors before they
+    are quantized, one layer in memory at a time, and clip "awq" also takes the clip scales the
+    search finds. SQNR is then relative to the scaled weights. out_dir also gets
+    awq_scales.safetensors and the manifest an "awq" section; calib_meta holds the header keys
+    that say where the tokens came from.
     """
-    fmt = WeightFormat.make(scheme, group_size, clip)
+    fmt = WeightFormat.make(scheme, group_size, clip, "awq" if awq is not None else "")
     if not fmt.quantized:
         raise ValueError(f"{scheme!r} is not a quantized scheme")
+    if set(calib_meta or {}) - set(CALIB_KEYS) or (calib_meta and awq is None):
+        raise ValueError(f"calib_meta takes the keys {CALIB_KEYS}, with awq only")
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     src_dir, out_dir = Path(src_dir), Path(out_dir)
     src = src_dir / WEIGHTS_FILE
@@ -203,6 +241,10 @@ def convert(
     tensors: dict[str, Tensor] = {}
     report: dict[str, dict[str, Any]] = {}
     n_params = n_bytes = 0
+    # With awq: the tensors of the layer being written with its scales folded in, and what the
+    # search found.
+    scaled: dict[str, Tensor] = {}
+    awq_result = awq_report = None
     with safe_open(str(src), framework="pt") as f:
         if WeightFormat.from_metadata(f.metadata()).quantized:
             raise ValueError(f"{src} is already quantized")
@@ -212,12 +254,47 @@ def convert(
             if len(shape) != 1:
                 fmt.check_shape(shape, name)
 
+        if awq is not None:
+            # Imported here because kvbound.awq builds on this module.
+            from kvbound.awq import (  # noqa: PLC0415
+                SCALES_FILE,
+                collect_and_search,
+                save_scales,
+                scale_layer,
+            )
+
+            on_cuda = torch.device(device).type == "cuda"
+            if on_cuda:
+                torch.cuda.reset_peak_memory_stats(device)
+            awq_result = collect_and_search(
+                load_llama(src_dir, "fp16"), awq, group_size, device, clip == "awq"
+            )
+            awq_report = {
+                "calib_windows": awq.shape[0],
+                "calib_window": awq.shape[1],
+                "search_seconds": time.perf_counter() - started,
+                "layers": awq_result.report,
+            }
+            if on_cuda:
+                awq_report["cuda_max_memory_allocated"] = torch.cuda.max_memory_allocated(device)
+        # The scales of a tensor the clip search did not visit are min-max ones.
+        clip_scales = awq_result.clip_scales if awq_result else {}
+        unclipped = WeightFormat.make(scheme, group_size) if awq_result else fmt
+
         for name in names:
-            w = f.get_tensor(name)
+            if awq_result and name.startswith(LAYER_PREFIX) and name not in scaled:
+                # The first tensor of a layer: its scales are folded into the whole layer.
+                i = int(name.split(".")[2])
+                prefix = f"{LAYER_PREFIX}{i}."
+                scaled = {n: f.get_tensor(n).float() for n in names if n.startswith(prefix)}
+                scaled |= scale_layer(
+                    scaled, i, awq_result.s_attn[i], awq_result.s_mlp[i], awq_result.s_down[i]
+                )
+            w = scaled.pop(name) if name in scaled else f.get_tensor(name)
             if w.ndim == 1:
                 tensors[name] = to_f16(w, name)
                 continue
-            q, scale, sqnr = quantize_tensor(w, fmt, device)
+            q, scale, sqnr = quantize_tensor(w, unclipped, device, clip_scales.get(name))
             tensors[name], tensors[name + SCALE_SUFFIX] = q, scale
             n_params += w.numel()
             n_bytes += q.nbytes + scale.nbytes
@@ -232,11 +309,14 @@ def convert(
     if source:
         metadata[KEY_SOURCE] = source
     metadata[KEY_SOURCE_SHA256] = source_sha256
+    metadata.update(calib_meta or {})
     out_dir.mkdir(parents=True, exist_ok=True)
     save_file(tensors, str(out_dir / WEIGHTS_FILE), metadata=metadata)
     for file in COPIED_FILES:
         if (src_dir / file).exists():
             shutil.copyfile(src_dir / file, out_dir / file)
+    if awq is not None and awq_result is not None:
+        save_scales(out_dir / SCALES_FILE, awq_result, awq)
 
     sqnrs = [t["sqnr_db"] for t in report.values() if t["sqnr_db"] is not None]
     manifest = {
@@ -254,6 +334,8 @@ def convert(
         "torch_version": torch.__version__,
         "tensors": report,
     }
+    if awq_report is not None:
+        manifest["awq"] = awq_report
     with (out_dir / MANIFEST_FILE).open("w", encoding="utf-8", newline="\n") as out:
         out.write(json.dumps(manifest, indent=2) + "\n")
     return manifest
@@ -314,23 +396,45 @@ def main() -> None:
     parser.add_argument("model")
     parser.add_argument("--scheme", choices=[INT8_PC, INT4_G], required=True)
     parser.add_argument("--group-size", type=int, default=DEFAULT_GROUP_SIZE, help="int4_g only")
-    parser.add_argument("--clip", choices=CLIPS, default="minmax", help="mse: int4_g only")
+    parser.add_argument(
+        "--clip", choices=CLIPS, default=None, help="int4_g only; default: awq with --awq"
+    )
+    parser.add_argument(
+        "--awq", action="store_true", help="int4_g only: activation-aware scales (kvbound.awq)"
+    )
+    parser.add_argument("--calib-windows", type=int, default=128, help="--awq: windows of text")
+    parser.add_argument("--calib-len", type=int, default=512, help="--awq: tokens per window")
+    parser.add_argument("--calib-seed", type=int, default=0, help="--awq: which windows")
     parser.add_argument("--device", default=None, help="default: cuda when available")
     args = parser.parse_args()
-    if args.scheme == INT8_PC and args.clip != "minmax":
-        parser.error("--clip mse applies to int4_g only")
+    clip = args.clip or ("awq" if args.awq else "minmax")
+    if args.scheme == INT8_PC and (args.awq or clip != "minmax"):
+        parser.error("--clip and --awq apply to int4_g only")
+    if args.awq and clip == "mse":
+        parser.error("--awq takes --clip awq or --clip minmax")
+    if clip == "awq" and not args.awq:
+        parser.error("--clip awq needs --awq")
 
     spec = load_spec(args.model)
-    fmt = WeightFormat.make(args.scheme, args.group_size, args.clip)
+    fmt = WeightFormat.make(args.scheme, args.group_size, clip, "awq" if args.awq else "")
     out_dir = spec.variant_dir(fmt.variant)
+    windows = calib_meta = None
+    if args.awq:
+        # Imported here because kvbound.awq builds on this module.
+        from kvbound.awq import calibration_meta, calibration_windows  # noqa: PLC0415
+
+        calib = (args.calib_windows, args.calib_len, args.calib_seed)
+        windows, calib_meta = calibration_windows(spec, *calib), calibration_meta(*calib)
     m = convert(
         spec.checkpoint_dir,
         out_dir,
         args.scheme,
         args.group_size,
-        args.clip,
+        clip,
         source=f"{spec.hf_repo}@{spec.revision}",
         device=args.device,
+        awq=windows,
+        calib_meta=calib_meta,
     )
     print(
         f"{spec.name} {fmt.variant}: SQNR mean {m['mean_sqnr_db']:.2f} dB, "
@@ -338,6 +442,18 @@ def main() -> None:
         f"{m['quantized_bytes'] / 1e9:.3f} GB quantized, file {m['file_bytes'] / 1e9:.3f} GB | "
         f"{m['seconds']:.1f} s\n{out_dir}"
     )
+    if args.awq:
+        layers = m["awq"]["layers"]
+        for group in ("attn", "mlp", "down"):
+            found = [layer[group] for layer in layers]
+            loss, rtn = (math.fsum(g[key] for g in found) for key in ("loss", "loss_rtn"))
+            print(
+                f"awq {group}: mean alpha {statistics.fmean(g['alpha'] for g in found):.2f}, "
+                f"calibration loss {loss / rtn:.3f} of plain rounding's, "
+                f"largest scaled activation {max(g['max_abs_input'] for g in found):.1f}"
+            )
+        peak = m["awq"].get("cuda_max_memory_allocated", 0)
+        print(f"awq search: {m['awq']['search_seconds']:.1f} s, peak {peak / 1e9:.2f} GB on GPU")
 
 
 if __name__ == "__main__":

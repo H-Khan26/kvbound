@@ -10,11 +10,12 @@ MODEL ?= tinyllama-1.1b
 DEVICE ?= rtx3060ti
 # Arrival rates of serve-load, in requests per second
 RATES ?= 2 4 8 16
-# Weight variant and KV dtype for `make eval`: fp16 | int8_pc | int4_g | int4_g.mse, fp16 | int8
+# Weight variant and KV dtype for `make eval`:
+# fp16 | int8_pc | int4_g | int4_g.mse | int4_g.awq | int4_g.awq-noclip, fp16 | int8
 WEIGHTS ?= fp16
 KV ?= fp16
 # The weights:kv pairs `make precision` measures
-PRECISIONS ?= fp16:fp16 fp16:int8 int8_pc:fp16 int8_pc:int8 int4_g:fp16 int4_g:int8
+PRECISIONS ?= fp16:fp16 fp16:int8 int8_pc:fp16 int8_pc:int8 int4_g:fp16 int4_g:int8 int4_g.awq:fp16 int4_g.awq:int8
 
 # On Windows, recipes need a POSIX sh (Git Bash) and cmake/ctest run inside the MSVC environment.
 ifeq ($(OS),Windows_NT)
@@ -113,9 +114,10 @@ microbench:       ## build the cuda preset, then run bandwidth, latency, GEMM an
 	$(MAKE) build PRESET=cuda
 	uv run python -m kvbound.microbench --preset cuda
 
-quantize:         ## quantized checkpoints: INT8 per channel and INT4 in groups of 128 (MODEL=...)
+quantize:         ## quantized checkpoints: INT8 per channel, INT4 in groups of 128, and INT4 with AWQ scales (MODEL=...)
 	uv run python -m kvbound.quantize $(MODEL) --scheme int8_pc
 	uv run python -m kvbound.quantize $(MODEL) --scheme int4_g --group-size 128
+	uv run python -m kvbound.quantize $(MODEL) --scheme int4_g --group-size 128 --awq
 
 eval:             ## WikiText-2 perplexity of the engine at one precision (MODEL=... WEIGHTS=fp16 KV=fp16)
 	$(MAKE) build PRESET=cuda
