@@ -39,9 +39,10 @@ struct EngineConfig {
   int f16_gemv_rows = 4;
   // Read cached keys 16 bytes at a time where the KV layout allows it.
   bool wide_key_loads = true;
-  // Steps of up to this many rows multiply quantized weights in place; wider steps expand each
-  // matrix to FP16 for a tensor-core product.
+  // Steps of up to this many rows multiply quantized weights in place; wider steps use tensor
+  // cores on the quantized weights, or with expand_quantized, expand each matrix to FP16 first.
   int quantized_gemm_rows = 16;
+  bool expand_quantized = false;
   // Bytes of FP16 a quantized matrix is expanded to at a time, as whole output channels.
   std::size_t dequant_slice_bytes = std::size_t{32} << 20;
   // Replays decode-shaped steps from a captured CUDA graph instead of launching each kernel.

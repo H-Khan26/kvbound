@@ -47,10 +47,12 @@ struct LlamaModelConfig {
   // Read cached keys 16 bytes at a time where the KV layout allows it.
   bool wide_key_loads = true;
   // Quantized matrices are multiplied in place for steps of up to this many rows. Wider steps
-  // expand each matrix to FP16 first and use the tensor-core product.
+  // use tensor cores on the quantized weights, or with expand_quantized, expand each matrix to
+  // FP16 first for cuBLAS.
   int quantized_gemm_rows = 16;
-  // A matrix is expanded this many bytes at a time, as whole output channels, so the vocabulary
-  // projection needs no scratch of its own size.
+  bool expand_quantized = false;
+  // An expanded matrix is written this many bytes at a time, as whole output channels, so the
+  // vocabulary projection needs no scratch of its own size.
   std::size_t dequant_slice_bytes = std::size_t{32} << 20;
 };
 

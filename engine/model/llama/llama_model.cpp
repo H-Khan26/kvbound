@@ -108,9 +108,10 @@ DeviceWeights load_weights(const std::filesystem::path& model_dir, const Program
 }
 
 // Bytes of scratch for expanding quantized matrices: the largest one a step may multiply with
-// more rows than the in-place kernel takes, up to one slice.
+// more rows than the in-place kernel takes, up to one slice. None unless the engine expands.
 std::size_t dequant_scratch_bytes(const Program& program, const DeviceWeights& weights,
                                   const LlamaModelConfig& limits) {
+  if (!limits.expand_quantized) return 0;
   std::size_t bytes = 0;
   for (const Op& op : program.ops) {
     if (op.kind != OpKind::Linear || weights.ref(op.weight).scheme == WeightScheme::F16) continue;
@@ -192,6 +193,9 @@ void LlamaModel::run(const StepRow* rows, const std::int32_t* out_rows, int n_to
         } else if (n_rows <= limits_.quantized_gemm_rows) {
           kernels::linear_quantized(weight, value<f16>(op.in0), value<void>(op.out), n_rows, n_in,
                                     n_out_cols, out->dtype == DType::F32, stream);
+        } else if (!limits_.expand_quantized) {
+          kernels::gemm_quantized(weight, value<f16>(op.in0), value<void>(op.out), n_rows, n_in,
+                                  n_out_cols, out->dtype == DType::F32, stream);
         } else {
           // Expanded and multiplied a slice of output channels at a time.
           const int slice = static_cast<int>(dequant_.bytes() / sizeof(f16) / n_in);

@@ -328,7 +328,7 @@ class PyEngine {
            int kv_block_size, const std::string& kv_layout, const std::string& gemm, bool graph,
            const std::string& plan, bool wide_key_loads, int kv_blocks, int max_graphs,
            const std::string& kv_dtype, int quantized_gemm_rows, std::size_t dequant_slice_bytes,
-           bool fuse, int f16_gemv_rows)
+           bool fuse, int f16_gemv_rows, bool expand_quantized)
       : engine_(model_dir, kvb::cuda::EngineConfig{
                                .max_ctx = max_ctx,
                                .max_seqs = max_seqs,
@@ -346,6 +346,7 @@ class PyEngine {
                                .f16_gemv_rows = f16_gemv_rows,
                                .wide_key_loads = wide_key_loads,
                                .quantized_gemm_rows = quantized_gemm_rows,
+                               .expand_quantized = expand_quantized,
                                .dequant_slice_bytes = dequant_slice_bytes,
                                .use_graph = graph,
                                .max_graphs = max_graphs,
@@ -480,12 +481,13 @@ NB_MODULE(_kvb, m) {
   nb::class_<PyEngine>(m, "Engine")
       .def(nb::init<const std::string&, int, int, int, int, const std::string&, const std::string&,
                     bool, const std::string&, bool, int, int, const std::string&, int, std::size_t,
-                    bool, int>(),
+                    bool, int, bool>(),
            "model_dir"_a, "max_ctx"_a = 2048, "max_seqs"_a = 1, "max_step_tokens"_a = 0,
            "kv_block_size"_a = 0, "kv_layout"_a = "head_major", "gemm"_a = "fp32", "graph"_a = true,
            "plan"_a = "greedy", "wide_key_loads"_a = true, "kv_blocks"_a = 0, "max_graphs"_a = 16,
            "kv_dtype"_a = "fp16", "quantized_gemm_rows"_a = 16,
-           "dequant_slice_bytes"_a = std::size_t{32} << 20, "fuse"_a = true, "f16_gemv_rows"_a = 4)
+           "dequant_slice_bytes"_a = std::size_t{32} << 20, "fuse"_a = true, "f16_gemv_rows"_a = 4,
+           "expand_quantized"_a = false)
       .def("feed", &PyEngine::feed, "ids"_a, "start"_a = 0, "seq"_a = 0, "capture"_a = false)
       .def("generate", &PyEngine::generate, "prompt"_a, "max_new_tokens"_a, "temperature"_a = 0.0f,
            "top_k"_a = 0, "top_p"_a = 1.0f, "seed"_a = 0, "eos_token_id"_a = -1)

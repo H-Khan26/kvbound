@@ -5,7 +5,8 @@ between the threads of a block, initcheck finds reads of device memory that was 
 The run covers chunked prefill and decode, with and without CUDA graphs, one request at a time,
 as a static batch, and under continuous batching over 4-token blocks in a pool small enough to
 preempt a sequence and to evict CUDA graphs. The paged run repeats with an INT8 KV cache and
-with INT8 and INT4 copies of the fixture's weights, multiplied in place and expanded to FP16.
+with INT8 and INT4 copies of the fixture's weights, multiplied in place, on tensor cores and
+expanded to FP16.
 
 Usage: python -m kvbound.sanitize
 """
@@ -59,6 +60,7 @@ def main() -> None:
         ("graph, 3 slots", fp16, ["--graph", "1", "--slots", "3", *static]),
         ("graph, paged", fp16, ["--graph", "1", "--slots", "3", "--max-graphs", "1", *paged]),
         ("eager, paged", fp16, ["--graph", "0", "--slots", "3", *paged]),
+        ("unfused, cuBLAS", fp16, ["--slots", "3", "--fuse", "0", "--f16-gemv-rows", "0", *paged]),
         ("int8 kv, paged", fp16, ["--slots", "3", "--kv-dtype", "int8", *paged]),
     ]
     failed = False
@@ -70,8 +72,10 @@ def main() -> None:
             quantize.convert(FIXTURE_DIR, quantized, scheme, group_size=32, device="cpu")
             in_place = ["--slots", "3", "--kv-dtype", "int8", *paged]
             cases.append((f"{scheme}, in place", str(quantized), in_place))
+            wide = [*in_place, "--quantized-gemm-rows", "0"]
+            cases.append((f"{scheme}, tensor cores", str(quantized), wide))
             cases.append(
-                (f"{scheme}, expanded", str(quantized), [*in_place, "--quantized-gemm-rows", "0"])
+                (f"{scheme}, expanded", str(quantized), [*wide, "--expand-quantized", "1"])
             )
         for tool in TOOLS:
             for name, model_dir, options in cases:

@@ -181,9 +181,9 @@ def quantized_fixture(tmp_path_factory):
 @pytest.mark.parametrize("scheme", ["int8_pc", "int4_g"])
 def test_quantized_weights_match_the_dequantizing_reference(kvb, quantized_fixture, scheme):
     """The engine on quantized weights against the reference model computing in FP32 on the same
-    weights dequantized. Both ways of multiplying are covered: in place, and expanded to FP16 for
-    the tensor-core product (quantized_gemm_rows=0 expands on every step), whole and two output
-    channels at a time."""
+    weights dequantized. Every way of multiplying is covered: in place, on tensor cores
+    (quantized_gemm_rows=0 takes that path on every step), and expanded to FP16 for cuBLAS, whole
+    and two output channels at a time."""
     model_dir = quantized_fixture[scheme]
     model = load_llama(model_dir)
     manifest, tensors = golden.load(FIXTURE_DIR)
@@ -193,8 +193,9 @@ def test_quantized_weights_match_the_dequantizing_reference(kvb, quantized_fixtu
     expected_tokens = [
         reference_greedy(model, p, n)[0] for p, n in zip(prompts, lengths, strict=True)
     ]
-    expand = {"quantized_gemm_rows": 0}
-    for options in ({}, {"fuse": False}, expand, {**expand, "dequant_slice_bytes": 256}):
+    wide = {"quantized_gemm_rows": 0}
+    expand = {**wide, "expand_quantized": True}
+    for options in ({}, {"fuse": False}, wide, expand, {**expand, "dequant_slice_bytes": 256}):
         engine = kvb.Engine(str(model_dir), max_ctx=64, max_seqs=2, kv_block_size=8, **options)
         assert engine.weights() == scheme
         for prompt in manifest["prompts"]:

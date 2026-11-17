@@ -249,6 +249,7 @@ int run(int argc, char** argv) {
   config.max_graphs = args.integer("max-graphs", config.max_graphs);
   const std::string policy = args.str("policy", "static");
   config.quantized_gemm_rows = args.integer("quantized-gemm-rows", config.quantized_gemm_rows);
+  config.expand_quantized = args.integer("expand-quantized", 0) != 0;
   config.fuse = args.integer("fuse", 1) != 0;
   config.f16_gemv_rows = args.integer("f16-gemv-rows", config.f16_gemv_rows);
   const std::string kv_dtype = args.str("kv-dtype", "fp16");
@@ -313,13 +314,15 @@ int run(int argc, char** argv) {
       "\"kv_block_size\": %d, \"kv_blocks\": %d, \"kv_layout\": \"%s\", \"kv_dtype\": \"%s\", "
       "\"weights\": \"%s\", \"weight_group_size\": %d, \"quantized_gemm_rows\": %d, "
       "\"gemm_accumulate\": \"%s\", \"graph\": %s, \"max_graphs\": %d, \"plan\": \"%s\", "
-      "\"fuse\": %s, \"f16_gemv_rows\": %d, \"warmup\": %d, \"iters\": %d},\n",
+      "\"fuse\": %s, \"f16_gemv_rows\": %d, \"expand_quantized\": %s, \"warmup\": %d, "
+      "\"iters\": %d},\n",
       policy.c_str(), resolved.max_seqs, resolved.max_ctx, resolved.max_step_tokens,
       resolved.max_outputs, resolved.kv_block_size, resolved.kv_blocks, layout.c_str(),
       kv_dtype.c_str(), std::string(kvb::weight_scheme_name(engine.weight_format().scheme)).c_str(),
       engine.weight_format().group_size, resolved.quantized_gemm_rows, gemm.c_str(),
       resolved.use_graph ? "true" : "false", resolved.max_graphs, plan.c_str(),
-      resolved.fuse ? "true" : "false", resolved.f16_gemv_rows, warmup, iters);
+      resolved.fuse ? "true" : "false", resolved.f16_gemv_rows,
+      resolved.expand_quantized ? "true" : "false", warmup, iters);
   std::printf(
       "  \"model\": {\"vocab_size\": %lld, \"hidden_size\": %lld, \"n_layers\": %lld, "
       "\"n_heads\": %lld, \"n_kv_heads\": %lld, \"intermediate_size\": %lld},\n",

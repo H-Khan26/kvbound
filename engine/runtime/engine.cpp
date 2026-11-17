@@ -57,6 +57,7 @@ Engine::Engine(const std::filesystem::path& model_dir, const EngineConfig& confi
                        .f16_gemv_rows = config_.f16_gemv_rows,
                        .wide_key_loads = config_.wide_key_loads,
                        .quantized_gemm_rows = config_.quantized_gemm_rows,
+                       .expand_quantized = config_.expand_quantized,
                        .dequant_slice_bytes = config_.dequant_slice_bytes},
       stream_);
   const ModelConfig& cfg = model_->config();
