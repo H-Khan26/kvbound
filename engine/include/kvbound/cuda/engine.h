@@ -44,7 +44,7 @@ struct EngineConfig {
   bool prefill_attention = true;
   // Steps of up to this many rows multiply quantized weights in place; wider steps use tensor
   // cores on the quantized weights, or with expand_quantized, expand each matrix to FP16 first.
-  int quantized_gemm_rows = 16;
+  int quantized_gemm_rows = 3;
   bool expand_quantized = false;
   // Bytes of FP16 a quantized matrix is expanded to at a time, as whole output channels.
   std::size_t dequant_slice_bytes = std::size_t{32} << 20;

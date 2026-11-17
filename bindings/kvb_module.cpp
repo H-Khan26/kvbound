@@ -502,7 +502,7 @@ NB_MODULE(_kvb, m) {
            "model_dir"_a, "max_ctx"_a = 2048, "max_seqs"_a = 1, "max_step_tokens"_a = 0,
            "kv_block_size"_a = 0, "kv_layout"_a = "head_major", "gemm"_a = "fp32", "graph"_a = true,
            "plan"_a = "greedy", "wide_key_loads"_a = true, "kv_blocks"_a = 0, "max_graphs"_a = 16,
-           "kv_dtype"_a = "fp16", "quantized_gemm_rows"_a = 16,
+           "kv_dtype"_a = "fp16", "quantized_gemm_rows"_a = 3,
            "dequant_slice_bytes"_a = std::size_t{32} << 20, "fuse"_a = true, "f16_gemv_rows"_a = 4,
            "expand_quantized"_a = false, "prefill_attention"_a = true)
       .def("feed", &PyEngine::feed, "ids"_a, "start"_a = 0, "seq"_a = 0, "capture"_a = false)

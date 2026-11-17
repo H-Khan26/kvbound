@@ -49,7 +49,7 @@ struct LlamaModelConfig {
   // Quantized matrices are multiplied in place for steps of up to this many rows. Wider steps
   // use tensor cores on the quantized weights, or with expand_quantized, expand each matrix to
   // FP16 first for cuBLAS.
-  int quantized_gemm_rows = 16;
+  int quantized_gemm_rows = 3;
   bool expand_quantized = false;
   // An expanded matrix is written this many bytes at a time, as whole output channels, so the
   // vocabulary projection needs no scratch of its own size.

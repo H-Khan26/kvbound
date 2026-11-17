@@ -184,7 +184,7 @@ def main() -> None:
     parser.add_argument("--kv-layout", default="head_major")
     parser.add_argument("--max-graphs", type=int, default=16)
     parser.add_argument(
-        "--quantized-gemm-rows", type=int, default=16,
+        "--quantized-gemm-rows", type=int, default=3,
         help="widest step that multiplies quantized weights without expanding them to FP16",
     )  # fmt: skip
     parser.add_argument(
