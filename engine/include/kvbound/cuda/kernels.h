@@ -101,6 +101,14 @@ inline constexpr int kQuantizedLinearMaxRows = 16;
 void linear_quantized(const WeightRef& w, const f16* x, void* y, int n_rows, int n_in, int n_out,
                       bool f32_out, cudaStream_t stream);
 
+// y [n_rows, n_out] = x [n_rows, n_in] * W^T for a quantized W on tensor cores: each block
+// expands its tile of W to FP16 in registers, so W crosses the memory bus once per launch at its
+// quantized size. Each weight is the FP16 value dequantize() writes; sums are FP32. y is FP16,
+// or FP32 when f32_out. x and W.data must be 16-byte aligned. Meant for steps wider than
+// linear_quantized serves well.
+void gemm_quantized(const WeightRef& w, const f16* x, void* y, int n_rows, int n_in, int n_out,
+                    bool f32_out, cudaStream_t stream);
+
 // out [n_channels, n_in] = output channels first_channel onward of W as FP16, for steps wide
 // enough that a tensor-core product on the expanded matrix is faster.
 void dequantize(const WeightRef& w, f16* out, int n_in, int first_channel, int n_channels,
