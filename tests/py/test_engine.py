@@ -55,6 +55,8 @@ SPLITS = (lambda n: n, lambda n: 1, lambda n: max(1, n // 2))
         {"kv_layout": "dim_major", "kv_block_size": 8},
         {"fuse": False},
         {"f16_gemv_rows": 0},
+        {"prefill_attention": False},
+        {"prefill_attention": False, "kv_block_size": 4},
     ],
     ids=lambda o: ",".join(f"{k}={v}" for k, v in o.items()) or "default",
 )
@@ -237,6 +239,7 @@ def test_int8_kv_cache_is_close_to_fp16_and_the_same_on_every_path(kvb):
         {"max_seqs": 2, "kv_layout": "token_major", "wide_key_loads": False},
         {"max_seqs": 2, "kv_layout": "dim_major", "kv_block_size": 8, "graph": False},
         {"max_seqs": 3, "fuse": False},
+        {"max_seqs": 3, "prefill_attention": False},
     ):
         engine = kvb.Engine(str(FIXTURE_DIR), max_ctx=64, kv_dtype="int8", **options)
         assert engine.serve(prompts, lengths, policy="continuous") == expected, options
@@ -255,6 +258,8 @@ def test_generation_is_the_same_on_every_path(kvb):
         {"fuse": False},
         {"f16_gemv_rows": 0},
         {"fuse": False, "f16_gemv_rows": 0, "graph": True},
+        {"prefill_attention": False},
+        {"prefill_attention": False, "max_step_tokens": 5, "kv_block_size": 4},
     ):
         assert kvb.Engine(str(FIXTURE_DIR), max_ctx=64, **options).generate(prompt, 30) == expected
     engine = kvb.Engine(str(FIXTURE_DIR), max_ctx=64)

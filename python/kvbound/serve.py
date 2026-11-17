@@ -118,6 +118,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
         "fuse": args.fuse,
         "f16-gemv-rows": args.f16_gemv_rows,
         "expand-quantized": args.expand_quantized,
+        "prefill-attention": args.prefill_attention,
         "max-graphs": args.max_graphs,
         "warmup": args.warmup,
         "iters": args.iters,
@@ -195,6 +196,10 @@ def main() -> None:
     parser.add_argument(
         "--expand-quantized", action="store_true",
         help="wide steps expand quantized matrices to FP16 for cuBLAS",
+    )  # fmt: skip
+    parser.add_argument(
+        "--prefill-attention", action=argparse.BooleanOptionalAction, default=True,
+        help="tensor-core attention for runs of rows of one sequence",
     )  # fmt: skip
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--iters", type=int, default=3)

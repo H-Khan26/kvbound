@@ -5,6 +5,7 @@
 #include <cstring>
 #include <numeric>
 
+#include "kvbound/cuda/kernels.h"
 #include "kvbound/dtype.h"
 
 namespace kvb::cuda {
@@ -43,9 +44,11 @@ Engine::Engine(const std::filesystem::path& model_dir, const EngineConfig& confi
       rows_(config_.max_seqs),
       rows_host_(config_.max_step_tokens * sizeof(StepRow)),
       out_rows_host_(config_.max_step_tokens * sizeof(std::int32_t)),
+      tiles_host_(config_.max_step_tokens * sizeof(AttnTile)),
       next_ids_(config_.max_step_tokens * sizeof(std::int32_t)),
       rows_dev_(rows_host_.bytes()),
-      out_rows_dev_(out_rows_host_.bytes()) {
+      out_rows_dev_(out_rows_host_.bytes()),
+      tiles_dev_(tiles_host_.bytes()) {
   model_ = std::make_unique<LlamaModel>(
       model_dir,
       LlamaModelConfig{.max_ctx = config_.max_ctx,
@@ -123,14 +126,28 @@ void Engine::forward(std::span<const StepRow> rows, std::span<const std::int32_t
                              cudaMemcpyHostToDevice, stream_));
   }
 
+  // A step with a run of several rows of one sequence runs attention as tiles of those runs.
+  int n_tiles = 0;
+  if (config_.prefill_attention) {
+    const std::vector<AttnTile> tiles = plan_attention_tiles(rows, kernels::kAttnTileRows);
+    if (tiles.size() < rows.size()) {
+      n_tiles = static_cast<int>(tiles.size());
+      std::memcpy(tiles_host_.as(), tiles.data(), tiles.size() * sizeof(AttnTile));
+      KVB_CUDA(cudaMemcpyAsync(tiles_dev_.as(), tiles_host_.as(), tiles.size() * sizeof(AttnTile),
+                               cudaMemcpyHostToDevice, stream_));
+    }
+  }
+
   const bool hooked = options.capture != nullptr || options.times != nullptr;
-  // Graphs are kept for decode-shaped steps only: few rows, every row an output.
-  if (config_.use_graph && !hooked && n_out == n_tokens && n_tokens <= config_.max_seqs) {
+  // Graphs are kept for decode-shaped steps only: few rows, every row an output, one row per
+  // sequence. Their kernel arguments are frozen, so they never take the tiled attention.
+  if (config_.use_graph && !hooked && n_tiles == 0 && n_out == n_tokens &&
+      n_tokens <= config_.max_seqs) {
     run_graph(n_tokens, n_out);
   } else if (!hooked) {
     graph_stats_.eager += 1;
-    model_->run(rows_dev_.as<StepRow>(), out_rows_dev_.as<std::int32_t>(), n_tokens, n_out, *kv_,
-                stream_);
+    model_->run(rows_dev_.as<StepRow>(), out_rows_dev_.as<std::int32_t>(), n_tokens, n_out,
+                tiles_dev_.as<AttnTile>(), n_tiles, *kv_, stream_);
   } else {
     graph_stats_.eager += 1;
     RunHooks hooks;
@@ -155,8 +172,8 @@ void Engine::forward(std::span<const StepRow> rows, std::span<const std::int32_t
         std::transform(bits.begin(), bits.end(), host.begin(), half_bits_to_float);
       };
     }
-    model_->run(rows_dev_.as<StepRow>(), out_rows_dev_.as<std::int32_t>(), n_tokens, n_out, *kv_,
-                stream_, &hooks);
+    model_->run(rows_dev_.as<StepRow>(), out_rows_dev_.as<std::int32_t>(), n_tokens, n_out,
+                tiles_dev_.as<AttnTile>(), n_tiles, *kv_, stream_, &hooks);
   }
 
   if (n_out > 0) {
@@ -186,8 +203,8 @@ void Engine::run_graph(int n_tokens, int n_out) {
     cudaGraph_t graph = nullptr;
     KVB_CUDA(cudaStreamBeginCapture(stream_, cudaStreamCaptureModeGlobal));
     try {
-      model_->run(rows_dev_.as<StepRow>(), out_rows_dev_.as<std::int32_t>(), n_tokens, n_out, *kv_,
-                  stream_);
+      model_->run(rows_dev_.as<StepRow>(), out_rows_dev_.as<std::int32_t>(), n_tokens, n_out,
+                  nullptr, 0, *kv_, stream_);
     } catch (...) {
       cudaStreamEndCapture(stream_, &graph);
       if (graph != nullptr) cudaGraphDestroy(graph);

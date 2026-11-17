@@ -144,7 +144,8 @@ LlamaModel::LlamaModel(const std::filesystem::path& model_dir, const LlamaModelC
 }
 
 void LlamaModel::run(const StepRow* rows, const std::int32_t* out_rows, int n_tokens, int n_out,
-                     const KvPool& kv, cudaStream_t stream, const RunHooks* hooks) {
+                     const AttnTile* tiles, int n_tiles, const KvPool& kv, cudaStream_t stream,
+                     const RunHooks* hooks) {
   using kernels::f16;
   using Clock = std::chrono::steady_clock;
   const int n_heads = static_cast<int>(config_.n_heads);
@@ -225,6 +226,11 @@ void LlamaModel::run(const StepRow* rows, const std::int32_t* out_rows, int n_to
         break;
       case OpKind::Attention: {
         const KvView view = kv.layer_view(op.layer);
+        if (n_tiles > 0 && kernels::attention_prefill_supports(view, head_dim)) {
+          kernels::attention_prefill(value<f16>(op.in0), value<f16>(op.out), rows, tiles, n_tiles,
+                                     view, n_heads, n_kv_heads, head_dim, stream);
+          break;
+        }
         kernels::attention(value<f16>(op.in0), value<f16>(op.out), rows, view, n_tokens, n_heads,
                            n_kv_heads, head_dim, limits_.max_ctx,
                            limits_.wide_key_loads ? kernels::widest_key_loads(view, head_dim)

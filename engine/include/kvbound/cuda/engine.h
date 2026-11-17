@@ -39,6 +39,9 @@ struct EngineConfig {
   int f16_gemv_rows = 4;
   // Read cached keys 16 bytes at a time where the KV layout allows it.
   bool wide_key_loads = true;
+  // Steps holding several rows of one sequence (prefill) run attention as tiles of rows on
+  // tensor cores; otherwise every query row is a block of the decode kernel.
+  bool prefill_attention = true;
   // Steps of up to this many rows multiply quantized weights in place; wider steps use tensor
   // cores on the quantized weights, or with expand_quantized, expand each matrix to FP16 first.
   int quantized_gemm_rows = 16;
@@ -161,8 +164,8 @@ class Engine {
   std::unordered_map<int, Sequence> sequences_;
 
   // Step inputs and outputs: pinned host copies and their persistent device buffers.
-  PinnedBuffer rows_host_, out_rows_host_, next_ids_;
-  DeviceBuffer rows_dev_, out_rows_dev_;
+  PinnedBuffer rows_host_, out_rows_host_, tiles_host_, next_ids_;
+  DeviceBuffer rows_dev_, out_rows_dev_, tiles_dev_;
   std::size_t last_n_out_ = 0;
   OpTimes* op_times_ = nullptr;
   std::unordered_map<std::int64_t, Graph> graphs_;  // keyed by (n_tokens, n_out)

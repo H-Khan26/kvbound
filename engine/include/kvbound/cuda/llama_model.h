@@ -75,9 +75,12 @@ class LlamaModel {
   GemmAccumulate gemm_accumulate() const noexcept { return blas_.accumulate(); }
 
   // Launches the whole program for one step. rows [n_tokens] and out_rows [n_out] are device
-  // arrays. Returns without waiting unless hooks ask for timing or captures.
+  // arrays. With n_tiles > 0, attention runs the prefill kernel over tiles [n_tiles], a device
+  // array of runs of rows (see plan_attention_tiles); otherwise one block per query row. Returns
+  // without waiting unless hooks ask for timing or captures.
   void run(const StepRow* rows, const std::int32_t* out_rows, int n_tokens, int n_out,
-           const KvPool& kv, cudaStream_t stream, const RunHooks* hooks = nullptr);
+           const AttnTile* tiles, int n_tiles, const KvPool& kv, cudaStream_t stream,
+           const RunHooks* hooks = nullptr);
 
   // Device outputs of the last run: logits [n_out, vocab] and their argmax [n_out].
   const float* logits() const noexcept { return value<float>(program_.logits); }
