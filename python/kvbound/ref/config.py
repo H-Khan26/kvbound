@@ -1,4 +1,4 @@
-"""Architecture dimensions of a Llama-family checkpoint, read from its config.json."""
+"""Architecture dimensions of a Llama or Whisper checkpoint, read from its config.json."""
 
 import json
 from dataclasses import asdict, dataclass
@@ -85,4 +85,63 @@ class LlamaConfig:
 
     @classmethod
     def from_json(cls, path: Path) -> "LlamaConfig":
+        return cls.from_hf_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
+@dataclass(frozen=True)
+class WhisperConfig:
+    vocab_size: int
+    d_model: int
+    n_mels: int
+    encoder_layers: int
+    encoder_heads: int
+    encoder_ffn_dim: int
+    decoder_layers: int
+    decoder_heads: int
+    decoder_ffn_dim: int
+    # Encoder positions. The two-stride conv stem halves the input, so it takes twice as many
+    # mel frames.
+    max_source_positions: int
+    max_target_positions: int
+    layer_norm_eps: float = 1e-5
+
+    @property
+    def n_frames(self) -> int:
+        """Mel frames of one input window."""
+        return 2 * self.max_source_positions
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_hf_dict(cls, raw: dict[str, Any]) -> "WhisperConfig":
+        # Refuse variants this implementation does not model rather than run them wrongly.
+        unsupported = {
+            "model_type": raw.get("model_type") != "whisper",
+            "activation_function": raw.get("activation_function", "gelu") != "gelu",
+            "scale_embedding": bool(raw.get("scale_embedding", False)),
+            "tie_word_embeddings": not raw.get("tie_word_embeddings", True),
+        }
+        bad = [key for key, is_bad in unsupported.items() if is_bad]
+        if bad:
+            raise ValueError(f"unsupported config fields: {bad}")
+        cfg = cls(
+            vocab_size=raw["vocab_size"],
+            d_model=raw["d_model"],
+            n_mels=raw["num_mel_bins"],
+            encoder_layers=raw["encoder_layers"],
+            encoder_heads=raw["encoder_attention_heads"],
+            encoder_ffn_dim=raw["encoder_ffn_dim"],
+            decoder_layers=raw["decoder_layers"],
+            decoder_heads=raw["decoder_attention_heads"],
+            decoder_ffn_dim=raw["decoder_ffn_dim"],
+            max_source_positions=raw["max_source_positions"],
+            max_target_positions=raw["max_target_positions"],
+        )
+        if cfg.d_model % cfg.encoder_heads or cfg.d_model % cfg.decoder_heads:
+            raise ValueError(f"inconsistent head dimensions: {cfg}")
+        return cfg
+
+    @classmethod
+    def from_json(cls, path: Path) -> "WhisperConfig":
         return cls.from_hf_dict(json.loads(Path(path).read_text(encoding="utf-8")))
