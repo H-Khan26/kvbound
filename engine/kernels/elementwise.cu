@@ -35,11 +35,13 @@ __global__ void rope_kernel(__half* x, const StepRow* rows, const float2* cos_si
   vec[j + half_dim] = __float2half(b * cs.x + a * cs.y);
 }
 
-__global__ void silu_mul_kernel(__half* gate, const __half* up, std::size_t n) {
+__global__ void silu_mul_kernel(const __half* gate, const __half* up, __half* out, int dim,
+                                int in_stride, std::size_t n) {
   const std::size_t i = global_index();
   if (i >= n) return;
-  const float g = __half2float(gate[i]);
-  gate[i] = __float2half(g / (1.0f + __expf(-g)) * __half2float(up[i]));
+  const std::size_t in = i / dim * in_stride + i % dim;
+  const float g = __half2float(gate[in]);
+  out[i] = __float2half(g / (1.0f + __expf(-g)) * __half2float(up[in]));
 }
 
 __global__ void add_kernel(__half* x, const __half* y, std::size_t n) {
@@ -95,8 +97,11 @@ void rope(f16* x, const StepRow* rows, const float* cos_sin, int n_tokens, int n
   KVB_CUDA(cudaGetLastError());
 }
 
-void silu_mul(f16* gate, const f16* up, std::size_t n, cudaStream_t stream) {
-  silu_mul_kernel<<<blocks_for(n), kBlockThreads, 0, stream>>>(as_half(gate), as_half(up), n);
+void silu_mul(const f16* gate, const f16* up, f16* out, int n_rows, int dim, int in_stride,
+              cudaStream_t stream) {
+  const std::size_t n = static_cast<std::size_t>(n_rows) * dim;
+  silu_mul_kernel<<<blocks_for(n), kBlockThreads, 0, stream>>>(as_half(gate), as_half(up),
+                                                               as_half(out), dim, in_stride, n);
   KVB_CUDA(cudaGetLastError());
 }
 

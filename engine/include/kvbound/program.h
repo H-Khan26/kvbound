@@ -15,18 +15,20 @@ namespace kvb {
 // memory planner reads value lifetimes from it, and tests use its capture-site names.
 
 enum class OpKind : std::uint8_t {
-  Embed,       // out = embedding[token ids]
-  RmsNorm,     // out = in0 * rsqrt(mean(in0^2) + eps) * weight
-  Linear,      // out = in0 * weight^T
-  Rope,        // rotates in0 in place by each row's position
-  KvWrite,     // stores keys in0 and values in1 into the KV cache
-  Attention,   // out = softmax(in0 . cached keys) * cached values
-  SiluMul,     // in0 = silu(in0) * in1, in place
-  Add,         // in0 += in1, in place
-  GatherRows,  // out = the rows of in0 whose logits are requested
-  Argmax,      // out = index of the largest element of each row of in0
+  Embed,        // out = embedding[token ids]
+  RmsNorm,      // out = in0 * rsqrt(mean(in0^2) + eps) * weight
+  Linear,       // out = in0 * weight^T
+  Rope,         // rotates in0 in place by each row's position
+  KvWrite,      // stores keys in0 and values in1 into the KV cache
+  Attention,    // out = softmax(in0 . cached keys) * cached values
+  SiluMul,      // out = silu(gate) * up: gate in0 and up in1, or both halves of in0 when in1 < 0
+  Add,          // in0 += in1, in place
+  GatherRows,   // out = the rows of in0 whose logits are requested
+  Argmax,       // out = index of the largest element of each row of in0
+  AddRmsNorm,   // in0 += in1 in place, then out = RmsNorm(in0)
+  RopeKvWrite,  // in0 holds q|k|v per row: out = rotated q; rotated k and v go to the KV cache
 };
-inline constexpr int kOpKindCount = 10;
+inline constexpr int kOpKindCount = 12;
 
 std::string_view op_name(OpKind kind) noexcept;
 
@@ -45,19 +47,27 @@ struct Op {
   int layer = -1;  // transformer layer, -1 outside the layers
   int in0 = -1;    // value ids read
   int in1 = -1;
-  int out = -1;      // value id written; equals in0 for in-place ops, -1 for KvWrite
-  int weight = -1;   // index into Program::weights
-  std::string site;  // golden capture-site name of `out` after this op, empty if none
+  int out = -1;          // value id written; equals in0 for in-place ops, -1 for KvWrite
+  int weight = -1;       // index into Program::weights
+  std::string site;      // golden capture-site name of `out` after this op, empty if none
+  std::string in0_site;  // capture-site name of in0 after an op that updates it in place
 };
+
+// A tensor the program reads: one checkpoint tensor, or several matrices with the same row length
+// stacked along their rows, so that one product computes all of them.
+using WeightParts = std::vector<std::string>;
 
 struct Program {
   std::vector<Value> values;
   std::vector<Op> ops;
-  std::vector<std::string> weights;  // checkpoint tensor names
+  std::vector<WeightParts> weights;  // checkpoint tensor names
   int logits = -1;                   // value ids of the outputs
   int next_ids = -1;
 };
 
-Program build_llama_program(const ModelConfig& cfg);
+// With `fuse`, each layer stacks its q, k and v projections and its gate and up projections into
+// one product each, folds each residual add into the norm that follows it, and rotates q and k
+// as it writes the cache: 9 ops per layer instead of 16. The capture sites are the same.
+Program build_llama_program(const ModelConfig& cfg, bool fuse = true);
 
 }  // namespace kvb

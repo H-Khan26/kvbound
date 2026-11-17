@@ -26,8 +26,10 @@ if(KVB_ENABLE_CUDA)
     kernels/attention.cu
     kernels/blas.cpp
     kernels/elementwise.cu
+    kernels/gemv.cu
     kernels/quantized.cu
     kernels/reductions.cu
+    kernels/rope_kv_write.cu
     kv/kv_pool.cpp
     model/llama/llama_model.cpp
     model/llama/weights.cpp

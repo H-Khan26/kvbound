@@ -33,6 +33,10 @@ struct EngineConfig {
   DType kv_dtype = DType::F16;  // F16, or I8 with one scale per cached vector
   PlanStrategy plan = PlanStrategy::GreedyBySize;
   GemmAccumulate gemm = GemmAccumulate::F32;
+  // The fused program, and the row count up to which FP16 products use kvbound's own kernel
+  // instead of cuBLAS (0: always cuBLAS). See LlamaModelConfig.
+  bool fuse = true;
+  int f16_gemv_rows = 16;
   // Read cached keys 16 bytes at a time where the KV layout allows it.
   bool wide_key_loads = true;
   // Steps of up to this many rows multiply quantized weights in place; wider steps expand each

@@ -139,8 +139,29 @@ Out<f16> rope(In<f16> x, In<std::int32_t> positions, In<float> cos_sin) {
 
 Out<f16> silu_mul(In<f16> gate, In<f16> up) {
   const DeviceBuffer dg = upload(gate), du = upload(up);
-  kvb::kernels::silu_mul(dg.as<f16>(), du.as<f16>(), gate.size(), nullptr);
+  const int n = static_cast<int>(gate.size());
+  kvb::kernels::silu_mul(dg.as<f16>(), du.as<f16>(), dg.as<f16>(), 1, n, n, nullptr);
   return download<f16>(dg.as(), {gate.size()});
+}
+
+// gate_up [rows, 2 * dim]: each row's gate half, then its up half, as the stacked product writes
+// them. Returns [rows, dim].
+Out<f16> silu_mul_stacked(In<f16> gate_up) {
+  const int rows = static_cast<int>(gate_up.shape(0)), dim = static_cast<int>(gate_up.shape(1)) / 2;
+  const DeviceBuffer dx = upload(gate_up), out(static_cast<std::size_t>(rows) * dim * sizeof(f16));
+  kvb::kernels::silu_mul(dx.as<f16>(), dx.as<f16>() + dim, out.as<f16>(), rows, dim, 2 * dim,
+                         nullptr);
+  return download<f16>(out.as(), {gate_up.shape(0), static_cast<std::size_t>(dim)});
+}
+
+// Returns {x + y, rms_norm(x + y)}, both [rows, dim].
+std::vector<Out<f16>> add_rms_norm(In<f16> x, In<f16> y, In<f16> weight, float eps) {
+  const int rows = static_cast<int>(x.shape(0)), dim = static_cast<int>(x.shape(1));
+  const DeviceBuffer dx = upload(x), dy = upload(y), dw = upload(weight), out(x.nbytes());
+  kvb::kernels::add_rms_norm(dx.as<f16>(), dy.as<f16>(), dw.as<f16>(), out.as<f16>(), rows, dim,
+                             eps, nullptr);
+  return {download<f16>(dx.as(), {x.shape(0), x.shape(1)}),
+          download<f16>(out.as(), {x.shape(0), x.shape(1)})};
 }
 
 Out<f16> add(In<f16> x, In<f16> y) {
@@ -175,6 +196,20 @@ nb::object linear(In<f16> weight, In<f16> x, const std::string& accumulate, bool
                      out(n * (f32_out ? sizeof(float) : sizeof(f16)));
   blas.linear(dw.as<f16>(), dx.as<f16>(), out.as(), rows, n_in, n_out,
               f32_out ? kvb::DType::F32 : kvb::DType::F16);
+  if (f32_out) return nb::cast(download<float>(out.as(), {x.shape(0), weight.shape(0)}));
+  return nb::cast(download<f16>(out.as(), {x.shape(0), weight.shape(0)}));
+}
+
+// weight [n_out, n_in], x [rows, n_in] through kvbound's FP16 kernel. Returns float16 bits, or
+// float32 when f32_out.
+nb::object linear_f16(In<f16> weight, In<f16> x, bool f32_out) {
+  const int n_out = static_cast<int>(weight.shape(0)), n_in = static_cast<int>(weight.shape(1));
+  const int rows = static_cast<int>(x.shape(0));
+  const std::size_t n = static_cast<std::size_t>(rows) * n_out;
+  const DeviceBuffer dw = upload(weight), dx = upload(x),
+                     out(n * (f32_out ? sizeof(float) : sizeof(f16)));
+  kvb::kernels::linear_f16(dw.as<f16>(), dx.as<f16>(), out.as(), rows, n_in, n_out, f32_out,
+                           nullptr);
   if (f32_out) return nb::cast(download<float>(out.as(), {x.shape(0), weight.shape(0)}));
   return nb::cast(download<f16>(out.as(), {x.shape(0), weight.shape(0)}));
 }
@@ -279,7 +314,8 @@ class PyEngine {
   PyEngine(const std::string& model_dir, int max_ctx, int max_seqs, int max_step_tokens,
            int kv_block_size, const std::string& kv_layout, const std::string& gemm, bool graph,
            const std::string& plan, bool wide_key_loads, int kv_blocks, int max_graphs,
-           const std::string& kv_dtype, int quantized_gemm_rows, std::size_t dequant_slice_bytes)
+           const std::string& kv_dtype, int quantized_gemm_rows, std::size_t dequant_slice_bytes,
+           bool fuse, int f16_gemv_rows)
       : engine_(model_dir, kvb::cuda::EngineConfig{
                                .max_ctx = max_ctx,
                                .max_seqs = max_seqs,
@@ -293,6 +329,8 @@ class PyEngine {
                                .plan = plan == "naive" ? kvb::PlanStrategy::Naive
                                                        : kvb::PlanStrategy::GreedyBySize,
                                .gemm = accumulate_from(gemm),
+                               .fuse = fuse,
+                               .f16_gemv_rows = f16_gemv_rows,
                                .wide_key_loads = wide_key_loads,
                                .quantized_gemm_rows = quantized_gemm_rows,
                                .dequant_slice_bytes = dequant_slice_bytes,
@@ -407,10 +445,13 @@ NB_MODULE(_kvb, m) {
   m.def("embedding", &embedding, "table"_a, "ids"_a);
   m.def("rope", &rope, "x"_a, "positions"_a, "cos_sin"_a);
   m.def("silu_mul", &silu_mul, "gate"_a, "up"_a);
+  m.def("silu_mul_stacked", &silu_mul_stacked, "gate_up"_a);
+  m.def("add_rms_norm", &add_rms_norm, "x"_a, "y"_a, "weight"_a, "eps"_a);
   m.def("add", &add, "x"_a, "y"_a);
   m.def("gather_rows", &gather_rows, "x"_a, "out_rows"_a);
   m.def("argmax", &argmax, "logits"_a);
   m.def("linear", &linear, "weight"_a, "x"_a, "accumulate"_a = "fp32", "f32_out"_a = false);
+  m.def("linear_f16", &linear_f16, "weight"_a, "x"_a, "f32_out"_a = false);
   m.def("kv_attention", &kv_attention, "q"_a, "k"_a, "v"_a, "positions"_a, "seqs"_a, "kv_slots"_a,
         "block_table"_a, "block_size"_a, "n_blocks"_a, "layout"_a = "head_major",
         "query_from"_a = 0, "wide_key_loads"_a = true, "kv_dtype"_a = "fp16");
@@ -423,13 +464,13 @@ NB_MODULE(_kvb, m) {
 
   nb::class_<PyEngine>(m, "Engine")
       .def(nb::init<const std::string&, int, int, int, int, const std::string&, const std::string&,
-                    bool, const std::string&, bool, int, int, const std::string&, int,
-                    std::size_t>(),
+                    bool, const std::string&, bool, int, int, const std::string&, int, std::size_t,
+                    bool, int>(),
            "model_dir"_a, "max_ctx"_a = 2048, "max_seqs"_a = 1, "max_step_tokens"_a = 0,
            "kv_block_size"_a = 0, "kv_layout"_a = "head_major", "gemm"_a = "fp32", "graph"_a = true,
            "plan"_a = "greedy", "wide_key_loads"_a = true, "kv_blocks"_a = 0, "max_graphs"_a = 16,
            "kv_dtype"_a = "fp16", "quantized_gemm_rows"_a = 16,
-           "dequant_slice_bytes"_a = std::size_t{32} << 20)
+           "dequant_slice_bytes"_a = std::size_t{32} << 20, "fuse"_a = true, "f16_gemv_rows"_a = 16)
       .def("feed", &PyEngine::feed, "ids"_a, "start"_a = 0, "seq"_a = 0, "capture"_a = false)
       .def("generate", &PyEngine::generate, "prompt"_a, "max_new_tokens"_a, "temperature"_a = 0.0f,
            "top_k"_a = 0, "top_p"_a = 1.0f, "seed"_a = 0, "eos_token_id"_a = -1)

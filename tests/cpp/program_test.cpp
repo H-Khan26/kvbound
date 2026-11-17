@@ -20,14 +20,17 @@ namespace {
 const std::filesystem::path kFixture = KVB_FIXTURE_DIR;
 
 struct Planned {
+  explicit Planned(bool fuse = true) : program(kvb::build_llama_program(config, fuse)) {}
   kvb::ModelConfig config = kvb::load_model_config(kFixture / "config.json");
-  kvb::Program program = kvb::build_llama_program(config);
+  kvb::Program program;
   std::vector<kvb::Lifetime> lifetimes = kvb::value_lifetimes(program);
   std::vector<std::size_t> bytes = kvb::value_bytes(program, 48, 8);
 };
 
-TEST(Program, ReadsOnlyValuesAlreadyWritten) {
-  const Planned p;
+class FusedOrNot : public testing::TestWithParam<bool> {};
+
+TEST_P(FusedOrNot, ReadsOnlyValuesAlreadyWritten) {
+  const Planned p(GetParam());
   std::set<int> written;
   for (const kvb::Op& op : p.program.ops) {
     for (const int in : {op.in0, op.in1}) {
@@ -38,16 +41,19 @@ TEST(Program, ReadsOnlyValuesAlreadyWritten) {
   EXPECT_EQ(written.size(), p.program.values.size());
 }
 
-TEST(Program, NamesEveryCheckpointTensorAndGoldenSite) {
-  const Planned p;
+TEST_P(FusedOrNot, NamesEveryCheckpointTensorAndGoldenSite) {
+  const Planned p(GetParam());
   const kvb::SafetensorsFile weights{kFixture / "model.safetensors"};
-  const std::set<std::string> used(p.program.weights.begin(), p.program.weights.end());
+  std::set<std::string> used;
+  for (const kvb::WeightParts& parts : p.program.weights) used.insert(parts.begin(), parts.end());
   for (const std::string& name : used) EXPECT_NE(weights.find(name), nullptr) << name;
   EXPECT_EQ(used.size(), weights.tensors().size());
 
   std::set<std::string> sites;
   for (const kvb::Op& op : p.program.ops) {
-    if (!op.site.empty()) EXPECT_TRUE(sites.insert(op.site).second) << op.site;
+    for (const std::string* site : {&op.site, &op.in0_site}) {
+      if (!site->empty()) EXPECT_TRUE(sites.insert(*site).second) << *site;
+    }
   }
   const kvb::MappedFile manifest_file{kFixture / "manifest.json"};
   const kvb::json::Value manifest = kvb::json::parse(manifest_file.text());
@@ -56,6 +62,17 @@ TEST(Program, NamesEveryCheckpointTensorAndGoldenSite) {
   for (const auto& [site, limit] : limits) EXPECT_TRUE(sites.contains(site)) << site;
   EXPECT_EQ(sites.size(), limits.size());
 }
+
+TEST(Program, FusingTakesNineOpsPerLayer) {
+  const Planned fused(true), unfused(false);
+  const std::size_t layers = static_cast<std::size_t>(fused.config.n_layers);
+  // Outside the layers: embed, gather, norm, logits, argmax, and in the fused program the first
+  // layer's input norm.
+  EXPECT_EQ(unfused.program.ops.size(), 16 * layers + 5);
+  EXPECT_EQ(fused.program.ops.size(), 9 * layers + 6);
+}
+
+INSTANTIATE_TEST_SUITE_P(Program, FusedOrNot, testing::Bool());
 
 TEST(MemoryPlan, GreedyNeverOverlapsLiveValues) {
   const Planned p;

@@ -25,13 +25,18 @@ void embedding(const f16* table, const StepRow* rows, f16* out, int n_tokens, in
 void rms_norm(const f16* x, const f16* weight, f16* out, int n_rows, int dim, float eps,
               cudaStream_t stream);
 
+// x[r] += y[r] in FP16, then out[r] = rms_norm(x[r]): a residual add and the norm after it.
+void add_rms_norm(f16* x, const f16* y, const f16* weight, f16* out, int n_rows, int dim, float eps,
+                  cudaStream_t stream);
+
 // Rotates each (j, j + head_dim/2) pair of x [n_tokens, n_heads, head_dim] in place by the angle
 // of its row's position. cos_sin holds {cos, sin} pairs, [max positions][head_dim/2].
 void rope(f16* x, const StepRow* rows, const float* cos_sin, int n_tokens, int n_heads,
           int head_dim, cudaStream_t stream);
 
-// gate[i] = silu(gate[i]) * up[i]
-void silu_mul(f16* gate, const f16* up, std::size_t n, cudaStream_t stream);
+// out[r][i] = silu(gate[r * in_stride + i]) * up[r * in_stride + i] for i < dim. out may be gate.
+void silu_mul(const f16* gate, const f16* up, f16* out, int n_rows, int dim, int in_stride,
+              cudaStream_t stream);
 
 // x[i] += y[i]
 void add(f16* x, const f16* y, std::size_t n, cudaStream_t stream);
@@ -46,6 +51,23 @@ void argmax(const float* logits, std::int32_t* out, int n_rows, int n_cols, cuda
 // Stores k and v [n_tokens, n_kv_heads, head_dim] at each row's kv_slot.
 void kv_write(const f16* k, const f16* v, const StepRow* rows, const KvView& kv, int n_tokens,
               int n_kv_heads, int head_dim, cudaStream_t stream);
+
+// rope() and kv_write() in one pass over qkv [n_tokens, (n_heads + 2 n_kv_heads) * head_dim],
+// each row q|k|v: q [n_tokens, n_heads, head_dim] = q rotated; k rotated and v go to the cache.
+void rope_kv_write(const f16* qkv, const StepRow* rows, const float* cos_sin, f16* q,
+                   const KvView& kv, int n_tokens, int n_heads, int n_kv_heads, int head_dim,
+                   cudaStream_t stream);
+
+// --- FP16 weights --------------------------------------------------------------------------
+
+// Rows of x one pass of linear_f16() serves. More rows mean more passes over the matrix.
+inline constexpr int kF16LinearMaxRows = 16;
+
+// y [n_rows, n_out] = x [n_rows, n_in] * W^T for an FP16 W [n_out, n_in], summed in FP32, on CUDA
+// cores. y is FP16, or FP32 when f32_out. Meant for decode-shaped steps, where the product is
+// bound by reading W once; n_in must be a multiple of 8.
+void linear_f16(const f16* weight, const f16* x, void* y, int n_rows, int n_in, int n_out,
+                bool f32_out, cudaStream_t stream);
 
 // How attention() reads a cached key when it computes scores.
 enum class KeyLoads : std::uint8_t {

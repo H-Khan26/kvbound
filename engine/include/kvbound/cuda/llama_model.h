@@ -26,8 +26,8 @@ struct OpTimes {
 };
 
 struct RunHooks {
-  // Called after each op that has a capture site, with the device pointer of its output.
-  std::function<void(const Op& op, const void* data)> on_site;
+  // Called for each capture site an op fills, with the program value and its device pointer.
+  std::function<void(const std::string& site, int value, const void* data)> on_site;
   // When set, the stream is synchronized after every op and the time is added here.
   OpTimes* times = nullptr;
 };
@@ -38,6 +38,12 @@ struct LlamaModelConfig {
   int max_outputs = 0;      // logit rows of the largest step
   PlanStrategy plan = PlanStrategy::GreedyBySize;
   GemmAccumulate gemm = GemmAccumulate::F32;
+  // Build the fused program: stacked q|k|v and gate|up products, residual adds folded into norms,
+  // RoPE folded into the cache write.
+  bool fuse = true;
+  // FP16 matrices are multiplied by kvbound's own kernel for steps of up to this many rows, and
+  // by cuBLAS for wider steps; 0 means always cuBLAS.
+  int f16_gemv_rows = 16;
   // Read cached keys 16 bytes at a time where the KV layout allows it.
   bool wide_key_loads = true;
   // Quantized matrices are multiplied in place for steps of up to this many rows. Wider steps

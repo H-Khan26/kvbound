@@ -81,6 +81,27 @@ def test_silu_mul_and_add(kvb, gen, n):
     assert tolerance.rel_rms(total, a.float() + b.float()) < F16_ROUNDING
 
 
+@pytest.mark.parametrize(("rows", "dim"), [(1, 64), (3, 2048), (2, 5000)])
+def test_add_rms_norm(kvb, gen, rows, dim):
+    x, y, w = rand_f16(gen, rows, dim, scale=3.0), rand_f16(gen, rows, dim), rand_f16(gen, dim)
+    eps = 1e-5
+    total, normed = kvb.add_rms_norm(bits(x), bits(y), bits(w), eps)
+    # The sum is rounded to FP16 before the norm reads it, as a separate add would leave it.
+    expected_total = (x.float() + y.float()).to(torch.float16)
+    assert np.array_equal(total, bits(expected_total))
+    t = expected_total.float()
+    expected = t * torch.rsqrt(t.pow(2).mean(-1, keepdim=True) + eps) * w.float()
+    assert tolerance.rel_rms(from_bits(normed), expected) < F16_ROUNDING
+
+
+@pytest.mark.parametrize(("rows", "dim"), [(1, 5), (4, 5632)])
+def test_silu_mul_reads_the_stacked_halves(kvb, gen, rows, dim):
+    gate_up = rand_f16(gen, rows, 2 * dim, scale=4.0)
+    gate, up = gate_up[:, :dim].float(), gate_up[:, dim:].float()
+    actual = from_bits(kvb.silu_mul_stacked(bits(gate_up)))
+    assert tolerance.rel_rms(actual, F.silu(gate) * up) < F16_ROUNDING
+
+
 def test_gather_rows(kvb, gen):
     x = rand_f16(gen, 9, 33)
     rows = torch.tensor([8, 0, 3], dtype=torch.int32)
@@ -110,6 +131,19 @@ def test_linear(kvb, gen, rows, n_out, n_in):
     # FP16 running sums lose a few bits more than the final rounding does.
     f16_sums = from_bits(kvb.linear(bits(w), bits(x), accumulate="fp16"))
     assert tolerance.rel_rms(f16_sums, expected) < 2e-2
+
+
+@pytest.mark.parametrize(("n_out", "n_in"), [(8, 8), (256, 2048), (2560, 2048), (100, 5632)])
+@pytest.mark.parametrize("rows", [1, 2, 5, 16, 21])
+def test_linear_f16(kvb, gen, rows, n_out, n_in):
+    """kvbound's decode product; more than 16 rows take a second pass over the matrix."""
+    w = rand_f16(gen, n_out, n_in, scale=1 / math.sqrt(n_in))
+    x = rand_f16(gen, rows, n_in)
+    expected = x.float() @ w.float().T
+    f16_out = from_bits(kvb.linear_f16(bits(w), bits(x)))
+    assert tolerance.rel_rms(f16_out, expected) < F16_ROUNDING
+    f32_out = torch.from_numpy(kvb.linear_f16(bits(w), bits(x), f32_out=True))
+    assert tolerance.rel_rms(f32_out, expected) < 1e-5
 
 
 def quantized(w: torch.Tensor, scheme: str, group: int):

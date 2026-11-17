@@ -53,6 +53,8 @@ Engine::Engine(const std::filesystem::path& model_dir, const EngineConfig& confi
                        .max_outputs = config_.max_outputs,
                        .plan = config_.plan,
                        .gemm = config_.gemm,
+                       .fuse = config_.fuse,
+                       .f16_gemv_rows = config_.f16_gemv_rows,
                        .wide_key_loads = config_.wide_key_loads,
                        .quantized_gemm_rows = config_.quantized_gemm_rows,
                        .dequant_slice_bytes = config_.dequant_slice_bytes},
@@ -133,11 +135,11 @@ void Engine::forward(std::span<const StepRow> rows, std::span<const std::int32_t
     RunHooks hooks;
     hooks.times = options.times;
     if (options.capture != nullptr) {
-      hooks.on_site = [&](const Op& op, const void* data) {
-        const Value& value = model_->program().values[op.out];
+      hooks.on_site = [&](const std::string& site, int id, const void* data) {
+        const Value& value = model_->program().values[id];
         const std::size_t n =
             static_cast<std::size_t>(value.rows == RowKind::Token ? n_tokens : n_out) * value.cols;
-        std::vector<float>& host = (*options.capture)[op.site];
+        std::vector<float>& host = (*options.capture)[site];
         host.resize(n);
         if (value.dtype == DType::F32) {
           KVB_CUDA(cudaMemcpyAsync(host.data(), data, n * sizeof(float), cudaMemcpyDeviceToHost,

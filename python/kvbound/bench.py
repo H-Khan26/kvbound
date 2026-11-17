@@ -133,6 +133,8 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
         "kv-layout": args.kv_layout,
         "kv-dtype": args.kv,
         "gemm": args.gemm,
+        "fuse": args.fuse,
+        "f16-gemv-rows": args.f16_gemv_rows,
         "warmup": args.warmup,
         "iters": args.iters,
         "profile-ops": args.profile_ops,
@@ -193,6 +195,12 @@ def main() -> None:
     parser.add_argument("--weights", choices=VARIANTS, default="fp16")
     parser.add_argument("--kv", choices=KV_DTYPES, default="fp16")
     parser.add_argument("--gemm", choices=["fp32", "fp16"], default="fp32")
+    parser.add_argument(
+        "--fuse", action=argparse.BooleanOptionalAction, default=True, help="the fused program"
+    )
+    parser.add_argument(
+        "--f16-gemv-rows", type=int, default=16, help="rows up to which kvbound's FP16 kernel runs"
+    )
     parser.add_argument("--profile-ops", action="store_true")
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--iters", type=int, default=10)

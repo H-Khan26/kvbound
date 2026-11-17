@@ -68,27 +68,41 @@ DeviceWeights load_weights(const std::filesystem::path& model_dir, const Program
   for (const Op& op : program.ops) {
     if (op.weight < 0) continue;
     const std::int64_t out_cols = program.values[op.out].cols;
-    const std::string& name = program.weights[op.weight];
-    const TensorView& tensor = file.at(name);
-    const bool integers = tensor.dtype == DType::I8 || tensor.dtype == DType::U8;
-    std::vector<std::int64_t> expected;
-    if (op.kind == OpKind::RmsNorm) {
-      // Only matrices are quantized: the norm kernel reads its weight as FP16.
-      if (integers) throw Error(name + ": a one-dimensional weight must be floating point");
-      expected = {out_cols};
-    } else {
+    const WeightParts& parts = program.weights[op.weight];
+    if (op.kind != OpKind::Linear && parts.size() != 1) {
+      throw Error(parts[0] + ": only matrix products read stacked weights");
+    }
+    // Rows of the stacked matrix, summed over its parts.
+    std::int64_t stacked_rows = 0;
+    for (const std::string& name : parts) {
+      const TensorView& tensor = file.at(name);
+      const bool integers = tensor.dtype == DType::I8 || tensor.dtype == DType::U8;
+      if (op.kind == OpKind::RmsNorm || op.kind == OpKind::AddRmsNorm) {
+        // Only matrices are quantized: the norm kernel reads its weight as FP16.
+        if (integers) throw Error(name + ": a one-dimensional weight must be floating point");
+        if (tensor.shape != std::vector<std::int64_t>{out_cols}) {
+          throw Error(name + ": shape does not match config.json");
+        }
+        continue;
+      }
       // A matrix [rows, cols]: the embedding table, or a linear layer's weight.
-      const std::int64_t rows = op.kind == OpKind::Embed ? cfg.vocab_size : out_cols;
       const std::int64_t cols = op.kind == OpKind::Embed ? out_cols : program.values[op.in0].cols;
-      expected = {rows, cols};
+      const std::int64_t rows = op.kind == OpKind::Embed ? cfg.vocab_size
+                                : parts.size() == 1      ? out_cols
+                                                         : tensor.shape.at(0);
+      std::vector<std::int64_t> expected{rows, cols};
       if (integers) {
         expected = stored_shape(format, rows, cols);
         if (file.at(name + ".scale").shape != scale_shape(format, rows, cols)) {
           throw Error(name + ".scale: shape does not match the weight format");
         }
       }
+      if (tensor.shape != expected) throw Error(name + ": shape does not match config.json");
+      stacked_rows += rows;
     }
-    if (tensor.shape != expected) throw Error(name + ": shape does not match config.json");
+    if (op.kind == OpKind::Linear && stacked_rows != out_cols) {
+      throw Error(parts[0] + ": stacked rows do not match config.json");
+    }
   }
   return DeviceWeights(file, program.weights, stream);
 }
@@ -116,7 +130,7 @@ LlamaModel::LlamaModel(const std::filesystem::path& model_dir, const LlamaModelC
                        cudaStream_t stream)
     : config_(load_model_config(model_dir / "config.json")),
       limits_(checked(limits, config_)),
-      program_(build_llama_program(config_)),
+      program_(build_llama_program(config_, limits.fuse)),
       value_bytes_(value_bytes(program_, limits.max_step_tokens, limits.max_outputs)),
       plan_(plan_memory(value_bytes_, value_lifetimes(program_), limits.plan)),
       weights_(load_weights(model_dir, program_, config_, stream)),
@@ -161,10 +175,18 @@ void LlamaModel::run(const StepRow* rows, const std::int32_t* out_rows, int n_to
                           static_cast<int>(out->cols), static_cast<float>(config_.rms_norm_eps),
                           stream);
         break;
+      case OpKind::AddRmsNorm:
+        kernels::add_rms_norm(value<f16>(op.in0), value<f16>(op.in1), weights_.data(op.weight),
+                              value<f16>(op.out), n_rows, static_cast<int>(out->cols),
+                              static_cast<float>(config_.rms_norm_eps), stream);
+        break;
       case OpKind::Linear: {
         const WeightRef weight = weights_.ref(op.weight);
         const int n_in = static_cast<int>(in0->cols), n_out_cols = static_cast<int>(out->cols);
-        if (weight.scheme == WeightScheme::F16) {
+        if (weight.scheme == WeightScheme::F16 && n_rows <= limits_.f16_gemv_rows) {
+          kernels::linear_f16(weights_.data(op.weight), value<f16>(op.in0), value<void>(op.out),
+                              n_rows, n_in, n_out_cols, out->dtype == DType::F32, stream);
+        } else if (weight.scheme == WeightScheme::F16) {
           blas_.linear(weights_.data(op.weight), value<f16>(op.in0), value<void>(op.out), n_rows,
                        n_in, n_out_cols, out->dtype);
         } else if (n_rows <= limits_.quantized_gemm_rows) {
@@ -192,6 +214,11 @@ void LlamaModel::run(const StepRow* rows, const std::int32_t* out_rows, int n_to
         kernels::kv_write(value<f16>(op.in0), value<f16>(op.in1), rows, kv.layer_view(op.layer),
                           n_tokens, n_kv_heads, head_dim, stream);
         break;
+      case OpKind::RopeKvWrite:
+        kernels::rope_kv_write(value<f16>(op.in0), rows, rope_table_.as<float>(),
+                               value<f16>(op.out), kv.layer_view(op.layer), n_tokens, n_heads,
+                               n_kv_heads, head_dim, stream);
+        break;
       case OpKind::Attention: {
         const KvView view = kv.layer_view(op.layer);
         kernels::attention(value<f16>(op.in0), value<f16>(op.out), rows, view, n_tokens, n_heads,
@@ -201,10 +228,15 @@ void LlamaModel::run(const StepRow* rows, const std::int32_t* out_rows, int n_to
                            stream);
         break;
       }
-      case OpKind::SiluMul:
-        kernels::silu_mul(value<f16>(op.in0), value<f16>(op.in1),
-                          static_cast<std::size_t>(n_rows) * in0->cols, stream);
+      case OpKind::SiluMul: {
+        // Separate gate and up values, or both halves of each row of the stacked product.
+        const int dim = static_cast<int>(out->cols);
+        const f16* gate = value<f16>(op.in0);
+        const f16* up = op.in1 >= 0 ? value<f16>(op.in1) : gate + dim;
+        kernels::silu_mul(gate, up, value<f16>(op.out), n_rows, dim, static_cast<int>(in0->cols),
+                          stream);
         break;
+      }
       case OpKind::Add:
         kernels::add(value<f16>(op.in0), value<f16>(op.in1),
                      static_cast<std::size_t>(n_rows) * in0->cols, stream);
@@ -225,7 +257,9 @@ void LlamaModel::run(const StepRow* rows, const std::int32_t* out_rows, int n_to
       hooks->times->seconds[kind] += std::chrono::duration<double>(Clock::now() - start).count();
       hooks->times->calls[kind] += 1;
     }
-    if (!op.site.empty() && hooks->on_site) hooks->on_site(op, value<void>(op.out));
+    if (!hooks->on_site) continue;
+    if (!op.in0_site.empty()) hooks->on_site(op.in0_site, op.in0, value<void>(op.in0));
+    if (!op.site.empty()) hooks->on_site(op.site, op.out, value<void>(op.out));
   }
 }
 

@@ -53,6 +53,8 @@ SPLITS = (lambda n: n, lambda n: 1, lambda n: max(1, n // 2))
         {"kv_block_size": 4},
         {"kv_layout": "token_major"},
         {"kv_layout": "dim_major", "kv_block_size": 8},
+        {"fuse": False},
+        {"f16_gemv_rows": 0},
     ],
     ids=lambda o: ",".join(f"{k}={v}" for k, v in o.items()) or "default",
 )
@@ -192,7 +194,7 @@ def test_quantized_weights_match_the_dequantizing_reference(kvb, quantized_fixtu
         reference_greedy(model, p, n)[0] for p, n in zip(prompts, lengths, strict=True)
     ]
     expand = {"quantized_gemm_rows": 0}
-    for options in ({}, expand, {**expand, "dequant_slice_bytes": 256}):
+    for options in ({}, {"fuse": False}, expand, {**expand, "dequant_slice_bytes": 256}):
         engine = kvb.Engine(str(model_dir), max_ctx=64, max_seqs=2, kv_block_size=8, **options)
         assert engine.weights() == scheme
         for prompt in manifest["prompts"]:
@@ -233,13 +235,15 @@ def test_int8_kv_cache_is_close_to_fp16_and_the_same_on_every_path(kvb):
         {"max_seqs": 4, "kv_block_size": 4, "kv_blocks": 16, "max_step_tokens": 9},
         {"max_seqs": 2, "kv_layout": "token_major", "wide_key_loads": False},
         {"max_seqs": 2, "kv_layout": "dim_major", "kv_block_size": 8, "graph": False},
+        {"max_seqs": 3, "fuse": False},
     ):
         engine = kvb.Engine(str(FIXTURE_DIR), max_ctx=64, kv_dtype="int8", **options)
         assert engine.serve(prompts, lengths, policy="continuous") == expected, options
 
 
 def test_generation_is_the_same_on_every_path(kvb):
-    """Graphs, chunked prefill, small KV blocks and the CPU sampler all give the greedy tokens."""
+    """Graphs, chunked prefill, small KV blocks, the unfused program, cuBLAS for every product and
+    the CPU sampler all give the greedy tokens."""
     prompt = fixture_prompts()[-1]
     expected = kvb.Engine(str(FIXTURE_DIR), max_ctx=64, graph=False).generate(prompt, 30)
     for options in (
@@ -247,6 +251,9 @@ def test_generation_is_the_same_on_every_path(kvb):
         {"max_step_tokens": 5},
         {"kv_block_size": 4},
         {"wide_key_loads": False},
+        {"fuse": False},
+        {"f16_gemv_rows": 0},
+        {"fuse": False, "f16_gemv_rows": 0, "graph": True},
     ):
         assert kvb.Engine(str(FIXTURE_DIR), max_ctx=64, **options).generate(prompt, 30) == expected
     engine = kvb.Engine(str(FIXTURE_DIR), max_ctx=64)

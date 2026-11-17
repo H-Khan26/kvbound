@@ -50,6 +50,8 @@ __device__ inline unsigned f16_pair(float lo, float hi) {
 // trip of the loop has the warp read one contiguous 512-byte stretch, and multiplies every load
 // with the matching inputs of each row of x before issuing the next. kRows is the most rows of
 // x one launch takes: a compile-time bound keeps the per-row sums in registers.
+// Weights are read with a streaming hint: each is used once, and keeping them out of L1 leaves
+// it to the rows of x, which every warp of the block reads.
 //
 // With kInt4, `scale` holds one FP16 per group of 1 << group_loads_shift loads of each row;
 // otherwise one per row.
@@ -72,10 +74,10 @@ __global__ void linear_quantized_kernel(const uint4* weight, const __half* scale
     float w[kPerLoad];
     float load_scale = 1.0f;
     if constexpr (kInt4) {
-      unpack_int4(row[load], w);
+      unpack_int4(__ldcs(row + load), w);
       load_scale = __half2float(row_scale[load >> group_loads_shift]);
     } else {
-      unpack_int8(row[load], w);
+      unpack_int8(__ldcs(row + load), w);
     }
     for (int r = 0; r < kRows; ++r) {
       if (r >= n_rows) break;
