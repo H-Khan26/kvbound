@@ -12,6 +12,7 @@ add_library(kvbound STATIC
   memory/planner.cpp
   model/llama/program.cpp
   runtime/sampler.cpp
+  runtime/step.cpp
   sched/scheduler.cpp
 )
 add_library(kvbound::kvbound ALIAS kvbound)
