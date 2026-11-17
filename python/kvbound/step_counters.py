@@ -45,14 +45,16 @@ METRICS = {
 
 
 def kernel_name(demangled: str) -> str:
-    """The engine's kernels by name, cuBLAS kernels by their short name. Nsight Compute shows an
-    anonymous namespace as `<unnamed>` and may leave out enclosing namespaces."""
-    if own := re.search(r"kvb::.*?(\w+_kernel)[<(]", demangled):
+    """The engine's kernels by name, cuBLAS kernels by their short name. Nsight Compute garbles
+    namespaces (`unnamed>::`, missing `kvb::kernels`), so the function name is matched alone."""
+    if own := re.search(r"(\w+_kernel)\s*[<(]", demangled):
         return own.group(1)
-    if "gemvx::kernel" in demangled:
+    if "cublasGemv" in demangled:
         return "cublas_gemv"
     name = re.split(r"[(<]", demangled.replace("<unnamed>", ""), maxsplit=1)[0]
-    return name.rsplit("::")[-1][:60]
+    name = name.rsplit("::")[-1][:60]
+    # cuBLAS also launches kernels with generic names such as Kernel2.
+    return f"cublas_{name}" if name.startswith("Kernel") else name
 
 
 def split_steps(points: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
