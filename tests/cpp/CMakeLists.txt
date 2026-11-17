@@ -22,6 +22,7 @@ foreach(src IN LISTS KVB_CPP_TESTS)
   target_link_libraries(${name} PRIVATE kvbound::kvbound kvb_warnings GTest::gtest_main)
   target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_compile_definitions(${name} PRIVATE
-    KVB_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/fixtures/tiny-llama")
+    KVB_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/fixtures/tiny-llama"
+    KVB_WHISPER_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/fixtures/tiny-whisper")
   gtest_discover_tests(${name})
 endforeach()
