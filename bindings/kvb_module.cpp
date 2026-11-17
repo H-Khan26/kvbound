@@ -470,7 +470,7 @@ NB_MODULE(_kvb, m) {
            "kv_block_size"_a = 0, "kv_layout"_a = "head_major", "gemm"_a = "fp32", "graph"_a = true,
            "plan"_a = "greedy", "wide_key_loads"_a = true, "kv_blocks"_a = 0, "max_graphs"_a = 16,
            "kv_dtype"_a = "fp16", "quantized_gemm_rows"_a = 16,
-           "dequant_slice_bytes"_a = std::size_t{32} << 20, "fuse"_a = true, "f16_gemv_rows"_a = 16)
+           "dequant_slice_bytes"_a = std::size_t{32} << 20, "fuse"_a = true, "f16_gemv_rows"_a = 4)
       .def("feed", &PyEngine::feed, "ids"_a, "start"_a = 0, "seq"_a = 0, "capture"_a = false)
       .def("generate", &PyEngine::generate, "prompt"_a, "max_new_tokens"_a, "temperature"_a = 0.0f,
            "top_k"_a = 0, "top_p"_a = 1.0f, "seed"_a = 0, "eos_token_id"_a = -1)

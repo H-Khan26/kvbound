@@ -115,6 +115,8 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
         "kv-layout": args.kv_layout,
         "kv-dtype": args.kv,
         "quantized-gemm-rows": args.quantized_gemm_rows,
+        "fuse": args.fuse,
+        "f16-gemv-rows": args.f16_gemv_rows,
         "max-graphs": args.max_graphs,
         "warmup": args.warmup,
         "iters": args.iters,
@@ -183,6 +185,12 @@ def main() -> None:
         "--quantized-gemm-rows", type=int, default=16,
         help="widest step that multiplies quantized weights without expanding them to FP16",
     )  # fmt: skip
+    parser.add_argument(
+        "--fuse", action=argparse.BooleanOptionalAction, default=True, help="the fused program"
+    )
+    parser.add_argument(
+        "--f16-gemv-rows", type=int, default=4, help="rows up to which kvbound's FP16 kernel runs"
+    )
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--iters", type=int, default=3)
     parser.add_argument("--preset", default="cuda")

@@ -43,7 +43,7 @@ struct LlamaModelConfig {
   bool fuse = true;
   // FP16 matrices are multiplied by kvbound's own kernel for steps of up to this many rows, and
   // by cuBLAS for wider steps; 0 means always cuBLAS.
-  int f16_gemv_rows = 16;
+  int f16_gemv_rows = 4;
   // Read cached keys 16 bytes at a time where the KV layout allows it.
   bool wide_key_loads = true;
   // Quantized matrices are multiplied in place for steps of up to this many rows. Wider steps

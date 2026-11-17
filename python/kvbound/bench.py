@@ -199,7 +199,7 @@ def main() -> None:
         "--fuse", action=argparse.BooleanOptionalAction, default=True, help="the fused program"
     )
     parser.add_argument(
-        "--f16-gemv-rows", type=int, default=16, help="rows up to which kvbound's FP16 kernel runs"
+        "--f16-gemv-rows", type=int, default=4, help="rows up to which kvbound's FP16 kernel runs"
     )
     parser.add_argument("--profile-ops", action="store_true")
     parser.add_argument("--warmup", type=int, default=2)
