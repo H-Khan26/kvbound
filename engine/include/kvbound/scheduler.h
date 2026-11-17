@@ -41,6 +41,11 @@ struct SchedulerConfig {
   int n_blocks = 0;
   int max_step_tokens = 0;         // rows one step may process
   std::int32_t eos_token_id = -1;  // a sequence ends on this token; -1 runs to max_new_tokens
+  // Speech: rows of the encoder pass over one request's audio, 0 when requests carry no audio.
+  // The scheduler reads only whether it is above 0: then every sequence is encoded once after
+  // each admission, before its first token runs. Encoder rows do not count as step tokens.
+  int encode_rows = 0;
+  int max_encodes_per_step = 1;  // sequences one plan may encode
 };
 
 // KV cache occupancy in tokens, after the most recent plan.
@@ -67,6 +72,12 @@ struct KvUsage {
 //      least block_size tokens before anything has to be preempted.
 //   4. Every decoding sequence gets one row; sequences still prefilling share the rest of the
 //      step's rows in admission order.
+//
+// With encode_rows set, under either policy, a plan also encodes the first max_encodes_per_step
+// running sequences that are not encoded yet, in admission order, and gives rows only to encoded
+// sequences. Admission is unchanged, so a static batch still fills at once and its members
+// start a few plans apart. Preemption drops the encoding with the blocks: a readmitted sequence
+// is encoded again.
 class Scheduler {
  public:
   explicit Scheduler(const SchedulerConfig& config);
@@ -97,6 +108,7 @@ class Scheduler {
     int n_cached = 0;  // tokens processed into the cache
     int n_generated = 0;
     bool finished = false;
+    bool encoded = false;  // its audio went through the encoder since it was last admitted
   };
 
   Sequence& sequence(int id);
@@ -105,6 +117,7 @@ class Scheduler {
   void admit_front(int n_blocks, StepPlan& plan);  // the first waiting request starts running
   void plan_static(StepPlan& plan);
   void plan_continuous(StepPlan& plan);
+  void plan_encodes(StepPlan& plan);
   void plan_rows(StepPlan& plan);
 
   SchedulerConfig config_;
