@@ -291,26 +291,35 @@ __global__ void attention_kernel(const __half* q, __half* out, const StepRow* ro
 constexpr int kPrefillKeys = 64;
 // Query rows per warp: the M of the MMA.
 constexpr int kWarpRows = 16;
-// Warps per query head of a tile.
+// Warps per block, together covering the tile's rows for one query head.
 constexpr int kTileWarps = kAttnTileRows / kWarpRows;
-// Halves of padding after each shared-memory row. ldmatrix reads eight rows at a time; with
-// 128-byte rows they would all start in the same bank, and 16 more bytes per row put the eight
-// reads in distinct banks.
-constexpr int kRowPad = 8;
+constexpr int kPrefillThreads = kTileWarps * kWarpSize;
+// Blocks per SM the register budget is fitted to. At head_dim 64 a block's 32 KB of shared
+// memory allows three, and without the bound the INT8 kernel takes enough registers to fit only
+// two. At head_dim 128 shared memory (64 KB) allows one, and a tighter bound would spill.
+constexpr int prefill_blocks_per_sm(int head_dim) { return head_dim <= 64 ? 3 : 1; }
 
 static_assert(kAttnTileRows == kPrefillKeys, "a query tile and a key tile share one layout");
 
 // Halves of one staged tile (keys, values or one head's queries).
 __host__ __device__ constexpr int prefill_tile_halves(int head_dim) {
-  return kPrefillKeys * (head_dim + kRowPad);
+  return kPrefillKeys * head_dim;
+}
+
+// Offset in halves of (row, col) in a staged tile, for col a multiple of 8. ldmatrix reads one
+// 16-byte chunk from each of eight consecutive rows; with rows of 128 or 256 bytes those chunks
+// would all sit in the same four banks. XOR-ing the chunk index with row % 8 moves each row's
+// chunk to a different bank group, at no cost in shared memory (unlike padding the rows).
+template <int kHeadDim>
+__device__ inline int swizzled(int row, int col) {
+  return row * kHeadDim + (((col >> 3) ^ (row & 7)) << 3);
 }
 
 // Shared memory: two stages of {keys, values}, double-buffered so one tile loads while the
-// previous is multiplied. The queries are staged once, before the loop, in the second stage and
-// beyond, and live in registers afterwards.
-constexpr std::size_t prefill_shared_bytes(int head_dim, int heads_per_block) {
-  const int tiles = 2 + (heads_per_block > 2 ? heads_per_block : 2);
-  return sizeof(__half) * static_cast<std::size_t>(tiles) * prefill_tile_halves(head_dim);
+// previous is multiplied. The queries are staged once, before the loop, in the second stage's
+// keys, and live in registers afterwards.
+constexpr std::size_t prefill_shared_bytes(int head_dim) {
+  return sizeof(__half) * 4 * static_cast<std::size_t>(prefill_tile_halves(head_dim));
 }
 
 __device__ inline unsigned shared_address(const void* p) {
@@ -350,6 +359,15 @@ __device__ inline void mma_16816(float (&c)[4], const unsigned (&a)[4], unsigned
       : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b0), "r"(b1));
 }
 
+// 2^x in one MUFU instruction, flushing denormal results to zero; exp2f() adds instructions
+// around it to get denormals right, which a softmax weight below 2^-126 does not need.
+// 2^-inf is 0.
+__device__ inline float fast_exp2(float x) {
+  float y;
+  asm("ex2.approx.ftz.f32 %0, %1;\n" : "=f"(y) : "f"(x));
+  return y;
+}
+
 // Two floats as an FP16 pair, the first in the low half.
 __device__ inline unsigned pack_half2(float lo, float hi) {
   const __half2 h = __floats2half2_rn(lo, hi);
@@ -357,20 +375,21 @@ __device__ inline unsigned pack_half2(float lo, float hi) {
 }
 
 // Copies cached positions start..start + kPrefillKeys - 1 of an FP16 cache into a stage with
-// cp.async; positions from n_keys on are zero-filled, never read.
+// cp.async; positions from n_keys on are zero-filled.
 template <int kHeadDim, int kThreads>
 __device__ inline void stage_kv_f16(__half* k_dst, __half* v_dst, const KvView& kv,
                                     const SeqKv& cache, int start, int n_keys) {
   constexpr int kChunks = kHeadDim / 8;  // 16-byte loads per vector
-  constexpr int kStride = kHeadDim + kRowPad;
   const __half* keys = static_cast<const __half*>(kv.k);
   const __half* values = static_cast<const __half*>(kv.v);
   for (int c = threadIdx.x; c < kPrefillKeys * kChunks; c += kThreads) {
     const int r = c / kChunks, col = (c % kChunks) * 8;
     const bool valid = start + r < n_keys;
-    const std::int64_t at = valid ? cache.offset(start + r) + col : 0;
-    cp_async16(k_dst + r * kStride + col, keys + at, valid);
-    cp_async16(v_dst + r * kStride + col, values + at, valid);
+    // A zero-filled copy reads nothing, but its address still points at position 0, which every
+    // sequence has written.
+    const std::int64_t at = cache.offset(valid ? start + r : 0) + col;
+    cp_async16(k_dst + swizzled<kHeadDim>(r, col), keys + at, valid);
+    cp_async16(v_dst + swizzled<kHeadDim>(r, col), values + at, valid);
   }
 }
 
@@ -382,7 +401,6 @@ struct Int8Staging {
   static constexpr int kChunks = kHeadDim / 16;  // 16-byte loads per vector
   static constexpr int kTotal = kPrefillKeys * kChunks;
   static constexpr int kPerThread = (kTotal + kThreads - 1) / kThreads;
-  static constexpr int kStride = kHeadDim + kRowPad;
   uint4 k[kPerThread], v[kPerThread];
   float k_scale[kPerThread], v_scale[kPerThread];
 
@@ -409,7 +427,8 @@ struct Int8Staging {
     }
   }
 
-  __device__ static void expand(uint4 load, float scale, __half* dst) {
+  // Writes the 16 elements of one load as two chunks, at columns col and col + 8 of row r.
+  __device__ static void expand(uint4 load, float scale, __half* dst, int r, int col) {
     float x[16];
     unpack_int8(load, x);
     uint4 lo, hi;
@@ -421,8 +440,8 @@ struct Int8Staging {
     hi.y = pack_half2(x[10] * scale, x[11] * scale);
     hi.z = pack_half2(x[12] * scale, x[13] * scale);
     hi.w = pack_half2(x[14] * scale, x[15] * scale);
-    reinterpret_cast<uint4*>(dst)[0] = lo;
-    reinterpret_cast<uint4*>(dst)[1] = hi;
+    *reinterpret_cast<uint4*>(dst + swizzled<kHeadDim>(r, col)) = lo;
+    *reinterpret_cast<uint4*>(dst + swizzled<kHeadDim>(r, col + 8)) = hi;
   }
 
   __device__ void store(__half* k_dst, __half* v_dst) const {
@@ -430,30 +449,30 @@ struct Int8Staging {
     for (int i = 0; i < kPerThread; ++i) {
       const int c = threadIdx.x + i * kThreads;
       if (c >= kTotal) break;
-      const int at = (c / kChunks) * kStride + (c % kChunks) * 16;
-      expand(k[i], k_scale[i], k_dst + at);
-      expand(v[i], v_scale[i], v_dst + at);
+      const int r = c / kChunks, col = (c % kChunks) * 16;
+      expand(k[i], k_scale[i], k_dst, r, col);
+      expand(v[i], v_scale[i], v_dst, r, col);
     }
   }
 };
 
-// One block per (tile, group of kHeads query heads that share a KV head); grid.x walks the
-// tiles from last to first, since in a long prompt later tiles see more keys and should start
-// first. Each K/V tile in shared memory serves all kHeads heads, which divides the cache reads
-// by kHeads.
+// One block per (tile, query head); grid.x walks the tiles from last to first, since in a long
+// prompt later tiles see more keys and should start first. Blocks of the query heads that share
+// a KV head read the same keys and values, which stay in L2. (Letting one block serve several
+// such heads from one staged tile measured slower: its larger register file leaves fewer warps
+// per SM, and this kernel is bound by the tensor pipe and latency, not by cache reads.)
 //
 // Per warp and key tile: S = Q K^T (16 x 64, FP32) from fragments; the scores are scaled into
 // the log2 domain, masked causally, and folded into the running max m and sum l of each row;
 // the accumulated output is rescaled by exp2(m_old - m_new), and P (rounded to FP16, which is
 // exactly the A-fragment layout of the next MMA) times V is added to it. Rows of a tile are
 // consecutive positions, so row i of the tile sits at position first_pos + i.
-template <int kHeadDim, int kHeads, bool kInt8>
-__global__ void __launch_bounds__(kHeads * kTileWarps * kWarpSize)
+template <int kHeadDim, bool kInt8>
+__global__ void __launch_bounds__(kPrefillThreads, prefill_blocks_per_sm(kHeadDim))
     attention_prefill_kernel(const __half* q, __half* out, const StepRow* rows,
                              const AttnTile* tiles, int n_tiles, KvView kv, int n_heads, int n_rep,
                              float scale_log2) {
-  constexpr int kThreads = kHeads * kTileWarps * kWarpSize;
-  constexpr int kStride = kHeadDim + kRowPad;
+  constexpr int kThreads = kPrefillThreads;
   constexpr int kTileHalves = prefill_tile_halves(kHeadDim);
   constexpr int kDimTiles = kHeadDim / 8;  // n8 output tiles per row
   constexpr int kKeyTiles = kPrefillKeys / 8;
@@ -462,9 +481,8 @@ __global__ void __launch_bounds__(kHeads * kTileWarps * kWarpSize)
   __half* q_smem = smem + 2 * kTileHalves;
 
   const AttnTile tile = tiles[n_tiles - 1 - blockIdx.x];
-  const int groups = n_rep / kHeads;
-  const int kv_head = blockIdx.y / groups;
-  const int first_head = kv_head * n_rep + (blockIdx.y % groups) * kHeads;
+  const int head = blockIdx.y;
+  const int kv_head = head / n_rep;
   const StepRow first = rows[tile.first_row];
   const int first_pos = first.position;
   const int n_keys = first_pos + tile.n_rows;
@@ -472,16 +490,14 @@ __global__ void __launch_bounds__(kHeads * kTileWarps * kWarpSize)
   const SeqKv cache(kv, first.seq, kv_head);
   const std::size_t token_stride = static_cast<std::size_t>(n_heads) * kHeadDim;
 
-  // Queries of every head of the group; rows past the tile are zero.
+  // The tile's queries; rows past the tile are zero.
   constexpr int kQueryChunks = kHeadDim / 8;
-  for (int c = threadIdx.x; c < kHeads * kAttnTileRows * kQueryChunks; c += kThreads) {
-    const int r = (c / kQueryChunks) % kAttnTileRows;
-    const int h = c / (kAttnTileRows * kQueryChunks);
-    const int col = (c % kQueryChunks) * 8;
+  for (int c = threadIdx.x; c < kAttnTileRows * kQueryChunks; c += kThreads) {
+    const int r = c / kQueryChunks, col = (c % kQueryChunks) * 8;
     const bool valid = r < tile.n_rows;
     const __half* src =
-        q + (tile.first_row + (valid ? r : 0)) * token_stride + (first_head + h) * kHeadDim + col;
-    cp_async16(q_smem + (h * kAttnTileRows + r) * kStride + col, src, valid);
+        q + (tile.first_row + (valid ? r : 0)) * token_stride + head * kHeadDim + col;
+    cp_async16(q_smem + swizzled<kHeadDim>(r, col), src, valid);
   }
   [[maybe_unused]] Int8Staging<kHeadDim, kThreads> staging;
   if constexpr (kInt8) {
@@ -495,15 +511,15 @@ __global__ void __launch_bounds__(kHeads * kTileWarps * kWarpSize)
   __syncthreads();
 
   const int warp = threadIdx.x / kWarpSize, lane = threadIdx.x % kWarpSize;
-  const int head = first_head + warp / kTileWarps;
-  const int warp_row = (warp % kTileWarps) * kWarpRows;  // the warp's first row in the tile
+  const int warp_row = warp * kWarpRows;  // the warp's first row in the tile
   unsigned qf[kHeadDim / 16][4];
   {
-    const __half* base = q_smem + ((warp / kTileWarps) * kAttnTileRows + warp_row) * kStride;
-    const int r = (lane & 7) + ((lane >> 3) & 1) * 8, col = (lane >> 4) * 8;
+    const int r = warp_row + (lane & 7) + ((lane >> 3) & 1) * 8;
+    const int col = (lane >> 4) * 8;
 #pragma unroll
-    for (int kk = 0; kk < kHeadDim / 16; ++kk)
-      ldmatrix_x4(qf[kk], base + r * kStride + kk * 16 + col);
+    for (int kk = 0; kk < kHeadDim / 16; ++kk) {
+      ldmatrix_x4(qf[kk], q_smem + swizzled<kHeadDim>(r, kk * 16 + col));
+    }
   }
   __syncthreads();  // the queries' shared memory belongs to the second stage from here on
 
@@ -547,7 +563,7 @@ __global__ void __launch_bounds__(kHeads * kTileWarps * kWarpSize)
 #pragma unroll
           for (int nn = 0; nn < kPrefillKeys / 16; ++nn) {
             unsigned b[4];
-            ldmatrix_x4(b, ks + (nn * 16 + key) * kStride + kk * 16 + col);
+            ldmatrix_x4(b, ks + swizzled<kHeadDim>(nn * 16 + key, kk * 16 + col));
             mma_16816(s[2 * nn], qf[kk], b[0], b[1]);
             mma_16816(s[2 * nn + 1], qf[kk], b[2], b[3]);
           }
@@ -561,30 +577,30 @@ __global__ void __launch_bounds__(kHeads * kTileWarps * kWarpSize)
       for (int j = 0; j < kKeyTiles; ++j) {
 #pragma unroll
         for (int e = 0; e < 4; ++e) {
-          float score = s[j][e] * scale_log2;
           if (masked && key0 + j * 8 + 2 * t + (e & 1) > row_pos + (e >> 1) * 8) {
-            score = -CUDART_INF_F;
+            s[j][e] = -CUDART_INF_F;
           }
-          s[j][e] = score;
-          tile_max[e >> 1] = fmaxf(tile_max[e >> 1], score);
+          tile_max[e >> 1] = fmaxf(tile_max[e >> 1], s[j][e]);
         }
       }
-      // Every row sees position 0 in the first tile, so the maximum is finite from then on and
-      // exp2(-inf - max) is 0 for masked keys and for the first rescale.
-      float alpha[2];
+      // Maxima stay in unscaled score units, so each weight is one FMA and one exp2. Every row
+      // sees position 0 in the first tile, so the maximum is finite from then on and the exp2
+      // of -inf (masked keys, and the first rescale) is 0.
+      float alpha[2], shift[2];
 #pragma unroll
       for (int i = 0; i < 2; ++i) {
         tile_max[i] = fmaxf(tile_max[i], __shfl_xor_sync(0xffffffffu, tile_max[i], 1));
         tile_max[i] = fmaxf(tile_max[i], __shfl_xor_sync(0xffffffffu, tile_max[i], 2));
-        alpha[i] = exp2f(row_max[i] - tile_max[i]);
+        alpha[i] = fast_exp2((row_max[i] - tile_max[i]) * scale_log2);
         row_max[i] = tile_max[i];
         row_sum[i] *= alpha[i];
+        shift[i] = -tile_max[i] * scale_log2;
       }
 #pragma unroll
       for (int j = 0; j < kKeyTiles; ++j) {
 #pragma unroll
         for (int e = 0; e < 4; ++e) {
-          s[j][e] = exp2f(s[j][e] - row_max[e >> 1]);
+          s[j][e] = fast_exp2(fmaf(s[j][e], scale_log2, shift[e >> 1]));
           row_sum[e >> 1] += s[j][e];
         }
       }
@@ -609,7 +625,7 @@ __global__ void __launch_bounds__(kHeads * kTileWarps * kWarpSize)
 #pragma unroll
           for (int dd = 0; dd < kHeadDim / 16; ++dd) {
             unsigned b[4];
-            ldmatrix_x4_trans(b, vs + (kc * 16 + key) * kStride + dd * 16 + col);
+            ldmatrix_x4_trans(b, vs + swizzled<kHeadDim>(kc * 16 + key, dd * 16 + col));
             mma_16816(o[2 * dd], p, b[0], b[1]);
             mma_16816(o[2 * dd + 1], p, b[2], b[3]);
           }
@@ -643,14 +659,15 @@ __global__ void __launch_bounds__(kHeads * kTileWarps * kWarpSize)
   }
 }
 
-template <int kHeadDim, int kHeads, bool kInt8>
+template <int kHeadDim, bool kInt8>
 void launch_attention_prefill(const __half* q, __half* out, const StepRow* rows,
                               const AttnTile* tiles, int n_tiles, const KvView& kv, int n_heads,
                               int n_kv_heads, cudaStream_t stream) {
-  constexpr std::size_t shared_bytes = prefill_shared_bytes(kHeadDim, kHeads);
-  auto* kernel = attention_prefill_kernel<kHeadDim, kHeads, kInt8>;
+  constexpr std::size_t shared_bytes = prefill_shared_bytes(kHeadDim);
+  auto* kernel = attention_prefill_kernel<kHeadDim, kInt8>;
   if constexpr (shared_bytes > kSharedBytes) {
-    // Blocks get more than 48 KB of shared memory only when the kernel opts in.
+    // Blocks get more than 48 KB of shared memory (64 KB at head_dim 128) only when the kernel
+    // opts in.
     static const bool opted_in = [&] {
       KVB_CUDA(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
                                     static_cast<int>(shared_bytes)));
@@ -658,11 +675,11 @@ void launch_attention_prefill(const __half* q, __half* out, const StepRow* rows,
     }();
     (void)opted_in;
   }
-  const int n_rep = n_heads / n_kv_heads;
-  const dim3 grid(n_tiles, n_kv_heads * (n_rep / kHeads));
+  // Scores go into exp2(), so the 1/sqrt(head_dim) scale also carries log2(e).
   const float scale_log2 = 1.4426950408889634f / std::sqrt(static_cast<float>(kHeadDim));
-  kernel<<<grid, kHeads * kTileWarps * kWarpSize, shared_bytes, stream>>>(
-      q, out, rows, tiles, n_tiles, kv, n_heads, n_rep, scale_log2);
+  const dim3 grid(n_tiles, n_heads);
+  kernel<<<grid, kPrefillThreads, shared_bytes, stream>>>(q, out, rows, tiles, n_tiles, kv, n_heads,
+                                                          n_heads / n_kv_heads, scale_log2);
 }
 
 }  // namespace
@@ -749,25 +766,15 @@ void attention_prefill(const f16* q, f16* out, const StepRow* rows, const AttnTi
   }
   if (n_heads % n_kv_heads != 0) throw Error("query heads must be a multiple of KV heads");
   if (n_tiles == 0) return;
-  // Query heads per block that share one KV head's tiles.
-  const int n_rep = n_heads / n_kv_heads;
-  const int heads = n_rep % 2 == 0 ? 2 : 1;
   const bool int8 = kv.dtype == DType::I8;
-#define KVB_LAUNCH(dim, group, quantized)                                                         \
-  launch_attention_prefill<dim, group, quantized>(as_half(q), as_half(out), rows, tiles, n_tiles, \
-                                                  kv, n_heads, n_kv_heads, stream)
-#define KVB_LAUNCH_DIM(dim)                                      \
-  if (heads == 2) {                                              \
-    int8 ? KVB_LAUNCH(dim, 2, true) : KVB_LAUNCH(dim, 2, false); \
-  } else {                                                       \
-    int8 ? KVB_LAUNCH(dim, 1, true) : KVB_LAUNCH(dim, 1, false); \
-  }
+#define KVB_LAUNCH(dim, quantized)                                                             \
+  launch_attention_prefill<dim, quantized>(as_half(q), as_half(out), rows, tiles, n_tiles, kv, \
+                                           n_heads, n_kv_heads, stream)
   if (head_dim == 64) {
-    KVB_LAUNCH_DIM(64)
+    int8 ? KVB_LAUNCH(64, true) : KVB_LAUNCH(64, false);
   } else {
-    KVB_LAUNCH_DIM(128)
+    int8 ? KVB_LAUNCH(128, true) : KVB_LAUNCH(128, false);
   }
-#undef KVB_LAUNCH_DIM
 #undef KVB_LAUNCH
   KVB_CUDA(cudaGetLastError());
 }
