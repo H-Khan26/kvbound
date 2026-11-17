@@ -318,6 +318,8 @@ def latest_serve_records(
         params = rec["params"]
         if rec["fingerprint"]["device_config"] != device or rec["model"]["name"] != model:
             continue
+        if record.model_family(rec) != record.DEFAULT_FAMILY:
+            continue
         if (params.get("weights", "fp16"), params.get("kv_dtype", "fp16")) != (weights, kv):
             continue
         if params["n_requests"] != workload.load(params["workload"]).n_requests:
@@ -570,6 +572,8 @@ def precision_records(device: str, model: str) -> dict[tuple[str, str], dict[str
             continue
         if not rec["model"] or rec["model"]["name"] != model:
             continue
+        if record.model_family(rec) != record.DEFAULT_FAMILY:
+            continue
         params = rec["params"]
         if rec["engine"]["name"] != "kvbound":
             continue
@@ -673,7 +677,10 @@ def main() -> None:
     missing = {"bandwidth_sweep", "pointer_chase", "gemm_peak"} - set(records)
     if missing:
         raise SystemExit(f"no {sorted(missing)} records for {args.device}; run `make microbench`")
-    arch = Arch.from_table(load_spec(args.model).arch)
+    spec = load_spec(args.model)
+    if spec.family != record.DEFAULT_FAMILY:
+        raise SystemExit(f"{args.model} is a {spec.family} model; these figures are for Llamas")
+    arch = Arch.from_table(spec.arch)
     out = REPORTS / args.device
     print(_save(roofline(args.device, records, arch, args.model), out / "roofline.png"))
     print(_save(bandwidth(args.device, records), out / "bandwidth.png"))
