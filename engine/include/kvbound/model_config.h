@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <vector>
 
 namespace kvb {
 
@@ -38,5 +39,45 @@ struct ModelConfig {
 // Throws kvb::Error if the file is malformed or describes a variant the engine does not model
 // (non-SiLU activation, RoPE scaling other than llama3, biased projections).
 ModelConfig load_model_config(const std::filesystem::path& config_json);
+
+// Architecture dimensions of a Whisper checkpoint, read from its Hugging Face config.json.
+struct WhisperConfig {
+  std::int64_t vocab_size = 0;
+  std::int64_t d_model = 0;
+  std::int64_t n_mels = 0;
+  std::int64_t encoder_layers = 0;
+  std::int64_t encoder_heads = 0;
+  std::int64_t encoder_ffn_dim = 0;
+  std::int64_t decoder_layers = 0;
+  std::int64_t decoder_heads = 0;
+  std::int64_t decoder_ffn_dim = 0;
+  std::int64_t max_source_positions = 0;  // encoder positions of one audio window
+  std::int64_t max_target_positions = 0;  // tokens a decoder sequence may hold
+  double layer_norm_eps = 1e-5;
+
+  // Mel frames of one audio window: the conv stem's stride of 2 halves them.
+  std::int64_t n_frames() const noexcept { return 2 * max_source_positions; }
+};
+
+// Throws kvb::Error if the file is malformed or describes a variant the engine does not model
+// (non-GELU activation, scaled embeddings, an output projection that is not the embedding).
+WhisperConfig load_whisper_config(const std::filesystem::path& config_json);
+
+// Greedy decoding rules of a Whisper checkpoint, read from its generation.json.
+struct WhisperRules {
+  // Tokens fed before the first generated one, starting with the decoder start token.
+  std::vector<std::int32_t> prompt;
+  std::vector<std::int32_t> suppress_tokens;        // never generated
+  std::vector<std::int32_t> begin_suppress_tokens;  // not generated first after the prompt
+  std::int32_t eos_token_id = -1;
+  std::int64_t max_length = 0;  // largest length of the whole sequence, prompt included
+};
+
+// Throws kvb::Error if the file is malformed.
+WhisperRules load_whisper_rules(const std::filesystem::path& generation_json);
+
+// Throws kvb::Error unless the prompt is not empty, every token id is in the vocabulary and
+// max_length is above the prompt length and within max_target_positions.
+void check_whisper_rules(const WhisperRules& rules, const WhisperConfig& cfg);
 
 }  // namespace kvb
