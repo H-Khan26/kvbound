@@ -125,8 +125,8 @@ void linear_quantized(const WeightRef& w, const f16* x, void* y, int n_rows, int
 void gemm_quantized(const WeightRef& w, const f16* x, void* y, int n_rows, int n_in, int n_out,
                     bool f32_out, cudaStream_t stream);
 
-// out [n_channels, n_in] = output channels first_channel onward of W as FP16, for steps wide
-// enough that a tensor-core product on the expanded matrix is faster.
+// out [n_channels, n_in] = output channels first_channel onward of W as FP16, for cuBLAS on the
+// expanded matrix (the engine's expand_quantized path).
 void dequantize(const WeightRef& w, f16* out, int n_in, int first_channel, int n_channels,
                 cudaStream_t stream);
 

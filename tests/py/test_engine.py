@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import torch
 
-from kvbound import golden, quantize, tolerance
+from kvbound import fixture, golden, quantize, tolerance
 from kvbound.fixture import FIXTURE_DIR
 from kvbound.models import load_spec
 from kvbound.ref import load_llama
@@ -270,6 +270,48 @@ def test_generation_is_the_same_on_every_path(kvb):
     sampled = engine.generate(prompt, 30, seed=7, **hot)
     assert sampled == engine.generate(prompt, 30, seed=7, **hot)
     assert sampled != engine.generate(prompt, 30, seed=8, **hot)
+
+
+@pytest.fixture(scope="module")
+def head_dim_64(tmp_path_factory):
+    """A random checkpoint with head_dim 64, so the engine takes the tensor-core prefill
+    attention, which the fixture's head_dim 16 does not support."""
+    directory = tmp_path_factory.mktemp("head_dim_64")
+    fixture.write_random_llama(directory, fixture.HEAD_DIM_64)
+    return directory
+
+
+def test_prefill_attention_in_the_engine(kvb, head_dim_64):
+    """Prompts through the tiled attention match the reference and the one-query kernel: whole,
+    in chunks that start past position 0, in 4-token blocks, with an INT8 cache, and in
+    continuous batches whose steps mix a prompt chunk with decode rows."""
+    model = load_llama(head_dim_64)
+    prompts = [list(range(3, 70)), [9, 8, 7], list(range(100, 140)), [5, 6]]
+    lengths = [12, 20, 6, 15]
+    expected = [reference_greedy(model, p, n)[0] for p, n in zip(prompts, lengths, strict=True)]
+    for options in (
+        {},
+        {"max_step_tokens": 9},
+        {"kv_block_size": 4},
+        {"max_seqs": 3, "kv_block_size": 4, "max_step_tokens": 24},
+    ):
+        engine = kvb.Engine(str(head_dim_64), max_ctx=128, **options)
+        assert engine.serve(prompts, lengths, policy="continuous") == expected, options
+
+    # The tiled kernel against the one-query kernel on the same prompt, every row's logits.
+    ids = prompts[0]
+    for kv_dtype in ("fp16", "int8"):
+        tiled = kvb.Engine(str(head_dim_64), max_ctx=128, kv_dtype=kv_dtype, kv_block_size=4)
+        simple = kvb.Engine(
+            str(head_dim_64), max_ctx=128, kv_dtype=kv_dtype, kv_block_size=4,
+            prefill_attention=False,
+        )  # fmt: skip
+        for start in (0, 40):  # 40: a second chunk over cached keys
+            a = torch.from_numpy(tiled.feed(ids[: start + 20], start=0)["logits"][start:])
+            b = torch.from_numpy(simple.feed(ids[: start + 20], start=0)["logits"][start:])
+            assert tolerance.rel_rms(a, b) < 2e-3, (kv_dtype, start)
+        int8 = [tiled.generate(p, n) for p, n in zip(prompts, lengths, strict=True)]
+        assert int8 == [simple.generate(p, n) for p, n in zip(prompts, lengths, strict=True)]
 
 
 def test_generate_stops_at_eos_and_rejects_overflow(kvb):

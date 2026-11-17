@@ -2,10 +2,10 @@
 
 Runs kvb-bench eagerly on one request of two new tokens, profiles every kernel launch, and keeps
 those of one step: the prefill of the prompt (--phase prefill) or the decode step after it
-(--phase decode). Each launch gets
-its time, the bytes it read from DRAM and their rate against the measured ceiling, how busy the
-tensor cores were, and how many warps were resident. The counters go to
-results/profiles/<run>/counters.csv, with one summary row per kernel name in summary.json.
+(--phase decode). Each launch gets its time, the bytes it read from DRAM and their rate against
+the measured ceiling, how busy the tensor cores were, and how many warps were resident. The
+counters go to results/profiles/<run>/counters.csv, with one summary row per kernel name in
+summary.json.
 
 Nsight Compute replays each launch once per group of counters with the caches flushed, so a
 launch reads its weights from DRAM as it does in a real step, where they never fit in L2.
@@ -30,7 +30,7 @@ from kvbound.counters import find_ncu, run
 from kvbound.models import load_spec
 from kvbound.paths import binary
 from kvbound.perfmodel.model import Arch
-from kvbound.profile import PROFILES
+from kvbound.profile import LOAD_KERNELS, PROFILES
 from kvbound.weight_format import VARIANTS
 
 METRICS = {
@@ -95,7 +95,7 @@ def main() -> None:
         trace_path.write_text(json.dumps(trace), encoding="utf-8")
         report = Path(tmp) / "step.ncu-rep"
         command = [
-            ncu, "--kernel-name", r"regex:^(?!.*(bf16_to_f16|f32_to_f16|count_non_finite)).*",
+            ncu,
             "--metrics", ",".join(METRICS.values()), "--export", str(report), "--force-overwrite",
             str(binary("bench", args.preset)), "--model", str(model_dir),
             "--trace", str(trace_path), "--iters", "1",
@@ -111,8 +111,14 @@ def main() -> None:
         points = []
         for values in launches:
             row = dict(zip(header, values, strict=True))
+            name = kernel_name(row["Kernel Name"])
+            # The weight conversions run while the model loads, before the first step. (A name
+            # filter on the command line would need a regex alternation, which cmd.exe splits
+            # when it runs ncu.bat.)
+            if name.removesuffix("_kernel") in LOAD_KERNELS:
+                continue
             point: dict[str, Any] = {
-                "kernel": kernel_name(row["Kernel Name"]),
+                "kernel": name,
                 "grid": row["Grid Size"],
                 "block": row["Block Size"],
             }

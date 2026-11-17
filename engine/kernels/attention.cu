@@ -326,16 +326,6 @@ __device__ inline unsigned shared_address(const void* p) {
   return static_cast<unsigned>(__cvta_generic_to_shared(p));
 }
 
-// 16-byte asynchronous copy to shared memory; `valid` false writes zeros and reads nothing.
-__device__ inline void cp_async16(void* dst, const void* src, bool valid) {
-  asm volatile("cp.async.cg.shared.global [%0], [%1], 16, %2;\n" ::"r"(shared_address(dst)),
-               "l"(src), "r"(valid ? 16 : 0));
-}
-__device__ inline void cp_async_commit() { asm volatile("cp.async.commit_group;\n" ::); }
-__device__ inline void cp_async_wait_all() {
-  asm volatile("cp.async.wait_group 0;\n" ::: "memory");
-}
-
 // Four 8x8 FP16 matrices from shared memory into MMA fragments; lanes 8i..8i+7 give the row
 // addresses of matrix i. The .trans form hands out the transposed matrices.
 __device__ inline void ldmatrix_x4(unsigned (&r)[4], const __half* p) {
@@ -507,7 +497,7 @@ __global__ void __launch_bounds__(kPrefillThreads, prefill_blocks_per_sm(kHeadDi
     stage_kv_f16<kHeadDim, kThreads>(smem, smem + kTileHalves, kv, cache, 0, n_keys);
   }
   cp_async_commit();
-  cp_async_wait_all();
+  cp_async_wait<0>();
   __syncthreads();
 
   const int warp = threadIdx.x / kWarpSize, lane = threadIdx.x % kWarpSize;
@@ -535,7 +525,7 @@ __global__ void __launch_bounds__(kPrefillThreads, prefill_blocks_per_sm(kHeadDi
 
   for (int kt = 0; kt < n_key_tiles; ++kt) {
     if (kt > 0) {
-      cp_async_wait_all();
+      cp_async_wait<0>();
       __syncthreads();
     }
     const int next = kt + 1;

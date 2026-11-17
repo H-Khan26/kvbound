@@ -173,22 +173,6 @@ struct GemmTile {
   static_assert(kWM % 8 == 0 && kWN % 16 == 0 && kChunks % WarpsK == 0);
 };
 
-__device__ inline void cp_async16(void* smem, const void* global, bool valid) {
-  // A source size of 0 fills the 16 bytes with zeros without reading global memory.
-  const unsigned dst = static_cast<unsigned>(__cvta_generic_to_shared(smem));
-  asm volatile("cp.async.cg.shared.global [%0], [%1], 16, %2;\n" ::"r"(dst), "l"(global),
-               "r"(valid ? 16 : 0)
-               : "memory");
-}
-
-__device__ inline void cp_async_commit() { asm volatile("cp.async.commit_group;\n" ::: "memory"); }
-
-// Waits until at most N committed groups are still in flight.
-template <int N>
-__device__ inline void cp_async_wait() {
-  asm volatile("cp.async.wait_group %0;\n" ::"n"(N) : "memory");
-}
-
 // d += a * b for one m16n8k16 tile: FP16 inputs, FP32 sums.
 __device__ inline void mma_f16(float* d, const unsigned* a, const unsigned* b) {
   asm("mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%0, %1, %2, %3}, {%4, %5, %6, %7}, "

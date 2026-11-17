@@ -21,8 +21,9 @@ struct Builder {
     program.values.push_back({std::move(name), rows, cols, dtype});
     return static_cast<int>(program.values.size()) - 1;
   }
-  int weight(WeightParts parts) {
+  int weight(WeightParts parts, std::vector<std::int64_t> rows = {}) {
     program.weights.push_back(std::move(parts));
+    program.part_rows.push_back(std::move(rows));
     return static_cast<int>(program.weights.size()) - 1;
   }
   void op(Op op) { program.ops.push_back(std::move(op)); }
@@ -62,12 +63,13 @@ Program build_llama_program(const ModelConfig& cfg, bool fuse) {
     const std::string site = layer_site(i);
     const std::string w = layer_weight(i);
     const auto name = [&](std::string_view suffix) { return site + "." + std::string(suffix); };
-    const auto linear = [&](int in, int out, WeightParts weight, std::string capture = {}) {
+    const auto linear = [&](int in, int out, WeightParts weight, std::string capture = {},
+                            std::vector<std::int64_t> part_rows = {}) {
       b.op({.kind = OpKind::Linear,
             .layer = i,
             .in0 = in,
             .out = out,
-            .weight = b.weight(std::move(weight)),
+            .weight = b.weight(std::move(weight), std::move(part_rows)),
             .site = std::move(capture)});
     };
     if (!fuse) input_norm(i);
@@ -77,7 +79,8 @@ Program build_llama_program(const ModelConfig& cfg, bool fuse) {
       const int qkv = b.value(name("qkv"), RowKind::Token, hidden + 2 * kv_dim);
       linear(attn_norm, qkv,
              {w + ".self_attn.q_proj.weight", w + ".self_attn.k_proj.weight",
-              w + ".self_attn.v_proj.weight"});
+              w + ".self_attn.v_proj.weight"},
+             {}, {hidden, kv_dim, kv_dim});
       b.op({.kind = OpKind::RopeKvWrite, .layer = i, .in0 = qkv, .out = q});
     } else {
       const int k = b.value(name("k"), RowKind::Token, kv_dim);
@@ -125,7 +128,8 @@ Program build_llama_program(const ModelConfig& cfg, bool fuse) {
     const int gate = b.value(name("gate"), RowKind::Token, cfg.intermediate_size);
     if (fuse) {
       const int gate_up = b.value(name("gate_up"), RowKind::Token, 2 * cfg.intermediate_size);
-      linear(mlp_norm, gate_up, {w + ".mlp.gate_proj.weight", w + ".mlp.up_proj.weight"});
+      linear(mlp_norm, gate_up, {w + ".mlp.gate_proj.weight", w + ".mlp.up_proj.weight"}, {},
+             {cfg.intermediate_size, cfg.intermediate_size});
       b.op({.kind = OpKind::SiluMul, .layer = i, .in0 = gate_up, .out = gate});
     } else {
       const int up = b.value(name("up"), RowKind::Token, cfg.intermediate_size);

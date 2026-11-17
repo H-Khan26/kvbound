@@ -40,7 +40,9 @@ struct EngineConfig {
   // Read cached keys 16 bytes at a time where the KV layout allows it.
   bool wide_key_loads = true;
   // Steps holding several rows of one sequence (prefill) run attention as tiles of rows on
-  // tensor cores; otherwise every query row is a block of the decode kernel.
+  // tensor cores; otherwise every query row is a block of the decode kernel. In a step that
+  // mixes a prompt chunk with decode rows, each decode row is a tile of its own, which leaves
+  // most of its block idle.
   bool prefill_attention = true;
   // Steps of up to this many rows multiply quantized weights in place; wider steps use tensor
   // cores on the quantized weights, or with expand_quantized, expand each matrix to FP16 first.

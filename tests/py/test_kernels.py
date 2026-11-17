@@ -81,7 +81,8 @@ def test_silu_mul_and_add(kvb, gen, n):
     assert tolerance.rel_rms(total, a.float() + b.float()) < F16_ROUNDING
 
 
-@pytest.mark.parametrize(("rows", "dim"), [(1, 64), (3, 2048), (2, 5000)])
+# 100 and 9000 take the scalar kernel: not a multiple of 8, and longer than the wide one holds.
+@pytest.mark.parametrize(("rows", "dim"), [(1, 64), (3, 2048), (2, 5000), (2, 100), (1, 9000)])
 def test_add_rms_norm(kvb, gen, rows, dim):
     x, y, w = rand_f16(gen, rows, dim, scale=3.0), rand_f16(gen, rows, dim), rand_f16(gen, dim)
     eps = 1e-5

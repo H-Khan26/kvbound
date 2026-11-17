@@ -249,9 +249,9 @@ int run(int argc, char** argv) {
   config.max_graphs = args.integer("max-graphs", config.max_graphs);
   const std::string policy = args.str("policy", "static");
   config.quantized_gemm_rows = args.integer("quantized-gemm-rows", config.quantized_gemm_rows);
-  config.expand_quantized = args.integer("expand-quantized", 0) != 0;
-  config.fuse = args.integer("fuse", 1) != 0;
-  config.prefill_attention = args.integer("prefill-attention", 1) != 0;
+  config.expand_quantized = args.integer("expand-quantized", config.expand_quantized) != 0;
+  config.fuse = args.integer("fuse", config.fuse) != 0;
+  config.prefill_attention = args.integer("prefill-attention", config.prefill_attention) != 0;
   config.f16_gemv_rows = args.integer("f16-gemv-rows", config.f16_gemv_rows);
   const std::string kv_dtype = args.str("kv-dtype", "fp16");
   if (const auto value = kvb::kv_dtype_from_name(kv_dtype)) {

@@ -11,6 +11,8 @@ Usage: python -m kvbound.fixture
 """
 
 import json
+from pathlib import Path
+from typing import Any
 
 import torch
 from safetensors.torch import save_file
@@ -67,6 +69,22 @@ def random_weights(cfg: LlamaConfig, gen: torch.Generator) -> dict[str, torch.Te
             w = torch.randn(shape, generator=gen) / shape[1] ** 0.5
         weights[theirs] = w.to(torch.float16)
     return weights
+
+
+def write_random_llama(directory: Path, overrides: dict[str, Any], seed: int = SEED) -> None:
+    """A random checkpoint like the fixture's, with config values replaced, and no goldens: for
+    tests of shapes the fixture does not have, such as head_dim 64."""
+    directory.mkdir(parents=True, exist_ok=True)
+    hf_config = HF_CONFIG | overrides
+    with (directory / "config.json").open("w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(hf_config, indent=2) + "\n")
+    gen = torch.Generator().manual_seed(seed)
+    weights = random_weights(LlamaConfig.from_hf_dict(hf_config), gen)
+    save_file(weights, str(directory / "model.safetensors"), metadata={"format": "pt"})
+
+
+# head_dim 64, the size the tensor-core prefill attention needs and both real models have.
+HEAD_DIM_64 = {"hidden_size": 128, "num_attention_heads": 2, "num_key_value_heads": 1}
 
 
 def build() -> None:

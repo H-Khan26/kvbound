@@ -61,6 +61,23 @@ __device__ inline void unpack_int8(uint4 load, float* out) {
   }
 }
 
+// 16-byte asynchronous copy from global to shared memory (sm_80 and later). With `valid` false
+// the source size is 0: the 16 bytes are filled with zeros and global memory is not read.
+__device__ inline void cp_async16(void* smem, const void* global, bool valid) {
+  const unsigned dst = static_cast<unsigned>(__cvta_generic_to_shared(smem));
+  asm volatile("cp.async.cg.shared.global [%0], [%1], 16, %2;\n" ::"r"(dst), "l"(global),
+               "r"(valid ? 16 : 0)
+               : "memory");
+}
+
+__device__ inline void cp_async_commit() { asm volatile("cp.async.commit_group;\n" ::: "memory"); }
+
+// Waits until at most N committed groups are still in flight.
+template <int N>
+__device__ inline void cp_async_wait() {
+  asm volatile("cp.async.wait_group %0;\n" ::"n"(N) : "memory");
+}
+
 inline const __half* as_half(const f16* p) { return reinterpret_cast<const __half*>(p); }
 inline __half* as_half(f16* p) { return reinterpret_cast<__half*>(p); }
 

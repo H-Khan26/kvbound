@@ -19,7 +19,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from kvbound import quantize
+from kvbound import fixture, quantize
 from kvbound.fixture import FIXTURE_DIR
 from kvbound.paths import binary
 
@@ -67,6 +67,12 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         trace_path = Path(tmp) / "trace.json"
         trace_path.write_text(json.dumps(trace), encoding="utf-8")
+        # head_dim 64 takes the tensor-core prefill attention, which the fixture's 16 does not.
+        head_dim_64 = Path(tmp) / "head_dim_64"
+        fixture.write_random_llama(head_dim_64, fixture.HEAD_DIM_64)
+        for kv in ("fp16", "int8"):
+            options = ["--slots", "3", "--kv-dtype", kv, *paged]
+            cases.append((f"prefill tiles, {kv} kv", str(head_dim_64), options))
         for scheme in ("int8_pc", "int4_g"):
             quantized = Path(tmp) / scheme
             quantize.convert(FIXTURE_DIR, quantized, scheme, group_size=32, device="cpu")

@@ -185,7 +185,7 @@ def main() -> None:
     parser.add_argument("--max-graphs", type=int, default=16)
     parser.add_argument(
         "--quantized-gemm-rows", type=int, default=3,
-        help="widest step that multiplies quantized weights without expanding them to FP16",
+        help="widest step that multiplies quantized weights in place; wider steps use tensor cores",
     )  # fmt: skip
     parser.add_argument(
         "--fuse", action=argparse.BooleanOptionalAction, default=True, help="the fused program"

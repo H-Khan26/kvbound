@@ -61,7 +61,9 @@ struct Program {
   std::vector<Value> values;
   std::vector<Op> ops;
   std::vector<WeightParts> weights;  // checkpoint tensor names
-  int logits = -1;                   // value ids of the outputs
+  // Per weight, the rows of each stacked part in order; empty for a single tensor.
+  std::vector<std::vector<std::int64_t>> part_rows;
+  int logits = -1;  // value ids of the outputs
   int next_ids = -1;
 };
 

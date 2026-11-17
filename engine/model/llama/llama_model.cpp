@@ -69,12 +69,14 @@ DeviceWeights load_weights(const std::filesystem::path& model_dir, const Program
     if (op.weight < 0) continue;
     const std::int64_t out_cols = program.values[op.out].cols;
     const WeightParts& parts = program.weights[op.weight];
-    if (op.kind != OpKind::Linear && parts.size() != 1) {
-      throw Error(parts[0] + ": only matrix products read stacked weights");
+    const std::vector<std::int64_t>& part_rows = program.part_rows[op.weight];
+    if (parts.size() > 1 && (op.kind != OpKind::Linear || part_rows.size() != parts.size())) {
+      throw Error(parts[0] + ": only matrix products read stacked weights, with rows per part");
     }
     // Rows of the stacked matrix, summed over its parts.
     std::int64_t stacked_rows = 0;
-    for (const std::string& name : parts) {
+    for (std::size_t part = 0; part < parts.size(); ++part) {
+      const std::string& name = parts[part];
       const TensorView& tensor = file.at(name);
       const bool integers = tensor.dtype == DType::I8 || tensor.dtype == DType::U8;
       if (op.kind == OpKind::RmsNorm || op.kind == OpKind::AddRmsNorm) {
@@ -89,7 +91,7 @@ DeviceWeights load_weights(const std::filesystem::path& model_dir, const Program
       const std::int64_t cols = op.kind == OpKind::Embed ? out_cols : program.values[op.in0].cols;
       const std::int64_t rows = op.kind == OpKind::Embed ? cfg.vocab_size
                                 : parts.size() == 1      ? out_cols
-                                                         : tensor.shape.at(0);
+                                                         : part_rows[part];
       std::vector<std::int64_t> expected{rows, cols};
       if (integers) {
         expected = stored_shape(format, rows, cols);
@@ -185,7 +187,8 @@ void LlamaModel::run(const StepRow* rows, const std::int32_t* out_rows, int n_to
       case OpKind::Linear: {
         const WeightRef weight = weights_.ref(op.weight);
         const int n_in = static_cast<int>(in0->cols), n_out_cols = static_cast<int>(out->cols);
-        if (weight.scheme == WeightScheme::F16 && n_rows <= limits_.f16_gemv_rows) {
+        if (weight.scheme == WeightScheme::F16 && n_rows <= limits_.f16_gemv_rows &&
+            n_in % 8 == 0) {
           kernels::linear_f16(weights_.data(op.weight), value<f16>(op.in0), value<void>(op.out),
                               n_rows, n_in, n_out_cols, out->dtype == DType::F32, stream);
         } else if (weight.scheme == WeightScheme::F16) {
