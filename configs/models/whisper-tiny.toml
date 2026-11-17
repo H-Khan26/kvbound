@@ -1,0 +1,38 @@
+# Stock multilingual Whisper tiny: the development model with a full generation config.
+name = "whisper-tiny"
+family = "whisper"
+hf_repo = "openai/whisper-tiny"
+revision = "169d4a4341b33bc18d8881c4b69c2e104e1cc0af"
+gated = false
+
+# Checked against config.json when the checkpoint is fetched.
+[arch]
+vocab_size = 51865
+d_model = 384
+n_mels = 80
+encoder_layers = 4
+encoder_heads = 6
+encoder_ffn_dim = 1536
+decoder_layers = 4
+decoder_heads = 6
+decoder_ffn_dim = 1536
+max_source_positions = 1500
+max_target_positions = 448
+
+# Greedy decoding rules, written to generation.json. They are what Hugging Face
+# `generate(language="ar", task="transcribe")` does with this checkpoint: the prompt is
+# <|startoftranscript|><|ar|><|transcribe|><|notimestamps|> and the lists are those of its
+# generation_config.json.
+[generation]
+prompt = [50258, 50272, 50359, 50363]
+suppress_tokens = [
+    1, 2, 7, 8, 9, 10, 14, 25, 26, 27, 28, 29, 31, 58, 59, 60, 61, 62, 63, 90, 91, 92, 93, 359,
+    503, 522, 542, 873, 893, 902, 918, 922, 931, 1350, 1853, 1982, 2460, 2627, 3246, 3253, 3268,
+    3536, 3846, 3961, 4183, 4667, 6585, 6647, 7273, 9061, 9383, 10428, 10929, 11938, 12033, 12331,
+    12562, 13793, 14157, 14635, 15265, 15618, 16553, 16604, 18362, 18956, 20075, 21675, 22520,
+    26130, 26161, 26435, 28279, 29464, 31650, 32302, 32470, 36865, 42863, 47425, 49870, 50254,
+    50258, 50358, 50359, 50360, 50361, 50362,
+]
+begin_suppress_tokens = [220, 50257]
+eos_token_id = 50257
+max_length = 448

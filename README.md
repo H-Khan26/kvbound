@@ -215,10 +215,10 @@ clocks. Exact values are in `results/raw/` and the figures in `reports/`.
 | `apps/` | `kvb-bench` runs a trace of requests through the scheduler and prints raw timings; `kvb-kv_layout` times attention on each KV layout, on 16-token blocks and on an INT8 cache |
 | `bindings/` | `_kvb`, the engine and each kernel as a Python extension, for tests and evals |
 | `microbench/` | standalone CUDA binaries that measure bandwidth, latency and GEMM peaks |
-| `python/kvbound/ref/` | from-scratch PyTorch reference model (RMSNorm, RoPE, grouped-query attention, SwiGLU); loads quantized checkpoints by dequantizing them |
+| `python/kvbound/ref/` | from-scratch PyTorch reference models: Llama (RMSNorm, RoPE, grouped-query attention, SwiGLU), which loads quantized checkpoints by dequantizing them, and Whisper (conv stem, encoder, decoder with cross attention, greedy decoding) |
 | `python/kvbound/` | golden tensors, tolerance metrics, result records, fingerprint, baselines, perf model, workloads, the quantizer, bench, serve and profile wrappers, plots |
 | `python/kvbound/evals/` | WikiText-2 perplexity, and per-site error against the goldens with sample text |
-| `fixtures/tiny-llama/` | committed 2-layer random model with goldens and thresholds; what CI tests against |
+| `fixtures/tiny-llama/`, `fixtures/tiny-whisper/` | committed 2-layer random models with goldens and thresholds; what CI tests against |
 | `tests/cpp/` | GoogleTest, CPU only: parser, loader, weight format, fixture contract, op program, memory plan, both scheduling policies, sampler, allocator |
 | `tests/py/` | pytest: reference vs Hugging Face, the quantizer, the perplexity arithmetic; under the `gpu` marker, each kernel vs torch and the engine vs the goldens, FP16 and quantized |
 | `configs/` | model, device and workload descriptions |

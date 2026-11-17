@@ -35,6 +35,9 @@ Scheduler::Scheduler(const SchedulerConfig& config) : config_(config) {
                 std::string(schedule_policy_name(config.policy)) + " policy needs " +
                 std::to_string(needed));
   }
+  if (config.encode_rows < 0 || (config.encode_rows > 0 && config.max_encodes_per_step < 1)) {
+    throw Error("encode_rows must not be negative and encoding needs max_encodes_per_step > 0");
+  }
   free_blocks_ = config_.n_blocks;
 }
 
@@ -110,6 +113,7 @@ void Scheduler::plan_continuous(StepPlan& plan) {
     free_blocks_ += victim.n_blocks;
     victim.n_blocks = 0;
     victim.n_cached = 0;
+    victim.encoded = false;
     waiting_.push_front(victim);
   };
   for (std::size_t i = 0; i < running_.size(); ++i) {
@@ -142,19 +146,33 @@ void Scheduler::plan_continuous(StepPlan& plan) {
   }
 }
 
+void Scheduler::plan_encodes(StepPlan& plan) {
+  if (config_.encode_rows == 0) return;
+  for (Sequence& s : running_) {
+    if (static_cast<int>(plan.encode.size()) == config_.max_encodes_per_step) break;
+    if (s.encoded) continue;
+    plan.encode.push_back(s.request.id);
+    s.encoded = true;
+  }
+}
+
 void Scheduler::plan_rows(StepPlan& plan) {
+  // A sequence still waiting for the encoder has no cross-attention cache to run against.
+  const auto runnable = [&](const Sequence& s) {
+    return !s.finished && (config_.encode_rows == 0 || s.encoded);
+  };
   // Sequences with one token left to process are decoding and take one row each first; those
   // with more are prefilling and share what is left of the step.
   int budget = config_.max_step_tokens;
   for (const Sequence& s : running_) {
-    if (!s.finished && s.n_known - s.n_cached == 1) {
+    if (runnable(s) && s.n_known - s.n_cached == 1) {
       plan.run.push_back({s.request.id, 1});
       --budget;
     }
   }
   for (const Sequence& s : running_) {
     const int pending = s.n_known - s.n_cached;
-    if (s.finished || pending <= 1 || budget == 0) continue;
+    if (!runnable(s) || pending <= 1 || budget == 0) continue;
     const int n = std::min(pending, budget);
     plan.run.push_back({s.request.id, n});
     budget -= n;
@@ -169,6 +187,7 @@ StepPlan Scheduler::next() {
   } else {
     plan_continuous(plan);
   }
+  plan_encodes(plan);
   plan_rows(plan);
   planned_ = plan.run;
   return plan;

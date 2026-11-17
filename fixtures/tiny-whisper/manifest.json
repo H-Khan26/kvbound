@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "model": {
+    "name": "tiny-whisper",
+    "weights_sha256": "386fe865afc7dedc135b28a10ff86efa1d77b11b8ef31c09b096a3896e278c2d",
+    "weights_precision": "fp16",
+    "seed": 796,
+    "config": {
+      "vocab_size": 128,
+      "d_model": 128,
+      "n_mels": 16,
+      "encoder_layers": 2,
+      "encoder_heads": 2,
+      "encoder_ffn_dim": 256,
+      "decoder_layers": 2,
+      "decoder_heads": 2,
+      "decoder_ffn_dim": 256,
+      "max_source_positions": 64,
+      "max_target_positions": 32,
+      "layer_norm_eps": 1e-05
+    }
+  },
+  "golden_file": "goldens.safetensors",
+  "golden_sha256": "4ba67d44e7be22e39f9f42223192961f3a55c625fa09d201efb8b1e7f0492c40",
+  "golden_dtype": "F32",
+  "tensor_name": "<prompt id>/<site>",
+  "sites": [
+    "encoder.conv1",
+    "encoder.conv2",
+    "encoder.embed",
+    "encoder.layers.<i>.attn_norm",
+    "encoder.layers.<i>.attn_out",
+    "encoder.layers.<i>.resid_mid",
+    "encoder.layers.<i>.mlp_norm",
+    "encoder.layers.<i>.mlp_out",
+    "encoder.layers.<i>.resid_post",
+    "encoder.final_norm",
+    "encoder.cross_kv.<j>",
+    "decoder.embed",
+    "decoder.layers.<i>.attn_norm",
+    "decoder.layers.<i>.attn_out",
+    "decoder.layers.<i>.resid_mid",
+    "decoder.layers.<i>.cross_norm",
+    "decoder.layers.<i>.cross_out",
+    "decoder.layers.<i>.resid_cross",
+    "decoder.layers.<i>.mlp_norm",
+    "decoder.layers.<i>.mlp_out",
+    "decoder.layers.<i>.resid_post",
+    "decoder.final_norm",
+    "logits"
+  ],
+  "prompts": [
+    {
+      "id": "p0",
+      "n_tokens": 4,
+      "n_frames": 128
+    },
+    {
+      "id": "p1",
+      "n_tokens": 12,
+      "n_frames": 128
+    },
+    {
+      "id": "p2",
+      "n_tokens": 32,
+      "n_frames": 128
+    }
+  ],
+  "thresholds": {
+    "fp32": {
+      "rel_rms_max": 1e-05,
+      "cosine_min": 0.99999
+    },
+    "fp16": {
+      "rel_rms_max": {
+        "encoder.conv1": 0.0026589802436054587,
+        "encoder.conv2": 0.0026589802436054587,
+        "encoder.embed": 0.0026589802436054587,
+        "encoder.layers.0.attn_norm": 0.0026589802436054587,
+        "encoder.layers.0.attn_out": 0.0026589802436054587,
+        "encoder.layers.0.resid_mid": 0.0026589802436054587,
+        "encoder.layers.0.mlp_norm": 0.0026589802436054587,
+        "encoder.layers.0.mlp_out": 0.0026589802436054587,
+        "encoder.layers.0.resid_post": 0.0026589802436054587,
+        "encoder.layers.1.attn_norm": 0.003132111166438464,
+        "encoder.layers.1.attn_out": 0.003132111166438464,
+        "encoder.layers.1.resid_mid": 0.003132111166438464,
+        "encoder.layers.1.mlp_norm": 0.003132111166438464,
+        "encoder.layers.1.mlp_out": 0.003132111166438464,
+        "encoder.layers.1.resid_post": 0.003132111166438464,
+        "encoder.final_norm": 0.0036052420892714694,
+        "encoder.cross_kv.0": 0.0036052420892714694,
+        "encoder.cross_kv.1": 0.0036052420892714694,
+        "decoder.embed": 0.0026589802436054587,
+        "decoder.layers.0.attn_norm": 0.0036052420892714694,
+        "decoder.layers.0.attn_out": 0.0036052420892714694,
+        "decoder.layers.0.resid_mid": 0.0036052420892714694,
+        "decoder.layers.0.cross_norm": 0.0036052420892714694,
+        "decoder.layers.0.cross_out": 0.0036052420892714694,
+        "decoder.layers.0.resid_cross": 0.0036052420892714694,
+        "decoder.layers.0.mlp_norm": 0.0036052420892714694,
+        "decoder.layers.0.mlp_out": 0.0036052420892714694,
+        "decoder.layers.0.resid_post": 0.0036052420892714694,
+        "decoder.layers.1.attn_norm": 0.004078373012104475,
+        "decoder.layers.1.attn_out": 0.004078373012104475,
+        "decoder.layers.1.resid_mid": 0.004078373012104475,
+        "decoder.layers.1.cross_norm": 0.004078373012104475,
+        "decoder.layers.1.cross_out": 0.004078373012104475,
+        "decoder.layers.1.resid_cross": 0.004078373012104475,
+        "decoder.layers.1.mlp_norm": 0.004078373012104475,
+        "decoder.layers.1.mlp_out": 0.004078373012104475,
+        "decoder.layers.1.resid_post": 0.004078373012104475,
+        "decoder.final_norm": 0.00455150393493748,
+        "logits": 0.00455150393493748
+      },
+      "top1_mismatches_max": 1,
+      "positions": 48,
+      "mean_kl_max": 9.751532337769875e-06,
+      "observed_torch_fp16": {
+        "rel_rms_by_depth": [
+          0.0006647450609013647,
+          0.000783027791609616,
+          0.0006815395271603384,
+          0.0007180307455660844,
+          0.0006420814175579062
+        ],
+        "top1_mismatches": 0,
+        "mean_kl": 2.437883084442469e-06
+      }
+    }
+  },
+  "torch_version": "2.11.0+cu128"
+}

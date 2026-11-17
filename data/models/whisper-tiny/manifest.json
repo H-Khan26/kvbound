@@ -1,0 +1,8 @@
+{
+  "name": "whisper-tiny",
+  "hf_repo": "openai/whisper-tiny",
+  "revision": "169d4a4341b33bc18d8881c4b69c2e104e1cc0af",
+  "weights_sha256": "c2b4ae7f8bcf6aaf523950e395e30e49230ff58891846a5b639e93f410ae4cbb",
+  "source_weights": "model.safetensors",
+  "source_weights_sha256": "7ebd0e69e78190ffe1438491fa05cc1f5c1aa3a4c4db3bc1723adbb551ea2395"
+}

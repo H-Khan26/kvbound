@@ -27,8 +27,8 @@ struct AttnTile {
 // it has the tile's seq, the position after the previous row's, and the tile has room.
 std::vector<AttnTile> plan_attention_tiles(std::span<const StepRow> rows, int max_rows);
 
-// What the engine does in one iteration, in the order free, preempt, alloc, run. Produced on the
-// CPU; carries no device state.
+// What the engine does in one iteration, in the order free, preempt, alloc, encode, run. Produced
+// on the CPU; carries no device state.
 struct StepPlan {
   struct Alloc {
     int seq;
@@ -43,10 +43,13 @@ struct StepPlan {
   // them again and runs every token from the first, which recomputes the cache.
   std::vector<int> preempt;
   std::vector<Alloc> alloc;
+  // Speech only: sequences whose audio runs through the encoder, which fills their cross-attention
+  // cache. A sequence holds blocks when it is encoded and runs no token before it.
+  std::vector<int> encode;
   std::vector<Run> run;
 
   bool empty() const noexcept {
-    return free.empty() && preempt.empty() && alloc.empty() && run.empty();
+    return free.empty() && preempt.empty() && alloc.empty() && encode.empty() && run.empty();
   }
 };
 

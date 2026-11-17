@@ -57,7 +57,7 @@ sanitize:         ## engine under compute-sanitizer (memcheck, racecheck, initch
 fetch:            ## download the pinned checkpoint into data/models/ (MODEL=...)
 	uv run python -m kvbound.models fetch $(MODEL)
 
-fixture:          ## regenerate the committed tiny-llama fixture and its goldens
+fixture:          ## regenerate the committed tiny-llama and tiny-whisper fixtures and their goldens
 	uv run python -m kvbound.fixture
 
 golden:           ## dump real-model golden tensors into data/golden/ (MODEL=...)

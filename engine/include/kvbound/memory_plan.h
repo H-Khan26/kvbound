@@ -23,7 +23,9 @@ inline constexpr std::size_t kArenaAlign = 256;
 
 std::vector<Lifetime> value_lifetimes(const Program& program);
 
-// Bytes of each value at the largest step, rounded up to kArenaAlign.
+// Bytes of each value at the largest step, rounded up to kArenaAlign. A Whisper model plans its
+// encoder and decoder programs separately: the encoder's max_tokens is the clips of one step
+// times the encoder positions of a clip, and it has no outputs.
 std::vector<std::size_t> value_bytes(const Program& program, std::int64_t max_tokens,
                                      std::int64_t max_outputs);
 

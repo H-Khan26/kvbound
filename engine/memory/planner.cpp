@@ -16,7 +16,8 @@ std::vector<Lifetime> value_lifetimes(const Program& program) {
       lifetimes[value].last = std::max(lifetimes[value].last, i);
     }
   }
-  // The host reads the outputs after the last op.
+  // The host writes the input before the first op and reads the outputs after the last.
+  if (program.input >= 0) lifetimes[program.input].first = 0;
   for (const int value : {program.logits, program.next_ids}) {
     if (value >= 0) lifetimes[value].last = n_ops - 1;
   }
@@ -28,7 +29,7 @@ std::vector<std::size_t> value_bytes(const Program& program, std::int64_t max_to
   std::vector<std::size_t> bytes;
   bytes.reserve(program.values.size());
   for (const Value& value : program.values) {
-    const std::int64_t rows = value.rows == RowKind::Token ? max_tokens : max_outputs;
+    const std::int64_t rows = row_count(value.rows, max_tokens, max_outputs);
     const std::size_t raw = static_cast<std::size_t>(rows * value.cols) * size_bytes(value.dtype);
     bytes.push_back((raw + kArenaAlign - 1) / kArenaAlign * kArenaAlign);
   }

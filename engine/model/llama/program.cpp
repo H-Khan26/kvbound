@@ -6,8 +6,11 @@ namespace kvb {
 
 std::string_view op_name(OpKind kind) noexcept {
   constexpr std::array<std::string_view, kOpKindCount> names{
-      "embed",    "rms_norm", "linear",      "rope",   "kv_write",     "attention",
-      "silu_mul", "add",      "gather_rows", "argmax", "add_rms_norm", "rope_kv_write"};
+      "embed",         "rms_norm",        "linear",         "rope",
+      "kv_write",      "attention",       "silu_mul",       "add",
+      "gather_rows",   "argmax",          "add_rms_norm",   "rope_kv_write",
+      "layer_norm",    "add_layer_norm",  "gelu",           "unfold",
+      "add_positions", "dense_attention", "suppress_tokens"};
   return names[static_cast<std::size_t>(kind)];
 }
 

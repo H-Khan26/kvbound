@@ -1,0 +1,8 @@
+{
+  "name": "whisper-tiny-ar-quran",
+  "hf_repo": "tarteel-ai/whisper-tiny-ar-quran",
+  "revision": "c3d7e624af5c81bef25a10a2af3a5a84cb4dd0f0",
+  "weights_sha256": "699bd95325c429a52be14447ade8fa3c0c2daaed316bf5eb6d6e37b604c34d6a",
+  "source_weights": "pytorch_model.bin",
+  "source_weights_sha256": "f26c96202427524ec015bcf25bd932414df0474e538d765c16759f1095757688"
+}
