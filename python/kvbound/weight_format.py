@@ -13,6 +13,10 @@ header's __metadata__ says how to read them:
 
 A file without the scheme key is a plain FP16/BF16/F32 checkpoint (scheme fp16).
 
+act_scales "awq" marks an int4_g file whose matrices were quantized after rescaling their input
+channels by activation statistics (kvbound.awq). The inverse scales are folded into the norm
+weights and up_proj, so the file reads and runs like any other int4_g file.
+
 Usage: WeightFormat.from_metadata(safe_open(path, "pt").metadata())
 """
 
@@ -25,7 +29,8 @@ INT8_PC = "int8_pc"
 INT4_G = "int4_g"
 SCHEMES = (FP16, INT8_PC, INT4_G)
 
-CLIPS = ("minmax", "mse")
+CLIPS = ("minmax", "mse", "awq")
+ACT_SCALES = ("", "awq")
 PACK_ORDER = "lo_nibble_first"
 SCALE_DTYPE = "F16"
 SCALE_SUFFIX = ".scale"
@@ -40,11 +45,27 @@ KEY_GROUP_SIZE = "kvbound.group_size"
 KEY_PACK_ORDER = "kvbound.pack_order"
 KEY_SCALE_DTYPE = "kvbound.scale_dtype"
 KEY_CLIP = "kvbound.clip"
+KEY_ACT_SCALES = "kvbound.act_scales"
 KEY_SOURCE = "kvbound.source"
 KEY_SOURCE_SHA256 = "kvbound.source_sha256"
+# Where the calibration tokens of an act_scales file came from.
+KEY_CALIB_DATASET = "kvbound.calib_dataset"
+KEY_CALIB_REVISION = "kvbound.calib_revision"
+KEY_CALIB_SHA256 = "kvbound.calib_sha256"
+KEY_CALIB_WINDOWS = "kvbound.calib_windows"
+KEY_CALIB_WINDOW = "kvbound.calib_window"
+KEY_CALIB_SEED = "kvbound.calib_seed"
+CALIB_KEYS = (
+    KEY_CALIB_DATASET,
+    KEY_CALIB_REVISION,
+    KEY_CALIB_SHA256,
+    KEY_CALIB_WINDOWS,
+    KEY_CALIB_WINDOW,
+    KEY_CALIB_SEED,
+)
 
 # Weight variants by directory suffix (see ModelSpec.variant_dir).
-VARIANTS = (FP16, INT8_PC, INT4_G, f"{INT4_G}.mse")
+VARIANTS = (FP16, INT8_PC, INT4_G, f"{INT4_G}.mse", f"{INT4_G}.awq", f"{INT4_G}.awq-noclip")
 
 
 @dataclass(frozen=True)
@@ -54,6 +75,7 @@ class WeightFormat:
     pack_order: str = ""
     scale_dtype: str = ""
     clip: str = ""
+    act_scales: str = ""
 
     def __post_init__(self) -> None:
         if self.scheme not in SCHEMES:
@@ -67,6 +89,16 @@ class WeightFormat:
         fields = (self.group_size, self.pack_order, self.scale_dtype)
         if fields != (group_size, pack_order, scale_dtype) or self.clip not in clips:
             raise ValueError(f"inconsistent weight format: {self}")
+        # Activation scales exist for int4_g only, with the min-max or the awq clip; the awq clip
+        # search runs on the scaled activations, so it needs them.
+        if self.act_scales:
+            consistent = (
+                self.act_scales in ACT_SCALES and self.scheme == INT4_G and self.clip != "mse"
+            )
+        else:
+            consistent = self.clip != "awq"
+        if not consistent:
+            raise ValueError(f"inconsistent weight format: {self}")
         # The kernels read 32 weights per load and find a load's scale with a shift.
         if self.scheme == INT4_G and (
             self.group_size < 32 or self.group_size & (self.group_size - 1)
@@ -78,14 +110,18 @@ class WeightFormat:
 
     @classmethod
     def make(
-        cls, scheme: str, group_size: int = DEFAULT_GROUP_SIZE, clip: str = "minmax"
+        cls,
+        scheme: str,
+        group_size: int = DEFAULT_GROUP_SIZE,
+        clip: str = "minmax",
+        act_scales: str = "",
     ) -> "WeightFormat":
         """The format of a scheme with the fields it does not use filled in."""
         if scheme == INT4_G:
-            return cls(INT4_G, group_size, PACK_ORDER, SCALE_DTYPE, clip)
+            return cls(INT4_G, group_size, PACK_ORDER, SCALE_DTYPE, clip, act_scales)
         if scheme == INT8_PC:
-            return cls(INT8_PC, 0, "", SCALE_DTYPE, clip)
-        return cls()
+            return cls(INT8_PC, 0, "", SCALE_DTYPE, clip, act_scales)
+        return cls(act_scales=act_scales)
 
     @property
     def quantized(self) -> bool:
@@ -93,14 +129,17 @@ class WeightFormat:
 
     @property
     def variant(self) -> str:
-        """Directory suffix of checkpoints in this format, e.g. "int4_g" or "int4_g.mse"."""
+        """Directory suffix of checkpoints in this format: the scheme, then ".mse" for the mse
+        clip, ".awq" for activation scales with the awq clip and ".awq-noclip" for scales alone."""
+        if self.act_scales:
+            return f"{self.scheme}.awq" if self.clip == "awq" else f"{self.scheme}.awq-noclip"
         return f"{self.scheme}.mse" if self.clip == "mse" else self.scheme
 
     def to_metadata(self) -> dict[str, str]:
         """The header keys of this format; empty for a plain checkpoint."""
         if not self.quantized:
             return {}
-        return {
+        metadata = {
             KEY_VERSION: FORMAT_VERSION,
             KEY_SCHEME: self.scheme,
             KEY_GROUP_SIZE: str(self.group_size),
@@ -108,6 +147,10 @@ class WeightFormat:
             KEY_SCALE_DTYPE: self.scale_dtype,
             KEY_CLIP: self.clip,
         }
+        # Written only when set, so files without activation scales keep their header.
+        if self.act_scales:
+            metadata[KEY_ACT_SCALES] = self.act_scales
+        return metadata
 
     @classmethod
     def from_metadata(cls, metadata: dict[str, str] | None) -> "WeightFormat":
@@ -125,6 +168,7 @@ class WeightFormat:
                 pack_order=metadata[KEY_PACK_ORDER],
                 scale_dtype=metadata[KEY_SCALE_DTYPE],
                 clip=metadata[KEY_CLIP],
+                act_scales=metadata.get(KEY_ACT_SCALES, ""),
             )
         except KeyError as e:
             raise ValueError(f"quantized checkpoint lacks metadata key {e}") from e

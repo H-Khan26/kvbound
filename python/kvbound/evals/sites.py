@@ -6,6 +6,10 @@ checkpoint: relative RMS error, cosine similarity and largest absolute error. Th
 layer depth shows how the error of quantized weights or of a quantized KV cache grows through the
 model. The logits are also compared as next-token distributions.
 
+An AWQ checkpoint (kvbound.awq) divides the output of every layer norm by its activation scales.
+Those sites are multiplied by the scales again before the comparison, so they are measured
+against the goldens of the unscaled model like every other site.
+
 The record ends with a greedy continuation of each golden prompt as text, for spot checks.
 
 Usage: python -m kvbound.evals.sites --model tinyllama-1.1b --weights int4_g --kv int8
@@ -18,6 +22,7 @@ import torch
 from transformers import AutoTokenizer
 
 from kvbound import bench, golden, native, record, tolerance
+from kvbound.awq import norm_site_scales
 from kvbound.models import load_spec
 from kvbound.weight_format import VARIANTS
 
@@ -33,6 +38,7 @@ def evaluate(
     tokenizer = AutoTokenizer.from_pretrained(spec.checkpoint_dir)
     options = {"kv_dtype": kv} if kv != "fp16" else {}
     engine = native.load(preset).Engine(str(model_dir), max_ctx=256, **options)
+    site_scales = norm_site_scales(model_dir)
 
     # Worst value of each metric over the prompts, per site and per depth.
     sites: dict[str, dict[str, float]] = {}
@@ -43,6 +49,8 @@ def evaluate(
         ids = tensors[f"{prompt['id']}/input_ids"].tolist()
         for site, value in engine.feed(ids, capture=True).items():
             actual, expected = torch.from_numpy(value), tensors[f"{prompt['id']}/{site}"]
+            if site in site_scales:
+                actual = actual.float() * site_scales[site]
             measured = {
                 "rel_rms": tolerance.rel_rms(actual, expected),
                 "cosine": tolerance.cosine(actual, expected),
@@ -73,6 +81,7 @@ def evaluate(
             "golden_sha256": manifest["golden_sha256"],
             "n_prompts": len(manifest["prompts"]),
             "new_tokens": new_tokens,
+            "unscaled_norm_sites": bool(site_scales),
         },
         "metrics": {
             "logits_rel_rms": sites["logits"]["rel_rms"],
