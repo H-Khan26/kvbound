@@ -520,13 +520,20 @@ the counters can be tied to one change.
 
 ## Track W: Whisper measurements (RTX 3060 Ti)
 
-The 16 records of kind `asr`, all from one session on 2026-11-18 at `4089b55`
-(`results/raw/rtx3060ti-fd7b40d5/20261118T0753*` to `20261118T0954*`). The model is
+Records of kind `asr` from one night, 2026-11-18, at two commits. The first pass ran every stack
+at `4089b55` (`results/raw/rtx3060ti-fd7b40d5/20261118T0753*` to `20261118T0954*`). After beam
+candidates moved to the GPU ([below](#beam-candidates-ranked-on-the-gpu)), every kvbound run and
+faster-whisper `float16` ran again at `6b3b8cd` (`20261118T1044*` to `20261118T1105*`); the
+code of the two commits differs only in that change. The tables take the newest record of each
+stack, precision and beam width, so their kvbound and faster-whisper `float16` rows are from
+`6b3b8cd` and the Hugging Face, `int8_float16` and CPU rows from `4089b55`. faster-whisper
+`float16`, the one baseline that ran at both, gives the same word errors and decoder steps on every
+clip at both, with model RTF 0.0164 and 0.0163 greedy and 0.0209 at both at beam 5, and mean SM
+clocks within 5 MHz, so the machine ran alike in the two passes. The model is
 `whisper-base-ar-quran`; the clips are the 1,000 of `everyayah-test-1000` (3.79 hours, 36
 reciters), each decoded as one 30-second window without timestamps, one clip at a time. The
 README's [Track W](../README.md#track-w-whisper-on-the-same-engine) section describes the engine
-side and defines WER and RTF. Every table here takes the newest record of each stack, precision
-and beam width.
+side and defines WER and RTF.
 
 ### Accuracy
 
@@ -576,32 +583,33 @@ Latencies are medians over the 1,000 clips.
 
 | Stack | Beams | RTF, model | RTF, end to end | Encoder pass | First token | Between tokens, ms | Decoder, ms per step | SM clock, mean of samples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| kvbound, FP16 | 1 | 0.0047 | 0.0051 | 5.9 ms | 6.7 ms | 0.70 | 0.70 | 1,963 MHz |
-| kvbound, INT8 weights | 1 | 0.0040 | 0.0045 | 5.6 ms | 6.3 ms | 0.59 | 0.60 | 1,970 MHz |
-| kvbound, INT4 weights | 1 | 0.0039 | 0.0043 | 5.7 ms | 6.3 ms | 0.57 | 0.57 | 1,967 MHz |
-| kvbound, FP16 weights, INT8 caches | 1 | 0.0047 | 0.0052 | 5.9 ms | 6.7 ms | 0.71 | 0.71 | 1,965 MHz |
+| kvbound, FP16 | 1 | 0.0047 | 0.0051 | 5.9 ms | 6.6 ms | 0.70 | 0.70 | 1,975 MHz |
+| kvbound, INT8 weights | 1 | 0.0040 | 0.0045 | 5.6 ms | 6.3 ms | 0.59 | 0.60 | 1,950 MHz |
+| kvbound, INT4 weights | 1 | 0.0039 | 0.0043 | 5.7 ms | 6.3 ms | 0.57 | 0.57 | 1,976 MHz |
+| kvbound, FP16 weights, INT8 caches | 1 | 0.0047 | 0.0051 | 5.9 ms | 6.7 ms | 0.70 | 0.71 | 1,977 MHz |
 | Hugging Face, FP16 | 1 | 0.0568 | 0.0572 | 9.2 ms | 20.2 ms | 9.19 | 9.22 | 1,163 MHz |
-| faster-whisper GPU, `float16` | 1 | 0.0164 | 0.0189 | 14.3 ms | n/a | n/a | 2.62 | 1,971 MHz |
+| faster-whisper GPU, `float16` | 1 | 0.0163 | 0.0187 | 14.4 ms | n/a | n/a | 2.61 | 1,972 MHz |
 | faster-whisper GPU, `int8_float16` | 1 | 0.0263 | 0.0287 | 18.0 ms | n/a | n/a | 4.29 | 1,483 MHz |
 | faster-whisper CPU, `int8` | 1 | 0.0616 | 0.0647 | 469 ms | n/a | n/a | 4.71 | n/a |
-| kvbound, FP16 | 5 | 0.0313 | 0.0317 | 10.0 ms | 11.9 ms | 5.09 | 5.04 | 1,076 MHz |
-| kvbound, INT8 weights | 5 | 0.0308 | 0.0313 | 8.8 ms | 10.6 ms | 5.06 | 5.01 | 1,155 MHz |
-| kvbound, INT4 weights | 5 | 0.0300 | 0.0304 | 8.7 ms | 10.4 ms | 4.93 | 4.88 | 1,202 MHz |
-| kvbound, FP16 weights, INT8 caches | 5 | 0.0312 | 0.0316 | 10.1 ms | 12.0 ms | 5.07 | 5.03 | 1,067 MHz |
+| kvbound, FP16 | 5 | 0.0076 | 0.0080 | 5.9 ms | 6.7 ms | 1.18 | 1.18 | 1,978 MHz |
+| kvbound, INT8 weights | 5 | 0.0076 | 0.0080 | 5.6 ms | 6.3 ms | 1.19 | 1.18 | 1,964 MHz |
+| kvbound, INT4 weights | 5 | 0.0074 | 0.0078 | 5.7 ms | 6.3 ms | 1.15 | 1.15 | 1,978 MHz |
+| kvbound, FP16 weights, INT8 caches | 5 | 0.0076 | 0.0081 | 5.9 ms | 6.7 ms | 1.18 | 1.18 | 1,978 MHz |
 | Hugging Face, FP16 | 5 | 0.0684 | 0.0689 | 6.1 ms | 17.7 ms | 11.02 | 11.03 | 1,963 MHz |
-| faster-whisper GPU, `float16` | 5 | 0.0209 | 0.0235 | 14.3 ms | n/a | n/a | 3.38 | 1,974 MHz |
+| faster-whisper GPU, `float16` | 5 | 0.0209 | 0.0235 | 14.5 ms | n/a | n/a | 3.38 | 1,978 MHz |
 | faster-whisper GPU, `int8_float16` | 5 | 0.0308 | 0.0334 | 17.1 ms | n/a | n/a | 5.06 | 1,598 MHz |
 | faster-whisper CPU, `int8` | 5 | 0.0839 | 0.0870 | 469 ms | n/a | n/a | 8.32 | n/a |
 
 - **RTF, model** runs from the log-mel features on the host to the token ids on the host in every
   stack. kvbound: one `transcribe` call of the engine, which copies the features to the device,
-  runs the encoder step and every decoder step, each waited for; at beam 5 it also picks the
-  beams' candidates on the host. Hugging Face: the features moved to the device and `generate`.
+  runs the encoder step and every decoder step, each waited for; at beam 5 each step also ranks
+  every beam's candidates on the device and copies them to the host, and the host search picks
+  the next beams from them. Hugging Face: the features moved to the device and `generate`.
   faster-whisper: its `encode` and `generate` calls.
 - **RTF, end to end** adds the front end and detokenization. kvbound and Hugging Face share a
   front end (`kvbound.audio`, Hugging Face's feature extractor); faster-whisper has its own. Per
-  clip they add 5.90 ms (kvbound FP16), 5.37 ms (Hugging Face) and 33.81 ms (faster-whisper
-  `float16`) on average.
+  clip they add 5.60 ms (kvbound FP16), 5.37 ms (Hugging Face) and 32.10 ms (faster-whisper
+  `float16`) on average, in the greedy runs.
 - **Encoder pass** is not alike across stacks. kvbound's covers the features copied to the device
   and rounded to FP16, the convolutions, the encoder layers and the cross-attention keys and
   values of all 6 decoder layers. Hugging Face's is the encoder module alone, with the features
@@ -620,10 +628,10 @@ Latencies are medians over the 1,000 clips.
   language, task and no-timestamps tokens are generated in the first two and part of the prompt
   in the third.
 - **Clocks.** The GPU clock is not locked, and NVML samples it once a second over a whole run. The
-  mean SM clock of the samples differs between runs: 1,963 to 1,970 MHz in the greedy kvbound runs,
-  1,067 to 1,202 MHz in the beam kvbound runs, 1,163 MHz in Hugging Face greedy against 1,963 at
-  beam 5, and 1,483 and 1,598 MHz in faster-whisper `int8_float16`. Each stack is compared at the
-  clocks its own run had. The INT4 beam-5 run is tagged `clock_varied`.
+  mean SM clock of the samples differs between runs: 1,950 to 1,977 MHz in the greedy kvbound runs
+  and 1,964 to 1,978 MHz in the beam kvbound runs, 1,972 and 1,978 MHz in faster-whisper
+  `float16`, 1,163 MHz in Hugging Face greedy against 1,963 at beam 5, and 1,483 and 1,598 MHz in
+  faster-whisper `int8_float16`. Each stack is compared at the clocks its own run had.
 
 What the speed records show:
 
@@ -631,23 +639,72 @@ What the speed records show:
   RTF it is 12.1 times faster than Hugging Face, 3.5 times faster than faster-whisper `float16`
   and 13.1 times faster than faster-whisper `int8` on the CPU. INT8 weights take 14% less model
   time than FP16 and INT4 weights 17% less; INT8 caches leave it within 1%.
-- **Beam 5 is slow on kvbound for now.** A token takes 5.09 ms against 0.70 greedy (FP16), and the
-  model RTF is 0.0313 against 0.0209 for faster-whisper `float16` at beam 5. Each step copies the
-  logits of the live beams to the host and ranks the candidates there
-  (`AsrEngine::beam_candidates_on_host`), the likely main cost. No record times the ranking apart
-  from the rest of the step, and other things change with the beams too: a 5-row FP16 step is
-  wider than `f16_gemv_rows` (4) and goes to cuBLAS, forks copy blocks, and the beam runs' clock
-  samples are lower. Ranking on the GPU is in progress, and these rows will be recorded again.
-- **The encoder pass reads longer in the beam runs**: 10.0 against 5.9 ms for FP16, the same
-  encoder step. The cause is not established. Hugging Face shows the reverse, 9.2 ms greedy and
-  6.1 ms at beam 5, and in both stacks the longer encoder pass is in the run whose NVML samples
-  have the lower mean SM clock. The samples are not tied to the encoder steps, so that is a
-  candidate, not an explanation.
+- **Beam 5.** kvbound FP16 takes 1.18 ms between tokens for 5 beams, 1.7 times its greedy token;
+  with INT8 and INT4 weights the ratio is 2.0, because at beam 5 their tokens (1.19 and 1.15 ms)
+  are about as long as FP16's, where greedy they are 15% to 18% shorter. By model RTF kvbound FP16 at beam 5 is 9.0 times faster than Hugging
+  Face, 2.7 times faster than faster-whisper `float16`, 4.0 times faster than `int8_float16` and
+  11.0 times faster than `int8` on the CPU. The beams cost the other stacks less against their
+  own greedy runs: beam 5's model RTF is 1.28 times greedy's in faster-whisper `float16` and 1.20
+  times in Hugging Face, against 1.63 times in kvbound FP16.
+- **The encoder pass** of kvbound is the same greedy and at beam 5: 5.86 and 5.89 ms in FP16. In
+  the beam runs at `4089b55` it read 9.97 ms, in runs whose mean SM clock was 1,067 to 1,202 MHz
+  (next entry). Hugging Face has a longer encoder pass greedy than at beam 5, 9.2 against 6.1 ms,
+  and its greedy run is again the one with the lower mean SM clock (1,163 against 1,963 MHz). The
+  clock samples are not tied to the encoder steps, so the clock is a likely reading of both, not
+  a measured one.
+
+### Beam candidates ranked on the GPU
+
+**Change.** `kernels::beam_candidates` (`engine/kernels/reductions.cu`) ranks each beam's
+candidates on the device, as a step of the decoder step's CUDA graph: per row of 51,865 FP32
+logits, the maximum, the sum of exponentials in FP64, the log-softmax rounded to FP32, the
+suppressed tokens left out, and the best beams + 1 (token, log-probability) pairs, ties to the
+lower token. Only those pairs are copied, to pinned host memory, where `kvb::BeamSearch` picks
+the next beams. Before, each step copied the live beams' logits rows to the host and ranked them
+there (`AsrEngine::beam_candidates_on_host`), which `AsrOptions::beam_topk_device = false` still
+does. Tests require the two to give the same search: bit for bit on the fixture's traces, and
+the same tokens and scores on the 20 recitation clips of the slow test, where both must also
+equal Hugging Face's beam 5 (or end on a near tie).
+
+**Hypothesis.** The host ranking took most of each beam step, and the GPU had nothing to run
+while the host ranked, so it ran idle between steps. An idle GPU lowers its clock, which would
+also slow the GPU's own work in the step and the encoder pass. Ranking on the device leaves the
+host only the choice among beams + 1 pairs per beam.
+
+**Measured.** kvbound beam 5 on the 1,000 clips, at `4089b55` (ranking on the host) and at
+`6b3b8cd` (on the device), the same night, before and after:
+
+| Weights, caches | Between tokens, ms | RTF, model | Encoder pass, ms | SM clock, mean of samples | GPU utilization, mean of samples |
+| --- | --- | --- | --- | --- | --- |
+| FP16 | 5.09 to 1.18 (4.31x) | 0.0313 to 0.0076 (4.10x) | 9.97 to 5.89 | 1,076 to 1,978 MHz | 37% to 80% |
+| INT8 weights | 5.06 to 1.19 (4.26x) | 0.0308 to 0.0076 (4.05x) | 8.85 to 5.61 | 1,155 to 1,964 MHz | 36% to 80% |
+| INT4 weights | 4.93 to 1.15 (4.27x) | 0.0300 to 0.0074 (4.04x) | 8.72 to 5.67 | 1,202 to 1,978 MHz | 35% to 79% |
+| FP16 weights, INT8 caches | 5.07 to 1.18 (4.28x) | 0.0312 to 0.0076 (4.08x) | 10.08 to 5.91 | 1,067 to 1,978 MHz | 37% to 80% |
+
+- **The search did not change.** At each precision the two runs have the same word errors and
+  the same decoder steps on every one of the 1,000 clips.
+- **Nothing else moved.** The greedy kvbound runs, which do not rank, have a model RTF within
+  0.3% at the two commits, and faster-whisper `float16` within 0.3% too.
+- **The clock came back.** The beam runs at `4089b55` averaged 1,067 to 1,202 MHz, and the INT4
+  one is tagged `clock_varied`; at `6b3b8cd` they average 1,964 to 1,978 MHz, the level of the
+  greedy runs (1,950 to 1,977). The encoder pass, which beam search does not touch, fell back to
+  the greedy runs' times with it. That the idle gaps lowered the clock is the likely cause, read
+  from a profile that is not kept with the records; the records show the lower clock and its
+  recovery, not the cause. Some of the 4.3x per token is the host work removed and some is the
+  GPU's own work at the higher clock, and the records do not separate the two.
+
+**What remains.** A beam-5 token takes 1.7 times a greedy token in FP16 and 2.0 times with INT8
+and INT4 weights. With five rows, FP16 projections are wider than `f16_gemv_rows` (4) and go to
+cuBLAS, each followed by a separate bias kernel (`run_linear`, `engine/model/linear.cpp`);
+quantized ones are wider than `quantized_gemm_rows` (3) and go to `gemm_quantized`, which adds
+its bias itself. The step also runs the ranking, and forks copy blocks. No record breaks the
+5-row step into these parts.
 
 ### Not done in Track W
 
-- **Beam candidates on the GPU**, in progress: a top-k over each beam's logits on the device in
-  place of the copy to the host.
+- **A cheaper 5-row decoder step.** A beam-5 token costs 1.7 times a greedy one in FP16 and 2.0
+  times with INT8 or INT4 weights (previous entry). A profile of the 5-row step would say how much
+  of it is cuBLAS and its bias kernels, `gemm_quantized`, the ranking and the block copies.
 - **Timestamps, word alignment and long-form decoding**, which carries text from one 30-second
   window into the next. The Sawt Sakinah app transcribes with all three (faster-whisper, CPU,
   `int8`, beam 5), so it cannot switch to kvbound until they are built.

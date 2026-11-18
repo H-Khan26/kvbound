@@ -16,11 +16,9 @@ Track W runs a speech model, Whisper, on the same engine: an encoder and a decod
 second cache for the encoder's output, greedy decoding and beam search. It is measured on Quran recitation against
 Hugging Face Transformers and faster-whisper ([Track W](#track-w-whisper-on-the-same-engine)).
 
-Open items: beam search ranks each step's candidates on the host, the likely main reason it is slow, and ranking them
-on the GPU is in progress; timestamps, word alignment and decoding of audio longer than one 30-second window are not
-built, and the Sawt Sakinah app, which transcribes with faster-whisper today, needs all three before it could switch;
-on the RTX 3060 Ti
-the DRAM writes of `gemm_quantized` are not explained; the step-counter profiles do not record the SM clock.
+Open items: timestamps, word alignment and decoding of audio longer than one 30-second window are not built, and the
+Sawt Sakinah app, which transcribes with faster-whisper today, needs all three before it could switch; on the RTX 3060
+Ti the DRAM writes of `gemm_quantized` are not explained; the step-counter profiles do not record the SM clock.
 
 ## Phase 6: profile and optimize
 
@@ -346,7 +344,10 @@ What the engine gained for it:
 - **Beam search** is Hugging Face's algorithm (`kvb::BeamSearch`). The live beams are the rows of one decoder step.
   At a fork each child takes its parent's list of Self blocks, with reference counts, and a block that another beam
   still holds is copied before a beam writes into it (copy on write). Every beam points at the clip's one Cross
-  block. Each step copies the logits to the host and ranks the candidates there.
+  block. Each beam's candidates are ranked on the GPU, inside the decoder step's CUDA graph
+  (`kernels::beam_candidates`): the log-softmax of the row (its sum of exponentials in FP64, as the host's ranking
+  does), the suppressed tokens left out, and the best beams + 1 kept. Only those (token, log-probability) pairs are
+  copied to the host. `AsrOptions::beam_topk_device = false` copies the logits instead and ranks them on the host.
 - **Quantization** covers the matrices only (INT8 per channel, INT4 in groups of 128); convolution weights, position
   tables, biases and norm parameters stay FP16. Either cache can hold INT8.
 
@@ -354,18 +355,23 @@ What the engine gained for it:
 The engine matches each site within the FP16 limits, fused and unfused, at FP16, INT8 and INT4 against the
 dequantizing reference. Greedy output equals the reference's token for token under both scheduling policies, with
 and without graphs, and through preemptions. Beam search reproduces the reference search's committed traces, with
-blocks shared between beams or every block private. On 20 local recitation clips the slow tests require greedy
+blocks shared between beams or every block private, and with the candidates ranked on the GPU or on the host the
+search is the same bit for bit. On 20 local recitation clips the slow tests require greedy
 output to equal Hugging Face FP16 `generate` token for token, or to part from it first where the FP32 reference
 scores the two tokens within FP16 noise of each other (`NEAR_TIE` and `FP16_GAP_NOISE` in
 `tests/py/test_asr_greedy.py`); beam 5 must equal Hugging Face's beam 5 or end on hypotheses the FP32 reference
-scores within `RESCORE_TOLERANCE` of each other.
+scores within `RESCORE_TOLERANCE` of each other, and the host ranking must give the same tokens and scores as the
+GPU's.
 
 ### Measured against Hugging Face and faster-whisper (RTX 3060 Ti)
 
 The clips are `everyayah-test-1000`: 1,000 clips of the test split of `tarteel-ai/everyayah`, 3.79 hours from 36
 reciters, drawn by reciter (`configs/evals/everyayah-test-1000.json`). Each clip is decoded as one window, without
-timestamps, one clip at a time. All 16 records come from one session at `4089b55`; faster-whisper's `int8` runs on
-this machine's CPU with 4 threads, the setting the Sawt Sakinah app uses.
+timestamps, one clip at a time. The 16 records come from one night, 2026-11-18, at two commits: kvbound and
+faster-whisper `float16` at `6b3b8cd`, which ranks beam candidates on the GPU, and Hugging Face, faster-whisper
+`int8_float16` and the CPU at `4089b55`, the commit before that change and otherwise the same code. faster-whisper
+`float16` ran at both, and its two runs agree: the same word errors on every clip and model RTF within 0.3%.
+faster-whisper's `int8` runs on this machine's CPU with 4 threads, the setting the Sawt Sakinah app uses.
 
 - **WER**, the word error rate, is the word-level edit distance from the reference (substitutions, insertions and
   deletions) summed over the clips and divided by the reference words, 10,945 here. Both sides are first normalized
@@ -378,12 +384,12 @@ this machine's CPU with 4 threads, the setting the Sawt Sakinah app uses.
 
 | Stack | WER, greedy / beam 5 | RTF, model, greedy / beam 5 | RTF, end to end, greedy / beam 5 |
 | --- | --- | --- | --- |
-| kvbound, FP16 | 0.58% / 0.48% | 0.0047 / 0.0313 | 0.0051 / 0.0317 |
-| kvbound, INT8 weights | 0.55% / 0.46% | 0.0040 / 0.0308 | 0.0045 / 0.0313 |
-| kvbound, INT4 weights | 1.42% / 1.28% | 0.0039 / 0.0300 | 0.0043 / 0.0304 |
-| kvbound, FP16 weights, INT8 caches | 0.58% / 0.48% | 0.0047 / 0.0312 | 0.0052 / 0.0316 |
+| kvbound, FP16 | 0.58% / 0.48% | 0.0047 / 0.0076 | 0.0051 / 0.0080 |
+| kvbound, INT8 weights | 0.55% / 0.46% | 0.0040 / 0.0076 | 0.0045 / 0.0080 |
+| kvbound, INT4 weights | 1.42% / 1.28% | 0.0039 / 0.0074 | 0.0043 / 0.0078 |
+| kvbound, FP16 weights, INT8 caches | 0.58% / 0.48% | 0.0047 / 0.0076 | 0.0051 / 0.0081 |
 | Hugging Face, FP16 | 0.58% / 0.48% | 0.0568 / 0.0684 | 0.0572 / 0.0689 |
-| faster-whisper GPU, `float16` | 0.72% / 0.60% | 0.0164 / 0.0209 | 0.0189 / 0.0235 |
+| faster-whisper GPU, `float16` | 0.72% / 0.60% | 0.0163 / 0.0209 | 0.0187 / 0.0235 |
 | faster-whisper GPU, `int8_float16` | 0.67% / 0.57% | 0.0263 / 0.0308 | 0.0287 / 0.0334 |
 | faster-whisper CPU, `int8` | 0.66% / 0.65% | 0.0616 / 0.0839 | 0.0647 / 0.0870 |
 
@@ -402,11 +408,11 @@ this machine's CPU with 4 threads, the setting the Sawt Sakinah app uses.
   1,000 clips, depending on the configuration (994 for `float16`, 984 for the CPU's `int8` greedy), so its higher WER
   comes from a few clips, and the records cannot separate what the prompt and the front end contribute from what its
   arithmetic does.
-- **Beam 5 on kvbound is slow for now.** A generated token takes 5.09 ms against 0.70 greedy, and faster-whisper
-  `float16` at beam 5 is faster (model RTF 0.0209 against 0.0313). Every step copies the logits to the host and ranks
-  the candidates there, the likely main cost, though no record times it apart from the rest of the step. Ranking on
-  the GPU is in progress, and the beam-5 rows will be recorded again. The beam runs' encoder step also reads longer
-  than the greedy runs' (10.0 against 5.9 ms for FP16); why is not established.
+- **At beam 5 kvbound is also the fastest stack**: by model RTF 9.0 times faster than Hugging Face and 2.7 times
+  faster than faster-whisper `float16`, at 1.18 ms per generated token for 5 beams, 1.7 times the greedy token.
+  Ranking the candidates on the GPU instead of the host made beam 5 4.1 times faster in FP16, from a model RTF of
+  0.0313 at `4089b55` to 0.0076; the [log](docs/optimization-log.md#beam-candidates-ranked-on-the-gpu) gives the
+  pair.
 - **What a WER this low means.** The model was fine-tuned on recitations of this text: the clips are the dataset's
   test split, but every split reads the same Quran. A WER near zero shows that the stacks agree, not that the task is
   hard. The subset leans toward the start of each audio page of the dataset, which keeps the download small; its
