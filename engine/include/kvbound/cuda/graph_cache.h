@@ -32,9 +32,10 @@ class GraphCache {
   // Launches one step of n_tokens rows, n_out of them outputs. A decode-shaped step (every row
   // an output, at most max_rows rows, no attention tiles) replays the graph of its shape when
   // `graphs` is set and nothing is hooked; any other step runs eagerly. launch(graphed) issues
-  // the step's kernels; a graphed launch takes no tiles and no hooks.
+  // the step's kernels; a graphed launch takes no tiles and no hooks. Steps of one shape whose
+  // kernels differ otherwise pass different variants (0 to 3), which get graphs of their own.
   void step(bool graphs, int n_tokens, int n_out, int n_tiles, int max_rows, bool hooked,
-            cudaStream_t stream, const std::function<void(bool graphed)>& launch);
+            cudaStream_t stream, const std::function<void(bool graphed)>& launch, int variant = 0);
   const GraphStats& stats() const noexcept { return stats_; }
   // Destroys every graph.
   void clear() noexcept;

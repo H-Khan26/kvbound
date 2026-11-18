@@ -33,6 +33,10 @@ class KvPool {
 
   // Points sequence row `seq` at these physical blocks, in logical order.
   void set_blocks(int seq, std::span<const int> blocks, cudaStream_t stream);
+  // Queues a copy of physical block src over block dst on `stream`: every layer's keys and
+  // values, and their scales in a quantized pool, at positions [0, n_positions) of the block;
+  // -1 copies every position. Positions beyond them keep dst's contents.
+  void copy_block(int src, int dst, cudaStream_t stream, int n_positions = -1);
 
  private:
   KvDims dims_;

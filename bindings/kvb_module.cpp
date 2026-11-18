@@ -715,7 +715,8 @@ class PyAsrEngine {
               const std::string& kv_dtype, const std::string& cross_kv_dtype, int max_encode_batch,
               const std::string& gemm, bool graph, int max_graphs, const std::string& plan,
               bool wide_key_loads, int quantized_gemm_rows, std::size_t dequant_slice_bytes,
-              bool fuse, int f16_gemv_rows, bool expand_quantized, bool prefill_attention)
+              bool fuse, int f16_gemv_rows, bool expand_quantized, bool prefill_attention,
+              bool beam_share_blocks)
       : engine_(model_dir,
                 kvb::cuda::EngineConfig{
                     .max_ctx = max_ctx,
@@ -741,7 +742,8 @@ class PyAsrEngine {
                     .max_graphs = max_graphs,
                 },
                 kvb::cuda::AsrOptions{.max_encode_batch = max_encode_batch,
-                                      .cross_kv_dtype = kv_dtype_from(cross_kv_dtype)}),
+                                      .cross_kv_dtype = kv_dtype_from(cross_kv_dtype),
+                                      .beam_share_blocks = beam_share_blocks}),
         plan_(plan) {}
 
   // Encodes clips in one encoder step: features [n_mels, n_frames] or [clips, n_mels,
@@ -838,6 +840,58 @@ class PyAsrEngine {
     return results;
   }
 
+  // Transcribes clips, features [n_mels, n_frames] or [clips, n_mels, n_frames], one after the
+  // other by beam search (AsrEngine::beam_transcribe). eos_token_id -1 is the rules'. Per clip:
+  // "ids", the best hypothesis's generated ids with the end-of-sequence token if it ended on
+  // one; "score", its final score; "hypotheses", every kept one as {"ids", "score"}, best first;
+  // "step_s", when each decoder step's candidates were on the
+  // host, step i choosing token i; "encode_s", the encoder step; "seconds", the clip's whole
+  // call; "steps" and "block_copies", the decoder steps and the Self blocks copied at forks.
+  // Times are in seconds after the clip's call started.
+  std::vector<nb::dict> transcribe_beam(In<float> features, int num_beams, double length_penalty,
+                                        std::int32_t eos_token_id) {
+    const std::size_t n = n_clips(features);
+    const std::size_t size = engine_.feature_size();
+    std::vector<nb::dict> results;
+    for (std::size_t i = 0; i < n; ++i) {
+      const kvb::cuda::BeamTranscript t = engine_.beam_transcribe(
+          {features.data() + i * size, size},
+          {.num_beams = num_beams, .length_penalty = length_penalty, .eos_token_id = eos_token_id});
+      nb::dict d;
+      d["ids"] = t.ids;
+      d["score"] = t.score;
+      std::vector<nb::dict> hypotheses;
+      for (const kvb::BeamHypothesis& h : t.hypotheses) {
+        nb::dict hypothesis;
+        hypothesis["ids"] = h.tokens;
+        hypothesis["score"] = h.score;
+        hypotheses.push_back(std::move(hypothesis));
+      }
+      d["hypotheses"] = std::move(hypotheses);
+      d["step_s"] = t.step_s;
+      d["encode_s"] = t.encode_s;
+      d["seconds"] = t.seconds;
+      d["steps"] = t.step_s.size();
+      d["block_copies"] = t.block_copies;
+      results.push_back(std::move(d));
+    }
+    return results;
+  }
+
+  // Blocks of both caches and block-table rows: self_blocks, self_free, self_refs (the sum of
+  // the reference counts held), the same for cross_, and rows, rows_free.
+  std::map<std::string, int> block_usage() const {
+    const kvb::cuda::AsrBlockUsage u = engine_.block_usage();
+    return {{"self_blocks", u.self_blocks},
+            {"self_free", u.self_free},
+            {"self_refs", u.self_refs},
+            {"cross_blocks", u.cross_blocks},
+            {"cross_free", u.cross_free},
+            {"cross_refs", u.cross_refs},
+            {"rows", u.rows},
+            {"rows_free", u.rows_free}};
+  }
+
   // Counters of the latest transcribe(): steps, preemptions, encodes (clips through the
   // encoder, counting each re-encoding), encoder_steps, max_running.
   std::map<std::string, int> transcribe_stats() const { return transcribe_stats_; }
@@ -887,6 +941,7 @@ class PyAsrEngine {
     d["f16_gemv_rows"] = c.f16_gemv_rows;
     d["expand_quantized"] = c.expand_quantized;
     d["prefill_attention"] = c.prefill_attention;
+    d["beam_share_blocks"] = o.beam_share_blocks;
     d["weights"] = weights();
     d["weight_group_size"] = engine_.weight_format().group_size;
     return d;
@@ -1001,17 +1056,20 @@ NB_MODULE(_kvb, m) {
   nb::class_<PyAsrEngine>(m, "AsrEngine")
       .def(nb::init<const std::string&, int, int, int, int, int, const std::string&,
                     const std::string&, const std::string&, int, const std::string&, bool, int,
-                    const std::string&, bool, int, std::size_t, bool, int, bool, bool>(),
+                    const std::string&, bool, int, std::size_t, bool, int, bool, bool, bool>(),
            "model_dir"_a, "max_seqs"_a = 1, "max_ctx"_a = 0, "max_step_tokens"_a = 0,
            "kv_block_size"_a = 16, "kv_blocks"_a = 0, "kv_layout"_a = "head_major",
            "kv_dtype"_a = "fp16", "cross_kv_dtype"_a = "fp16", "max_encode_batch"_a = 1,
            "gemm"_a = "fp32", "graph"_a = true, "max_graphs"_a = 16, "plan"_a = "greedy",
            "wide_key_loads"_a = true, "quantized_gemm_rows"_a = 3,
            "dequant_slice_bytes"_a = std::size_t{32} << 20, "fuse"_a = true, "f16_gemv_rows"_a = 4,
-           "expand_quantized"_a = false, "prefill_attention"_a = true)
+           "expand_quantized"_a = false, "prefill_attention"_a = true, "beam_share_blocks"_a = true)
       .def("encode", &PyAsrEngine::encode, "features"_a, "seqs"_a = nb::none(), "capture"_a = false)
       .def("feed", &PyAsrEngine::feed, "ids"_a, "start"_a = 0, "seq"_a = 0, "capture"_a = false)
       .def("transcribe", &PyAsrEngine::transcribe, "features"_a, "policy"_a = "static")
+      .def("transcribe_beam", &PyAsrEngine::transcribe_beam, "features"_a, "num_beams"_a = 5,
+           "length_penalty"_a = 1.0, "eos_token_id"_a = -1)
+      .def("block_usage", &PyAsrEngine::block_usage)
       .def("transcribe_stats", &PyAsrEngine::transcribe_stats)
       .def("graph_stats", &PyAsrEngine::graph_stats)
       .def("next_ids", &PyAsrEngine::next_ids)

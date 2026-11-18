@@ -14,7 +14,9 @@ step, and teacher-forces their decoder ids as one step and token by token: the f
 unfused programs, kvbound's kernels and cuBLAS, INT8 caches, and INT8 and INT4 copies of the
 weights on each of their three paths. It then transcribes the clips greedily through the
 scheduler: a static batch eager and with CUDA graphs, and continuous batching in a Self pool small
-enough to preempt and re-encode a sequence and to evict a graph.
+enough to preempt and re-encode a sequence and to evict a graph. Last, it transcribes them by beam
+search over 4-token blocks: forks sharing blocks with copy-on-write under CUDA graphs, and forks
+copying every block of an INT8 Self cache, scales included, eagerly.
 
 Usage: python -m kvbound.sanitize [--family llama|whisper]
 """
@@ -97,6 +99,8 @@ def whisper_cases(preset: str, tmp: Path) -> list[Case]:
     # Three clips over three rows; 8 blocks of 4 hold one full sequence, so the continuous run
     # preempts, re-encodes and evicts its one graph.
     transcribe = ["--mode", "transcribe", "--slots", "3", "--max-graphs", "1", *small_blocks]
+    # Five beams over five rows.
+    beam = ["--mode", "beam", "--slots", "5", "--beams", "5", *small_blocks]
     runs: list[tuple[str, str, list[str]]] = [
         ("whisper, fused", fp16, []),
         ("whisper, unfused, cuBLAS", fp16, ["--fuse", "0", "--f16-gemv-rows", "0", *small_blocks]),
@@ -116,6 +120,12 @@ def whisper_cases(preset: str, tmp: Path) -> list[Case]:
             "whisper transcribe, preempting",
             fp16,
             [*transcribe, "--policy", "continuous", "--encode-batch", "2", "--kv-blocks", "8"],
+        ),
+        ("whisper beam, shared", fp16, [*beam, "--graph", "1"]),
+        (
+            "whisper beam, private, int8",
+            fp16,
+            [*beam, "--graph", "0", "--beam-share-blocks", "0", "--kv-dtype", "int8"],
         ),
     ]
     for scheme in ("int8_pc", "int4_g"):

@@ -11,6 +11,10 @@
 // --mode transcribe  The clips are transcribed greedily in one run of the scheduler under
 //              --policy static|continuous. Prints each clip's generated ids and the run's
 //              preemptions.
+// --mode beam  The clips are transcribed one after the other by beam search with --beams
+//              beams (at most --slots) and --length-penalty, forks sharing Self blocks unless
+//              --beam-share-blocks 0. Prints each clip's best ids, its score and the Self blocks
+//              copied at forks.
 
 #include <algorithm>
 #include <cstdio>
@@ -143,6 +147,18 @@ void transcribe(AsrEngine& engine, const std::vector<Clip>& clips, kvb::Schedule
   std::printf("\n]}\n");
 }
 
+void beam(AsrEngine& engine, const std::vector<Clip>& clips,
+          const kvb::cuda::BeamOptions& options) {
+  std::printf("{\"clips\": [");
+  for (std::size_t i = 0; i < clips.size(); ++i) {
+    const kvb::cuda::BeamTranscript t = engine.beam_transcribe(clips[i].features, options);
+    std::printf("%s\n  {\"id\": \"%s\", \"ids\": ", i == 0 ? "" : ",", clips[i].id.c_str());
+    print_ids(t.ids);
+    std::printf(", \"score\": %.9g, \"block_copies\": %d}", t.score, t.block_copies);
+  }
+  std::printf("\n]}\n");
+}
+
 int run(int argc, char** argv) {
   Args args(argc, argv);
   const std::string model_dir = args.required("model");
@@ -165,6 +181,10 @@ int run(int argc, char** argv) {
   config.prefill_attention = args.integer("prefill-attention", config.prefill_attention) != 0;
   config.f16_gemv_rows = args.integer("f16-gemv-rows", config.f16_gemv_rows);
   options.max_encode_batch = args.integer("encode-batch", 1);
+  options.beam_share_blocks = args.integer("beam-share-blocks", 1) != 0;
+  const kvb::cuda::BeamOptions beam_options{
+      .num_beams = args.integer("beams", 5),
+      .length_penalty = std::stod(args.str("length-penalty", "1"))};
   const std::string kv_dtype = args.str("kv-dtype", "fp16");
   const std::string cross_kv_dtype = args.str("cross-kv-dtype", "fp16");
   args.expect_consumed();
@@ -175,7 +195,9 @@ int run(int argc, char** argv) {
   options.cross_kv_dtype = *cross_dtype;
   const auto policy = kvb::schedule_policy_from_name(policy_name);
   if (!policy) throw kvb::Error("unknown --policy " + policy_name);
-  if (mode != "feed" && mode != "transcribe") throw kvb::Error("unknown --mode " + mode);
+  if (mode != "feed" && mode != "transcribe" && mode != "beam") {
+    throw kvb::Error("unknown --mode " + mode);
+  }
   // Teacher forcing asks for the logits of every row of a step.
   if (mode == "feed") config.max_outputs = std::numeric_limits<int>::max();
 
@@ -183,6 +205,8 @@ int run(int argc, char** argv) {
   AsrEngine engine(model_dir, config, options);
   if (mode == "feed") {
     feed(engine, clips);
+  } else if (mode == "beam") {
+    beam(engine, clips, beam_options);
   } else {
     transcribe(engine, clips, *policy);
   }

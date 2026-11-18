@@ -44,11 +44,15 @@ void GraphCache::run(std::int64_t key, cudaStream_t stream, const std::function<
 }
 
 void GraphCache::step(bool graphs, int n_tokens, int n_out, int n_tiles, int max_rows, bool hooked,
-                      cudaStream_t stream, const std::function<void(bool graphed)>& launch) {
+                      cudaStream_t stream, const std::function<void(bool graphed)>& launch,
+                      int variant) {
+  if (variant < 0 || variant > 3) throw Error("a graph variant is between 0 and 3");
   // Kernel arguments are frozen in a graph, so it serves only steps whose launches depend on
   // nothing but the row count: never the tiled attention, never a hook's synchronization.
   if (graphs && !hooked && n_tiles == 0 && n_out == n_tokens && n_tokens <= max_rows) {
-    run(static_cast<std::int64_t>(n_tokens) << 32 | n_out, stream, [&] { launch(true); });
+    const std::int64_t key = static_cast<std::int64_t>(variant) << 61 |
+                             static_cast<std::int64_t>(n_tokens) << 32 | n_out;
+    run(key, stream, [&] { launch(true); });
     return;
   }
   stats_.eager += 1;

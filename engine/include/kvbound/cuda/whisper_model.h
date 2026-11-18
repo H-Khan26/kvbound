@@ -81,12 +81,14 @@ class WhisperModel {
   // Launches the decoder program for one step, as LlamaModel::run does: rows [n_tokens] and
   // out_rows [n_out] are device arrays, and with n_tiles > 0 self attention runs over tiles.
   // Every row's sequence must have been encoded into the Cross cache block of its StepRow.seq.
+  // Without `suppress` the SuppressTokens op is skipped: the logits stay as computed and the
+  // argmax reads them unmasked.
   void run(const StepRow* rows, const std::int32_t* out_rows, int n_tokens, int n_out,
            const AttnTile* tiles, int n_tiles, const KvPool& self, const KvPool& cross,
-           cudaStream_t stream, const RunHooks* hooks = nullptr);
+           cudaStream_t stream, const RunHooks* hooks = nullptr, bool suppress = true);
 
-  // Device outputs of the last run(): logits [n_out, vocab] with suppressed tokens at -inf, and
-  // their argmax [n_out]. A later encode() overwrites them.
+  // Device outputs of the last run(): logits [n_out, vocab] with suppressed tokens at -inf unless
+  // it ran without `suppress`, and their argmax [n_out]. A later encode() overwrites them.
   const float* logits() const noexcept { return value<float>(decoder_, programs_.decoder.logits); }
   const std::int32_t* next_ids() const noexcept {
     return value<std::int32_t>(decoder_, programs_.decoder.next_ids);
@@ -108,6 +110,7 @@ class WhisperModel {
     int n_tiles = 0;
     const KvPool* self = nullptr;
     const KvPool* cross = nullptr;
+    bool suppress = true;
   };
 
   template <typename T>

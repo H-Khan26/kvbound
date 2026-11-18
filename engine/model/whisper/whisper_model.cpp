@@ -107,7 +107,7 @@ void WhisperModel::encode(const StepRow* rows, int n_audio, const AttnTile* tile
 
 void WhisperModel::run(const StepRow* rows, const std::int32_t* out_rows, int n_tokens, int n_out,
                        const AttnTile* tiles, int n_tiles, const KvPool& self, const KvPool& cross,
-                       cudaStream_t stream, const RunHooks* hooks) {
+                       cudaStream_t stream, const RunHooks* hooks, bool suppress) {
   execute(programs_.decoder, decoder_,
           {.rows = rows,
            .out_rows = out_rows,
@@ -116,7 +116,8 @@ void WhisperModel::run(const StepRow* rows, const std::int32_t* out_rows, int n_
            .tiles = tiles,
            .n_tiles = n_tiles,
            .self = &self,
-           .cross = &cross},
+           .cross = &cross,
+           .suppress = suppress},
           stream, hooks);
 }
 
@@ -144,7 +145,7 @@ void WhisperModel::execute(const Program& program, const Planned& planned, const
     // Rows of the op: those of the value it writes, or of the value it reads when it writes none.
     const Value* shaped = out != nullptr ? out : in0;
     const int n_rows = static_cast<int>(row_count(shaped->rows, step.n_tokens, step.n_out));
-    if (n_rows == 0) continue;
+    if (n_rows == 0 || (op.kind == OpKind::SuppressTokens && !step.suppress)) continue;
 
     const Clock::time_point start = timed ? Clock::now() : Clock::time_point{};
     switch (op.kind) {

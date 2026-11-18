@@ -72,4 +72,57 @@ void KvPool::set_blocks(int seq, std::span<const int> blocks, cudaStream_t strea
                            blocks.size() * sizeof(std::int32_t), cudaMemcpyHostToDevice, stream));
 }
 
+void KvPool::copy_block(int src, int dst, cudaStream_t stream, int n_positions) {
+  const std::int64_t n = n_positions < 0 ? dims_.block_size : n_positions;
+  if (src < 0 || dst < 0 || src >= dims_.n_blocks || dst >= dims_.n_blocks ||
+      n > dims_.block_size) {
+    throw Error("copying a KV block or positions out of range");
+  }
+  if (src == dst || n == 0) return;
+  const std::int64_t element = static_cast<std::int64_t>(size_bytes(dtype_));
+  // Positions [0, n) of one block in one layer are `rows` runs of `width` bytes, `pitch` apart.
+  // In TokenMajor the positions are outermost, so one run holds them in every layer.
+  std::int64_t rows = 1, width = n * strides_.pos * element, pitch = width;
+  std::int64_t layer_copies = dims_.n_layers;
+  switch (layout_) {
+    case KvLayout::HeadMajor:
+      rows = dims_.n_kv_heads;
+      pitch = strides_.head * element;
+      break;
+    case KvLayout::DimMajor:
+      rows = dims_.n_kv_heads * dims_.head_dim;
+      width = n * element;
+      pitch = strides_.dim * element;
+      break;
+    case KvLayout::TokenMajor:
+      layer_copies = 1;
+      break;
+  }
+  const auto copy = [&](std::byte* base, std::int64_t src_offset, std::int64_t dst_offset,
+                        std::int64_t run_pitch, std::int64_t run_width, std::int64_t n_runs) {
+    KVB_CUDA(cudaMemcpy2DAsync(base + dst_offset, static_cast<std::size_t>(run_pitch),
+                               base + src_offset, static_cast<std::size_t>(run_pitch),
+                               static_cast<std::size_t>(run_width),
+                               static_cast<std::size_t>(n_runs), cudaMemcpyDeviceToDevice, stream));
+  };
+  for (const DeviceBuffer* pool : {&keys_, &values_}) {
+    for (std::int64_t layer = 0; layer < layer_copies; ++layer) {
+      const std::int64_t at = layer * strides_.layer;
+      copy(pool->as<std::byte>(), (at + src * strides_.block) * element,
+           (at + dst * strides_.block) * element, pitch, width, rows);
+    }
+  }
+  if (key_scales_.bytes() == 0) return;
+  // Scales are [layer][block][head][pos] in every layout.
+  const std::int64_t scale = static_cast<std::int64_t>(size_bytes(DType::F16));
+  const std::int64_t per_block = dims_.n_kv_heads * dims_.block_size;
+  for (const DeviceBuffer* scales : {&key_scales_, &value_scales_}) {
+    for (std::int64_t layer = 0; layer < dims_.n_layers; ++layer) {
+      const std::int64_t at = layer * dims_.n_blocks;
+      copy(scales->as<std::byte>(), (at + src) * per_block * scale, (at + dst) * per_block * scale,
+           dims_.block_size * scale, n * scale, dims_.n_kv_heads);
+    }
+  }
+}
+
 }  // namespace kvb::cuda

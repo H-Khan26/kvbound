@@ -68,6 +68,9 @@ EngineConfig resolved(EngineConfig config);
 struct ForwardOptions {
   Capture* capture = nullptr;
   OpTimes* times = nullptr;
+  // Speech decoder steps only: skip the suppress rules, so the logits and their argmax are the
+  // model's as computed. Engine has no suppress rules and ignores it.
+  bool raw_logits = false;
 };
 
 // Device memory the engine holds, in bytes.
