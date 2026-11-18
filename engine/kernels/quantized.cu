@@ -54,11 +54,11 @@ __device__ inline unsigned f16_pair(float lo, float hi) {
 // it to the rows of x, which every warp of the block reads.
 //
 // With kInt4, `scale` holds one FP16 per group of 1 << group_loads_shift loads of each row;
-// otherwise one per row.
+// otherwise one per row. A bias, when there is one, joins each sum as it is written.
 template <bool kInt4, int kRows, bool kF32Out>
-__global__ void linear_quantized_kernel(const uint4* weight, const __half* scale, const __half* x,
-                                        void* y, int n_rows, int n_in, int n_out,
-                                        int group_loads_shift) {
+__global__ void linear_quantized_kernel(const uint4* weight, const __half* scale,
+                                        const __half* bias, const __half* x, void* y, int n_rows,
+                                        int n_in, int n_out, int group_loads_shift) {
   constexpr int kPerLoad = kInt4 ? kInt4PerLoad : kInt8PerLoad;
   const int lane = threadIdx.x % kWarpSize;
   const std::int64_t channel =
@@ -88,8 +88,9 @@ __global__ void linear_quantized_kernel(const uint4* weight, const __half* scale
   const float channel_scale = kInt4 ? 1.0f : __half2float(row_scale[0]);
   for (int r = 0; r < kRows; ++r) {
     if (r >= n_rows) break;
-    const float sum = warp_sum(sums[r]) * channel_scale;
+    float sum = warp_sum(sums[r]) * channel_scale;
     if (lane != 0) continue;
+    if (bias != nullptr) sum += __half2float(bias[channel]);
     const std::size_t at = static_cast<std::size_t>(r) * n_out + channel;
     if constexpr (kF32Out) {
       static_cast<float*>(y)[at] = sum;
@@ -210,12 +211,13 @@ __device__ inline unsigned dequant_int4(unsigned word, int byte, __half2 scale) 
 // y [n_rows, n_out] = x [n_rows, n_in] * W^T on tensor cores. Blocks along x of the grid take
 // successive row tiles of the same channels, so the blocks running at once share weights and
 // each weight crosses the memory bus about once per launch rather than once per row tile.
-// `group_shift` is log2 of the INT4 group size.
+// `group_shift` is log2 of the INT4 group size. A bias, when there is one, joins each sum as it
+// is written.
 template <typename Tile, bool kInt4, bool kF32Out>
 __global__ void __launch_bounds__(Tile::kThreads)
     gemm_quantized_kernel(const std::uint8_t* __restrict__ weight, const __half* __restrict__ scale,
-                          const __half* __restrict__ x, void* __restrict__ y, int n_rows, int n_in,
-                          int n_out, int group_shift) {
+                          const __half* __restrict__ bias, const __half* __restrict__ x,
+                          void* __restrict__ y, int n_rows, int n_in, int n_out, int group_shift) {
   constexpr int kBM = Tile::kBM, kBN = Tile::kBN, kBK = Tile::kBK, kThreads = Tile::kThreads;
   constexpr int kRowTiles = Tile::kRowTiles, kChTiles = Tile::kChTiles;
   constexpr int kXRow = Tile::kXRow, kXBytes = Tile::kXBytes;
@@ -405,11 +407,13 @@ __global__ void __launch_bounds__(Tile::kThreads)
         const int channel = n0 + wn * Tile::kWN + 16 * i + g + 8 * (e / 2);
         const int row = m0 + wm * Tile::kWM + 8 * j + 2 * t + e % 2;
         if (channel >= n_out || row >= n_rows) continue;
+        float sum = acc[i][j][e];
+        if (bias != nullptr) sum += __half2float(bias[channel]);
         const std::size_t at = static_cast<std::size_t>(row) * n_out + channel;
         if constexpr (kF32Out) {
-          static_cast<float*>(y)[at] = acc[i][j][e];
+          static_cast<float*>(y)[at] = sum;
         } else {
-          static_cast<__half*>(y)[at] = __float2half(acc[i][j][e]);
+          static_cast<__half*>(y)[at] = __float2half(sum);
         }
       }
     }
@@ -448,15 +452,15 @@ void check_quantized(const WeightRef& w, int n_in) {
 }
 
 template <bool kInt4, bool kF32Out>
-void launch_linear(const WeightRef& w, const f16* x, void* y, int n_rows, int n_in, int n_out,
-                   cudaStream_t stream) {
+void launch_linear(const WeightRef& w, const f16* bias, const f16* x, void* y, int n_rows, int n_in,
+                   int n_out, cudaStream_t stream) {
   const unsigned grid = static_cast<unsigned>((n_out + kChannelsPerBlock - 1) / kChannelsPerBlock);
   const uint4* weight = static_cast<const uint4*>(w.data);
   const __half* scale = as_half(w.scale);
   const int shift = group_loads_shift(w);
 #define KVB_LAUNCH(rows)                                                             \
   linear_quantized_kernel<kInt4, rows, kF32Out><<<grid, kBlockThreads, 0, stream>>>( \
-      weight, scale, as_half(x), y, n_rows, n_in, n_out, shift)
+      weight, scale, as_half(bias), as_half(x), y, n_rows, n_in, n_out, shift)
   if (n_rows == 1) {
     KVB_LAUNCH(1);
   } else if (n_rows == 2) {
@@ -473,8 +477,8 @@ void launch_linear(const WeightRef& w, const f16* x, void* y, int n_rows, int n_
 }
 
 template <typename Tile, bool kInt4, bool kF32Out>
-void launch_gemm(const WeightRef& w, const f16* x, void* y, int n_rows, int n_in, int n_out,
-                 cudaStream_t stream) {
+void launch_gemm(const WeightRef& w, const f16* bias, const f16* x, void* y, int n_rows, int n_in,
+                 int n_out, cudaStream_t stream) {
   const auto kernel = gemm_quantized_kernel<Tile, kInt4, kF32Out>;
   constexpr int kSmem = Tile::template kSmemBytes<kInt4>;
   // Dynamic shared memory above 48 KiB needs an opt-in, once per kernel.
@@ -487,8 +491,8 @@ void launch_gemm(const WeightRef& w, const f16* x, void* y, int n_rows, int n_in
                   static_cast<unsigned>((n_out + Tile::kBN - 1) / Tile::kBN));
   const int group_shift = kInt4 ? std::countr_zero(static_cast<unsigned>(w.group_size)) : 0;
   kernel<<<grid, Tile::kThreads, kSmem, stream>>>(static_cast<const std::uint8_t*>(w.data),
-                                                  as_half(w.scale), as_half(x), y, n_rows, n_in,
-                                                  n_out, group_shift);
+                                                  as_half(w.scale), as_half(bias), as_half(x), y,
+                                                  n_rows, n_in, n_out, group_shift);
   KVB_CUDA(cudaGetLastError());
 }
 
@@ -512,12 +516,13 @@ int sm_count() {
 }
 
 template <bool kInt4, bool kF32Out>
-void dispatch_gemm(const WeightRef& w, const f16* x, void* y, int n_rows, int n_in, int n_out,
-                   cudaStream_t stream) {
+void dispatch_gemm(const WeightRef& w, const f16* bias, const f16* x, void* y, int n_rows, int n_in,
+                   int n_out, cudaStream_t stream) {
   const auto blocks = [&](int rows, int channels) {
     return static_cast<long>((n_rows + rows - 1) / rows) * ((n_out + channels - 1) / channels);
   };
-#define KVB_LAUNCH(tile) launch_gemm<tile, kInt4, kF32Out>(w, x, y, n_rows, n_in, n_out, stream)
+#define KVB_LAUNCH(tile) \
+  launch_gemm<tile, kInt4, kF32Out>(w, bias, x, y, n_rows, n_in, n_out, stream)
   if (n_rows > 96 && blocks(WideTile::kBM, WideTile::kBN) >= 2 * sm_count()) {
     KVB_LAUNCH(WideTile);
   } else if (n_rows <= 32 || (kInt4 && n_rows > 48) || n_rows > 96) {
@@ -532,8 +537,8 @@ void dispatch_gemm(const WeightRef& w, const f16* x, void* y, int n_rows, int n_
 
 }  // namespace
 
-void gemm_quantized(const WeightRef& w, const f16* x, void* y, int n_rows, int n_in, int n_out,
-                    bool f32_out, cudaStream_t stream) {
+void gemm_quantized(const WeightRef& w, const f16* bias, const f16* x, void* y, int n_rows,
+                    int n_in, int n_out, bool f32_out, cudaStream_t stream) {
   check_quantized(w, n_in);
   // cp.async copies 16 bytes at a time.
   if ((reinterpret_cast<std::uintptr_t>(x) | reinterpret_cast<std::uintptr_t>(w.data)) % 16 != 0) {
@@ -541,14 +546,14 @@ void gemm_quantized(const WeightRef& w, const f16* x, void* y, int n_rows, int n
   }
   if (n_rows <= 0 || n_out <= 0) return;
   const bool int4 = w.scheme == WeightScheme::Int4Grouped;
-  if (int4 && f32_out) dispatch_gemm<true, true>(w, x, y, n_rows, n_in, n_out, stream);
-  if (int4 && !f32_out) dispatch_gemm<true, false>(w, x, y, n_rows, n_in, n_out, stream);
-  if (!int4 && f32_out) dispatch_gemm<false, true>(w, x, y, n_rows, n_in, n_out, stream);
-  if (!int4 && !f32_out) dispatch_gemm<false, false>(w, x, y, n_rows, n_in, n_out, stream);
+  if (int4 && f32_out) dispatch_gemm<true, true>(w, bias, x, y, n_rows, n_in, n_out, stream);
+  if (int4 && !f32_out) dispatch_gemm<true, false>(w, bias, x, y, n_rows, n_in, n_out, stream);
+  if (!int4 && f32_out) dispatch_gemm<false, true>(w, bias, x, y, n_rows, n_in, n_out, stream);
+  if (!int4 && !f32_out) dispatch_gemm<false, false>(w, bias, x, y, n_rows, n_in, n_out, stream);
 }
 
-void linear_quantized(const WeightRef& w, const f16* x, void* y, int n_rows, int n_in, int n_out,
-                      bool f32_out, cudaStream_t stream) {
+void linear_quantized(const WeightRef& w, const f16* bias, const f16* x, void* y, int n_rows,
+                      int n_in, int n_out, bool f32_out, cudaStream_t stream) {
   check_quantized(w, n_in);
   const bool int4 = w.scheme == WeightScheme::Int4Grouped;
   const std::size_t out_bytes = f32_out ? sizeof(float) : sizeof(f16);
@@ -557,10 +562,10 @@ void linear_quantized(const WeightRef& w, const f16* x, void* y, int n_rows, int
     const int rows = std::min(kQuantizedLinearMaxRows, n_rows - first);
     const f16* xs = x + static_cast<std::size_t>(first) * n_in;
     void* ys = static_cast<std::byte*>(y) + static_cast<std::size_t>(first) * n_out * out_bytes;
-    if (int4 && f32_out) launch_linear<true, true>(w, xs, ys, rows, n_in, n_out, stream);
-    if (int4 && !f32_out) launch_linear<true, false>(w, xs, ys, rows, n_in, n_out, stream);
-    if (!int4 && f32_out) launch_linear<false, true>(w, xs, ys, rows, n_in, n_out, stream);
-    if (!int4 && !f32_out) launch_linear<false, false>(w, xs, ys, rows, n_in, n_out, stream);
+    if (int4 && f32_out) launch_linear<true, true>(w, bias, xs, ys, rows, n_in, n_out, stream);
+    if (int4 && !f32_out) launch_linear<true, false>(w, bias, xs, ys, rows, n_in, n_out, stream);
+    if (!int4 && f32_out) launch_linear<false, true>(w, bias, xs, ys, rows, n_in, n_out, stream);
+    if (!int4 && !f32_out) launch_linear<false, false>(w, bias, xs, ys, rows, n_in, n_out, stream);
   }
 }
 

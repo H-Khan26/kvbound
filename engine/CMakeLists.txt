@@ -32,6 +32,7 @@ if(KVB_ENABLE_CUDA)
     kernels/reductions.cu
     kernels/rope_kv_write.cu
     kv/kv_pool.cpp
+    model/linear.cpp
     model/llama/llama_model.cpp
     model/llama/weights.cpp
     runtime/engine.cpp

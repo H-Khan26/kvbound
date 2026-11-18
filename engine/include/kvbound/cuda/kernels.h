@@ -29,6 +29,15 @@ void rms_norm(const f16* x, const f16* weight, f16* out, int n_rows, int dim, fl
 void add_rms_norm(f16* x, const f16* y, const f16* weight, f16* out, int n_rows, int dim, float eps,
                   cudaStream_t stream);
 
+// out[r] = (x[r] - mean(x[r])) * rsqrt(var(x[r]) + eps) * weight + bias: the mean, then the
+// variance about it, accumulated in FP32.
+void layer_norm(const f16* x, const f16* weight, const f16* bias, f16* out, int n_rows, int dim,
+                float eps, cudaStream_t stream);
+
+// x[r] += y[r] in FP16, then out[r] = layer_norm(x[r]): a residual add and the norm after it.
+void add_layer_norm(f16* x, const f16* y, const f16* weight, const f16* bias, f16* out, int n_rows,
+                    int dim, float eps, cudaStream_t stream);
+
 // Rotates each (j, j + head_dim/2) pair of x [n_tokens, n_heads, head_dim] in place by the angle
 // of its row's position. cos_sin holds {cos, sin} pairs, [max positions][head_dim/2].
 void rope(f16* x, const StepRow* rows, const float* cos_sin, int n_tokens, int n_heads,
@@ -41,6 +50,33 @@ void silu_mul(const f16* gate, const f16* up, f16* out, int n_rows, int dim, int
 // x[i] += y[i]
 void add(f16* x, const f16* y, std::size_t n, cudaStream_t stream);
 
+// out[i] = x[i] * (1 + erf(x[i] / sqrt(2))) / 2, the exact GELU. out may be x.
+void gelu(const f16* x, f16* out, std::size_t n, cudaStream_t stream);
+
+// out[r] = x[r] + table[rows[r].position], with `dim` columns. out may be x.
+void add_positions(const f16* x, const f16* table, const StepRow* rows, f16* out, int n_rows,
+                   int dim, cudaStream_t stream);
+
+// The frames a 3-wide convolution with padding 1 reads, side by side. x [n_seqs * in_frames,
+// channels] holds each sequence's frames in order; out [n_seqs * out_frames, 3 * channels], with
+// out_frames = (in_frames - 1) / stride + 1, gets
+//   out[seq * out_frames + f][3 * c + k] = x[seq * in_frames + f * stride + k - 1][c],
+// zero where that frame lies outside the sequence. The product of out with a Conv1d weight
+// [out_channels, channels, 3], read as a matrix [out_channels, 3 * channels], is the convolution.
+void unfold3(const f16* x, f16* out, int n_seqs, int in_frames, int channels, int stride,
+             cudaStream_t stream);
+
+// y[r][c] += bias[c] for y [n_rows, n_out], FP16 or, with f32, FP32: the bias of a matrix
+// product whose kernel adds none (cuBLAS).
+void add_bias(void* y, const f16* bias, int n_rows, int n_out, bool f32, cudaStream_t stream);
+
+// Sets logits[o][t] to -inf for every token t of `always` [n_always] and, in the output rows
+// whose step row rows[out_rows[o]] is at position begin_pos, for every token of `begin`
+// [n_begin]. logits is [n_out, vocab]; both lists are device arrays of token ids below vocab.
+void suppress_logits(float* logits, const StepRow* rows, const std::int32_t* out_rows, int n_out,
+                     int vocab, const std::int32_t* always, int n_always, const std::int32_t* begin,
+                     int n_begin, int begin_pos, cudaStream_t stream);
+
 // out[o] = x[out_rows[o]], with `dim` columns.
 void gather_rows(const f16* x, const std::int32_t* out_rows, f16* out, int n_out, int dim,
                  cudaStream_t stream);
@@ -48,9 +84,11 @@ void gather_rows(const f16* x, const std::int32_t* out_rows, f16* out, int n_out
 // out[r] = index of the largest element of logits[r]; the lowest index wins ties.
 void argmax(const float* logits, std::int32_t* out, int n_rows, int n_cols, cudaStream_t stream);
 
-// Stores k and v [n_tokens, n_kv_heads, head_dim] at each row's kv_slot.
+// Stores each row's keys and values [n_kv_heads, head_dim] at its kv_slot. Row t's keys start at
+// k[t * in_stride] and its values at v[t * in_stride]: n_kv_heads * head_dim for separate k and
+// v, or twice that with v = k + n_kv_heads * head_dim for the halves of one stacked k|v value.
 void kv_write(const f16* k, const f16* v, const StepRow* rows, const KvView& kv, int n_tokens,
-              int n_kv_heads, int head_dim, cudaStream_t stream);
+              int n_kv_heads, int head_dim, int in_stride, cudaStream_t stream);
 
 // rope() and kv_write() in one pass over qkv [n_tokens, (n_heads + 2 n_kv_heads) * head_dim],
 // each row q|k|v: q [n_tokens, n_heads, head_dim] = q rotated; k rotated and v go to the cache.
@@ -63,11 +101,12 @@ void rope_kv_write(const f16* qkv, const StepRow* rows, const float* cos_sin, f1
 // Rows of x one pass of linear_f16() serves. More rows mean more passes over the matrix.
 inline constexpr int kF16LinearMaxRows = 16;
 
-// y [n_rows, n_out] = x [n_rows, n_in] * W^T for an FP16 W [n_out, n_in], summed in FP32, on CUDA
-// cores. y is FP16, or FP32 when f32_out. Meant for decode-shaped steps, where the product is
-// bound by reading W once; n_in must be a multiple of 8.
-void linear_f16(const f16* weight, const f16* x, void* y, int n_rows, int n_in, int n_out,
-                bool f32_out, cudaStream_t stream);
+// y [n_rows, n_out] = x [n_rows, n_in] * W^T + bias for an FP16 W [n_out, n_in], summed in FP32,
+// on CUDA cores. bias [n_out] is FP16 and joins the sum before it is rounded; nullptr adds none.
+// y is FP16, or FP32 when f32_out. Meant for decode-shaped steps, where the product is bound by
+// reading W once; n_in must be a multiple of 8.
+void linear_f16(const f16* weight, const f16* bias, const f16* x, void* y, int n_rows, int n_in,
+                int n_out, bool f32_out, cudaStream_t stream);
 
 // How attention() reads a cached key when it computes scores.
 enum class KeyLoads : std::uint8_t {
@@ -82,9 +121,12 @@ KeyLoads widest_key_loads(const KvView& kv, int head_dim) noexcept;
 // Causal attention of each row's queries q [n_tokens, n_heads, head_dim] over the cached keys
 // and values of its sequence, positions 0..row.position. Query head h reads KV head
 // h / (n_heads / n_kv_heads). Scores and the softmax are FP32. max_ctx bounds row.position + 1.
+// With fixed_ctx > 0 every row instead attends positions 0..fixed_ctx - 1 of its sequence,
+// whatever its own position: cross attention over a cache filled beforehand. max_ctx then
+// bounds fixed_ctx.
 void attention(const f16* q, f16* out, const StepRow* rows, const KvView& kv, int n_tokens,
-               int n_heads, int n_kv_heads, int head_dim, int max_ctx, KeyLoads loads,
-               cudaStream_t stream);
+               int n_heads, int n_kv_heads, int head_dim, int max_ctx, int fixed_ctx,
+               KeyLoads loads, cudaStream_t stream);
 
 // Largest max_ctx attention() accepts for this head_dim (its scores live in shared memory);
 // 0 when head_dim itself is unsupported.
@@ -102,28 +144,44 @@ void attention_prefill(const f16* q, f16* out, const StepRow* rows, const AttnTi
                        int n_tiles, const KvView& kv, int n_heads, int n_kv_heads, int head_dim,
                        cudaStream_t stream);
 
-// Whether attention_prefill() handles this cache and head_dim (else callers use attention()):
-// adjacent key dimensions (dim_stride 1) and head_dim 64 or 128.
+// Whether attention_prefill() and attention_dense() handle this cache and head_dim (else callers
+// use attention()): adjacent key dimensions (dim_stride 1) and head_dim 64 or 128.
 bool attention_prefill_supports(const KvView& kv, int head_dim);
+
+// Attention without a mask, on the tensor cores of attention_prefill(): every query row of a
+// tile attends positions 0..n_keys - 1 of the cache of the tile's sequence
+// (rows[tile.first_row].seq), whatever the rows' positions. Head h of query row r starts at
+// q[r * q_stride + h * head_dim], so q may be the leading columns of a wider value; out is
+// [n_rows, n_heads, head_dim]. Every row of q, out and the cache pools must be 16-byte aligned.
+//
+// An encoder runs it on its stacked product qkv [n_seqs * n_keys, 3 * dim] with no cache write:
+// q = qkv with q_stride 3 * dim, and kv a view of the same value with k = qkv + dim,
+// v = qkv + 2 * dim, pos_stride 3 * dim, head_stride head_dim, dim_stride 1, block_stride
+// n_keys * 3 * dim, blocks_per_seq 1 and block_table[seq] = seq.
+void attention_dense(const f16* q, f16* out, const StepRow* rows, const AttnTile* tiles,
+                     int n_tiles, const KvView& kv, int q_stride, int n_keys, int n_heads,
+                     int n_kv_heads, int head_dim, cudaStream_t stream);
 
 // --- Quantized weights ---------------------------------------------------------------------
 
 // Rows of x one pass over a quantized matrix serves. More rows mean more passes.
 inline constexpr int kQuantizedLinearMaxRows = 16;
 
-// y [n_rows, n_out] = x [n_rows, n_in] * W^T for a quantized W [n_out, n_in], summed in FP32.
-// y is FP16, or FP32 when f32_out. Meant for decode-shaped steps: every row adds arithmetic
-// per weight but no memory traffic.
-void linear_quantized(const WeightRef& w, const f16* x, void* y, int n_rows, int n_in, int n_out,
-                      bool f32_out, cudaStream_t stream);
+// y [n_rows, n_out] = x [n_rows, n_in] * W^T + bias for a quantized W [n_out, n_in], summed in
+// FP32. bias [n_out] is FP16 and joins the sum before it is rounded; nullptr adds none. y is
+// FP16, or FP32 when f32_out. Meant for decode-shaped steps: every row adds arithmetic per
+// weight but no memory traffic.
+void linear_quantized(const WeightRef& w, const f16* bias, const f16* x, void* y, int n_rows,
+                      int n_in, int n_out, bool f32_out, cudaStream_t stream);
 
-// y [n_rows, n_out] = x [n_rows, n_in] * W^T for a quantized W on tensor cores: each block
-// expands its tile of W to FP16 in registers, so W crosses the memory bus once per launch at its
-// quantized size. Each weight is the FP16 value dequantize() writes; sums are FP32. y is FP16,
-// or FP32 when f32_out. x and W.data must be 16-byte aligned. Meant for steps wider than
+// y [n_rows, n_out] = x [n_rows, n_in] * W^T + bias for a quantized W on tensor cores: each
+// block expands its tile of W to FP16 in registers, so W crosses the memory bus once per launch
+// at its quantized size. Each weight is the FP16 value dequantize() writes; sums are FP32, and
+// bias [n_out] (FP16, nullptr for none) joins them before they are rounded. y is FP16, or FP32
+// when f32_out. x and W.data must be 16-byte aligned. Meant for steps wider than
 // linear_quantized serves well.
-void gemm_quantized(const WeightRef& w, const f16* x, void* y, int n_rows, int n_in, int n_out,
-                    bool f32_out, cudaStream_t stream);
+void gemm_quantized(const WeightRef& w, const f16* bias, const f16* x, void* y, int n_rows,
+                    int n_in, int n_out, bool f32_out, cudaStream_t stream);
 
 // out [n_channels, n_in] = output channels first_channel onward of W as FP16, for cuBLAS on the
 // expanded matrix (the engine's expand_quantized path).

@@ -125,34 +125,39 @@ __device__ inline float key_dot_wide(const float* query, const std::int8_t* key,
   return dot;
 }
 
+// One thread per element of a token's keys; it stores the matching value element too. Token t's
+// keys and values start in_stride elements after those of token t - 1.
 __global__ void kv_write_kernel(const __half* k, const __half* v, const StepRow* rows, KvView kv,
-                                int n_kv_heads, int head_dim, std::size_t n) {
+                                int n_kv_heads, int head_dim, int in_stride, std::size_t n) {
   const std::size_t i = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= n) return;
   const int dim = static_cast<int>(i % head_dim);
   const std::size_t vec = i / head_dim;  // token * n_kv_heads + head
   const int head = static_cast<int>(vec % n_kv_heads);
-  const unsigned slot = static_cast<unsigned>(rows[vec / n_kv_heads].kv_slot);
+  const std::size_t token = vec / n_kv_heads;
+  const std::size_t src = token * in_stride + head * head_dim + dim;
+  const unsigned slot = static_cast<unsigned>(rows[token].kv_slot);
   const std::int64_t block = slot / static_cast<unsigned>(kv.block_size);
   const std::int64_t in_block = slot % static_cast<unsigned>(kv.block_size);
   const std::int64_t dst = block * kv.block_stride + head * kv.head_stride +
                            in_block * kv.pos_stride + dim * kv.dim_stride;
-  static_cast<__half*>(kv.k)[dst] = k[i];
-  static_cast<__half*>(kv.v)[dst] = v[i];
+  static_cast<__half*>(kv.k)[dst] = k[src];
+  static_cast<__half*>(kv.v)[dst] = v[src];
 }
 
 // One warp per stored vector, a token's key or value for one KV head. The warp finds the
 // vector's largest magnitude, stores that over 127 as the FP16 scale, and stores every element
 // divided by the scale as it reads back, so a rounded scale costs no extra error.
 __global__ void kv_write_int8_kernel(const __half* k, const __half* v, const StepRow* rows,
-                                     KvView kv, int n_kv_heads, int head_dim,
+                                     KvView kv, int n_kv_heads, int head_dim, int in_stride,
                                      std::size_t n_vectors) {
   const std::size_t vec =
       static_cast<std::size_t>(blockIdx.x) * kBlockWarps + threadIdx.x / kWarpSize;
   if (vec >= n_vectors) return;
   const int lane = threadIdx.x % kWarpSize;
   const int head = static_cast<int>(vec % n_kv_heads);
-  const unsigned slot = static_cast<unsigned>(rows[vec / n_kv_heads].kv_slot);
+  const std::size_t token = vec / n_kv_heads;
+  const unsigned slot = static_cast<unsigned>(rows[token].kv_slot);
   const std::int64_t block = slot / static_cast<unsigned>(kv.block_size);
   const std::int64_t in_block = slot % static_cast<unsigned>(kv.block_size);
   const std::int64_t dst =
@@ -161,7 +166,7 @@ __global__ void kv_write_int8_kernel(const __half* k, const __half* v, const Ste
       block * kv.scale_block_stride + head * kv.scale_head_stride + in_block;
 
   for (int which = 0; which < 2; ++which) {
-    const __half* src = (which == 0 ? k : v) + vec * head_dim;
+    const __half* src = (which == 0 ? k : v) + token * in_stride + head * head_dim;
     float largest = 0.0f;
     for (int d = lane; d < head_dim; d += kWarpSize) {
       largest = fmaxf(largest, fabsf(__half2float(src[d])));
@@ -196,9 +201,11 @@ __global__ void kv_write_int8_kernel(const __half* k, const __half* v, const Ste
 //
 // With kInt8 the cache holds integers: a score is multiplied by its key's scale, and each
 // softmax weight by its value's scale before pass 3 uses it.
+//
+// A row attends the positions up to its own, or with fixed_ctx > 0 the first fixed_ctx.
 template <bool kWideKeys, bool kInt8>
 __global__ void attention_kernel(const __half* q, __half* out, const StepRow* rows, KvView kv,
-                                 int n_heads, int n_rep, int head_dim) {
+                                 int n_heads, int n_rep, int head_dim, int fixed_ctx) {
   using Elem = std::conditional_t<kInt8, std::int8_t, __half>;
   extern __shared__ float smem[];
   float* query = smem;
@@ -211,7 +218,7 @@ __global__ void attention_kernel(const __half* q, __half* out, const StepRow* ro
   const int head = blockIdx.x;
   const int tid = threadIdx.x;
   const StepRow row = rows[blockIdx.y];
-  const int ctx = row.position + 1;
+  const int ctx = fixed_ctx > 0 ? fixed_ctx : row.position + 1;
   const SeqKv cache(kv, row.seq, head / n_rep);
   const std::size_t vec = (static_cast<std::size_t>(blockIdx.y) * n_heads + head) * head_dim;
 
@@ -457,11 +464,14 @@ struct Int8Staging {
 // the accumulated output is rescaled by exp2(m_old - m_new), and P (rounded to FP16, which is
 // exactly the A-fragment layout of the next MMA) times V is added to it. Rows of a tile are
 // consecutive positions, so row i of the tile sits at position first_pos + i.
-template <int kHeadDim, bool kInt8>
+//
+// Without kCausal there is no mask: every row attends positions 0..dense_keys - 1, whatever its
+// own. Head h of query row r starts at q[r * q_stride + h * kHeadDim].
+template <int kHeadDim, bool kInt8, bool kCausal>
 __global__ void __launch_bounds__(kPrefillThreads, prefill_blocks_per_sm(kHeadDim))
     attention_prefill_kernel(const __half* q, __half* out, const StepRow* rows,
                              const AttnTile* tiles, int n_tiles, KvView kv, int n_heads, int n_rep,
-                             float scale_log2) {
+                             float scale_log2, int q_stride, int dense_keys) {
   constexpr int kThreads = kPrefillThreads;
   constexpr int kTileHalves = prefill_tile_halves(kHeadDim);
   constexpr int kDimTiles = kHeadDim / 8;  // n8 output tiles per row
@@ -475,7 +485,7 @@ __global__ void __launch_bounds__(kPrefillThreads, prefill_blocks_per_sm(kHeadDi
   const int kv_head = head / n_rep;
   const StepRow first = rows[tile.first_row];
   const int first_pos = first.position;
-  const int n_keys = first_pos + tile.n_rows;
+  const int n_keys = kCausal ? first_pos + tile.n_rows : dense_keys;
   const int n_key_tiles = (n_keys + kPrefillKeys - 1) / kPrefillKeys;
   const SeqKv cache(kv, first.seq, kv_head);
   const std::size_t token_stride = static_cast<std::size_t>(n_heads) * kHeadDim;
@@ -485,8 +495,9 @@ __global__ void __launch_bounds__(kPrefillThreads, prefill_blocks_per_sm(kHeadDi
   for (int c = threadIdx.x; c < kAttnTileRows * kQueryChunks; c += kThreads) {
     const int r = c / kQueryChunks, col = (c % kQueryChunks) * 8;
     const bool valid = r < tile.n_rows;
-    const __half* src =
-        q + (tile.first_row + (valid ? r : 0)) * token_stride + head * kHeadDim + col;
+    const __half* src = q +
+                        (tile.first_row + (valid ? r : 0)) * static_cast<std::size_t>(q_stride) +
+                        head * kHeadDim + col;
     cp_async16(q_smem + swizzled<kHeadDim>(r, col), src, valid);
   }
   [[maybe_unused]] Int8Staging<kHeadDim, kThreads> staging;
@@ -518,7 +529,8 @@ __global__ void __launch_bounds__(kPrefillThreads, prefill_blocks_per_sm(kHeadDi
   const int row_pos = first_pos + warp_row + g;
   const bool warp_active = warp_row < tile.n_rows;
   // The last position any row of the warp sees; later key tiles are skipped.
-  const int warp_last = first_pos + min(warp_row + kWarpRows, tile.n_rows) - 1;
+  const int warp_last =
+      kCausal ? first_pos + min(warp_row + kWarpRows, tile.n_rows) - 1 : n_keys - 1;
   float o[kDimTiles][4] = {};
   float row_max[2] = {-CUDART_INF_F, -CUDART_INF_F};
   float row_sum[2] = {0.0f, 0.0f};
@@ -560,14 +572,17 @@ __global__ void __launch_bounds__(kPrefillThreads, prefill_blocks_per_sm(kHeadDi
         }
       }
 
-      // Only a tile that reaches past the warp's first row has keys to mask.
-      const bool masked = key0 + kPrefillKeys - 1 > first_pos + warp_row;
+      // Only a tile that reaches past the warp's first row has keys to mask. With no causal
+      // mask, only the last tile has: its zero-filled positions from n_keys on.
+      const bool masked =
+          kCausal ? key0 + kPrefillKeys - 1 > first_pos + warp_row : key0 + kPrefillKeys > n_keys;
       float tile_max[2] = {row_max[0], row_max[1]};
 #pragma unroll
       for (int j = 0; j < kKeyTiles; ++j) {
 #pragma unroll
         for (int e = 0; e < 4; ++e) {
-          if (masked && key0 + j * 8 + 2 * t + (e & 1) > row_pos + (e >> 1) * 8) {
+          const int key = key0 + j * 8 + 2 * t + (e & 1);
+          if (masked && (kCausal ? key > row_pos + (e >> 1) * 8 : key >= n_keys)) {
             s[j][e] = -CUDART_INF_F;
           }
           tile_max[e >> 1] = fmaxf(tile_max[e >> 1], s[j][e]);
@@ -649,12 +664,12 @@ __global__ void __launch_bounds__(kPrefillThreads, prefill_blocks_per_sm(kHeadDi
   }
 }
 
-template <int kHeadDim, bool kInt8>
+template <int kHeadDim, bool kInt8, bool kCausal>
 void launch_attention_prefill(const __half* q, __half* out, const StepRow* rows,
                               const AttnTile* tiles, int n_tiles, const KvView& kv, int n_heads,
-                              int n_kv_heads, cudaStream_t stream) {
+                              int n_kv_heads, int q_stride, int dense_keys, cudaStream_t stream) {
   constexpr std::size_t shared_bytes = prefill_shared_bytes(kHeadDim);
-  auto* kernel = attention_prefill_kernel<kHeadDim, kInt8>;
+  auto* kernel = attention_prefill_kernel<kHeadDim, kInt8, kCausal>;
   if constexpr (shared_bytes > kSharedBytes) {
     // Blocks get more than 48 KB of shared memory (64 KB at head_dim 128) only when the kernel
     // opts in.
@@ -669,22 +684,44 @@ void launch_attention_prefill(const __half* q, __half* out, const StepRow* rows,
   const float scale_log2 = 1.4426950408889634f / std::sqrt(static_cast<float>(kHeadDim));
   const dim3 grid(n_tiles, n_heads);
   kernel<<<grid, kPrefillThreads, shared_bytes, stream>>>(q, out, rows, tiles, n_tiles, kv, n_heads,
-                                                          n_heads / n_kv_heads, scale_log2);
+                                                          n_heads / n_kv_heads, scale_log2,
+                                                          q_stride, dense_keys);
+}
+
+// Launches the kernel for this head_dim and cache element type: causal, or with kCausal false
+// over dense_keys positions.
+template <bool kCausal>
+void dispatch_attention_prefill(const f16* q, f16* out, const StepRow* rows, const AttnTile* tiles,
+                                int n_tiles, const KvView& kv, int n_heads, int n_kv_heads,
+                                int head_dim, int q_stride, int dense_keys, cudaStream_t stream) {
+  const bool int8 = kv.dtype == DType::I8;
+#define KVB_LAUNCH(dim, quantized)                                                              \
+  launch_attention_prefill<dim, quantized, kCausal>(as_half(q), as_half(out), rows, tiles,      \
+                                                    n_tiles, kv, n_heads, n_kv_heads, q_stride, \
+                                                    dense_keys, stream)
+  if (head_dim == 64) {
+    int8 ? KVB_LAUNCH(64, true) : KVB_LAUNCH(64, false);
+  } else {
+    int8 ? KVB_LAUNCH(128, true) : KVB_LAUNCH(128, false);
+  }
+#undef KVB_LAUNCH
+  KVB_CUDA(cudaGetLastError());
 }
 
 }  // namespace
 
 void kv_write(const f16* k, const f16* v, const StepRow* rows, const KvView& kv, int n_tokens,
-              int n_kv_heads, int head_dim, cudaStream_t stream) {
+              int n_kv_heads, int head_dim, int in_stride, cudaStream_t stream) {
+  if (in_stride < n_kv_heads * head_dim) throw Error("kv_write rows overlap");
   if (kv.dtype == DType::I8) {
     const std::size_t n_vectors = static_cast<std::size_t>(n_tokens) * n_kv_heads;
     const unsigned grid = static_cast<unsigned>((n_vectors + kBlockWarps - 1) / kBlockWarps);
-    kv_write_int8_kernel<<<grid, kBlockThreads, 0, stream>>>(as_half(k), as_half(v), rows, kv,
-                                                             n_kv_heads, head_dim, n_vectors);
+    kv_write_int8_kernel<<<grid, kBlockThreads, 0, stream>>>(
+        as_half(k), as_half(v), rows, kv, n_kv_heads, head_dim, in_stride, n_vectors);
   } else {
     const std::size_t n = static_cast<std::size_t>(n_tokens) * n_kv_heads * head_dim;
-    kv_write_kernel<<<blocks_for(n), kBlockThreads, 0, stream>>>(as_half(k), as_half(v), rows, kv,
-                                                                 n_kv_heads, head_dim, n);
+    kv_write_kernel<<<blocks_for(n), kBlockThreads, 0, stream>>>(
+        as_half(k), as_half(v), rows, kv, n_kv_heads, head_dim, in_stride, n);
   }
   KVB_CUDA(cudaGetLastError());
 }
@@ -707,8 +744,8 @@ int attention_max_positions(int head_dim) {
 }
 
 void attention(const f16* q, f16* out, const StepRow* rows, const KvView& kv, int n_tokens,
-               int n_heads, int n_kv_heads, int head_dim, int max_ctx, KeyLoads loads,
-               cudaStream_t stream) {
+               int n_heads, int n_kv_heads, int head_dim, int max_ctx, int fixed_ctx,
+               KeyLoads loads, cudaStream_t stream) {
   if (loads == KeyLoads::Wide && widest_key_loads(kv, head_dim) != KeyLoads::Wide) {
     throw Error("wide key loads need adjacent dimensions and a head_dim that fills 16-byte loads");
   }
@@ -727,13 +764,17 @@ void attention(const f16* q, f16* out, const StepRow* rows, const KvView& kv, in
   if (max_ctx > attention_max_positions(head_dim)) {
     throw Error("attention supports head_dim up to 256 and about 11,000 positions");
   }
+  if (fixed_ctx > max_ctx) throw Error("attention over a fixed context longer than max_ctx");
+  if (fixed_ctx > kv.blocks_per_seq * kv.block_size) {
+    throw Error("attention over a fixed context longer than a sequence's cache");
+  }
   const std::size_t shared_bytes = attention_shared_bytes(head_dim, threads, max_ctx);
   const dim3 grid(n_heads, n_tokens);
   const int n_rep = n_heads / n_kv_heads;
   const bool wide = loads == KeyLoads::Wide;
 #define KVB_LAUNCH(wide_keys, int8)                                           \
   attention_kernel<wide_keys, int8><<<grid, threads, shared_bytes, stream>>>( \
-      as_half(q), as_half(out), rows, kv, n_heads, n_rep, head_dim)
+      as_half(q), as_half(out), rows, kv, n_heads, n_rep, head_dim, fixed_ctx)
   if (kv.dtype == DType::I8) {
     wide ? KVB_LAUNCH(true, true) : KVB_LAUNCH(false, true);
   } else {
@@ -756,17 +797,27 @@ void attention_prefill(const f16* q, f16* out, const StepRow* rows, const AttnTi
   }
   if (n_heads % n_kv_heads != 0) throw Error("query heads must be a multiple of KV heads");
   if (n_tiles == 0) return;
-  const bool int8 = kv.dtype == DType::I8;
-#define KVB_LAUNCH(dim, quantized)                                                             \
-  launch_attention_prefill<dim, quantized>(as_half(q), as_half(out), rows, tiles, n_tiles, kv, \
-                                           n_heads, n_kv_heads, stream)
-  if (head_dim == 64) {
-    int8 ? KVB_LAUNCH(64, true) : KVB_LAUNCH(64, false);
-  } else {
-    int8 ? KVB_LAUNCH(128, true) : KVB_LAUNCH(128, false);
+  dispatch_attention_prefill<true>(q, out, rows, tiles, n_tiles, kv, n_heads, n_kv_heads, head_dim,
+                                   n_heads * head_dim, 0, stream);
+}
+
+void attention_dense(const f16* q, f16* out, const StepRow* rows, const AttnTile* tiles,
+                     int n_tiles, const KvView& kv, int q_stride, int n_keys, int n_heads,
+                     int n_kv_heads, int head_dim, cudaStream_t stream) {
+  if (!attention_prefill_supports(kv, head_dim)) {
+    throw Error("dense attention needs adjacent key dimensions and head_dim 64 or 128");
   }
-#undef KVB_LAUNCH
-  KVB_CUDA(cudaGetLastError());
+  if (n_heads % n_kv_heads != 0) throw Error("query heads must be a multiple of KV heads");
+  if (n_keys < 1 || n_keys > kv.blocks_per_seq * kv.block_size) {
+    throw Error("dense attention needs between one key and as many as a sequence's cache holds");
+  }
+  // A query row is read 16 bytes at a time.
+  if (q_stride < n_heads * head_dim || q_stride % 8 != 0) {
+    throw Error("dense attention needs q rows of n_heads * head_dim or more, 16-byte aligned");
+  }
+  if (n_tiles == 0) return;
+  dispatch_attention_prefill<false>(q, out, rows, tiles, n_tiles, kv, n_heads, n_kv_heads, head_dim,
+                                    q_stride, n_keys, stream);
 }
 
 }  // namespace kvb::kernels
