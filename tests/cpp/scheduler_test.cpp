@@ -5,6 +5,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <map>
 #include <vector>
 
@@ -20,17 +21,20 @@ using kvb::StepResult;
 
 // Stands in for the engine: tracks how many tokens and blocks each sequence has, checks that
 // plans stay within the pool, and emits a token whenever a plan processes a sequence's last
-// known token.
+// known token. With an encoder, it also checks that a sequence's audio is encoded once, while it
+// holds blocks, before any of its tokens run.
 struct FakeEngine {
   struct Seq {
     int known = 0;
     int cached = 0;
     int blocks = 0;
+    bool encoded = false;
   };
   std::map<int, Seq> seqs;
   std::map<int, int> prompts;
   int block_size = 0;
   int free_blocks = 0;
+  int max_encodes = 0;  // sequences one step may encode; 0 for a model without an encoder
   std::int32_t next_token = 100;
 
   StepResult execute(const StepPlan& plan) {
@@ -43,6 +47,7 @@ struct FakeEngine {
       free_blocks += s.blocks;
       s.blocks = 0;
       s.cached = 0;
+      s.encoded = false;  // the cross-attention cache goes with the blocks
     }
     for (const StepPlan::Alloc& alloc : plan.alloc) {
       // A sequence is registered by its first allocation.
@@ -51,9 +56,17 @@ struct FakeEngine {
       free_blocks -= alloc.n_blocks;
       EXPECT_GE(free_blocks, 0) << "plan allocates more blocks than the pool has";
     }
+    EXPECT_LE(static_cast<int>(plan.encode.size()), max_encodes);
+    for (const int id : plan.encode) {
+      Seq& s = seqs.at(id);
+      EXPECT_GT(s.blocks, 0) << "sequence " << id << " is encoded without blocks";
+      EXPECT_FALSE(s.encoded) << "sequence " << id << " is encoded twice";
+      s.encoded = true;
+    }
     StepResult result;
     for (const StepPlan::Run& run : plan.run) {
       Seq& s = seqs.at(run.seq);
+      if (max_encodes > 0) EXPECT_TRUE(s.encoded) << "sequence " << run.seq << " runs unencoded";
       s.cached += run.n_tokens;
       EXPECT_LE(s.cached, s.known);
       EXPECT_LE(s.cached, s.blocks * block_size) << "sequence runs past its blocks";
@@ -79,6 +92,9 @@ Trace drive(Scheduler& scheduler, const std::vector<Request>& requests,
   FakeEngine engine;
   engine.block_size = scheduler.config().block_size;
   engine.free_blocks = scheduler.config().n_blocks;
+  if (scheduler.config().encode_rows > 0) {
+    engine.max_encodes = scheduler.config().max_encodes_per_step;
+  }
   for (const Request& r : requests) {
     engine.prompts[r.id] = r.prompt_tokens;
     scheduler.submit(r);
@@ -114,6 +130,15 @@ std::vector<int> allocations(const StepPlan& plan, int seq) {
 int rows(const StepPlan& plan) {
   int n = 0;
   for (const StepPlan::Run& run : plan.run) n += run.n_tokens;
+  return n;
+}
+
+// How many plans list the sequence in `list`, which is StepPlan::encode or StepPlan::preempt.
+int times(const Trace& trace, std::vector<int> StepPlan::* list, int seq) {
+  int n = 0;
+  for (const StepPlan& plan : trace.plans) {
+    n += static_cast<int>(std::count((plan.*list).begin(), (plan.*list).end(), seq));
+  }
   return n;
 }
 
@@ -319,6 +344,125 @@ TEST(Scheduler, RejectsAPoolTooSmallForItsPolicy) {
       kvb::Error);
   EXPECT_THROW(continuous(4, 64, 16, 3, 64), kvb::Error);
   EXPECT_NO_THROW(continuous(4, 64, 16, 4, 64));
+}
+
+// The speech path: every request carries audio that the encoder processes before its tokens run.
+Scheduler encoding(SchedulePolicy policy, int n_slots, int max_ctx, int block_size, int n_blocks,
+                   int max_step_tokens, int max_encodes_per_step) {
+  return Scheduler({.policy = policy,
+                    .n_slots = n_slots,
+                    .max_ctx = max_ctx,
+                    .block_size = block_size,
+                    .n_blocks = n_blocks,
+                    .max_step_tokens = max_step_tokens,
+                    .encode_rows = 64,
+                    .max_encodes_per_step = max_encodes_per_step});
+}
+
+TEST(EncodingScheduler, StaticBatchFillsAtOnceAndIsEncodedOneClipAPlan) {
+  Scheduler scheduler = encoding(SchedulePolicy::Static, 3, 32, 32, 0, 32, 1);
+  const Trace trace = drive(scheduler, {{0, 4, 5}, {1, 4, 5}, {2, 4, 5}, {3, 4, 1}});
+  // The batch is admitted whole, as without an encoder, but its members start a plan apart:
+  // each plan encodes one clip, and a sequence prefills in the plan that encodes it.
+  EXPECT_EQ(trace.plans[0].alloc.size(), 3u);
+  for (int step = 0; step < 3; ++step) {
+    EXPECT_EQ(trace.plans[step].encode, (std::vector<int>{step})) << step;
+    ASSERT_EQ(trace.plans[step].run.size(), static_cast<std::size_t>(step + 1)) << step;
+    EXPECT_EQ(trace.plans[step].run.back().seq, step);
+    EXPECT_EQ(trace.plans[step].run.back().n_tokens, 4);
+    EXPECT_EQ(trace.usage[step].running, 3);
+  }
+  // Request 2 starts two plans late and ends two plans after request 0. Request 3 joins the
+  // next batch and is encoded then.
+  EXPECT_EQ(trace.plans[7].free, (std::vector<int>{0, 1, 2}));
+  EXPECT_EQ(trace.plans[7].encode, (std::vector<int>{3}));
+  for (int id = 0; id < 4; ++id) {
+    EXPECT_EQ(times(trace, &StepPlan::encode, id), 1) << id;
+    EXPECT_EQ(trace.generated.at(id), id == 3 ? 1 : 5) << id;
+  }
+}
+
+TEST(EncodingScheduler, EncodesAsManyClipsAsAStepAllows) {
+  Scheduler scheduler = encoding(SchedulePolicy::Continuous, 4, 32, 32, 0, 32, 2);
+  const Trace trace = drive(scheduler, {{0, 4, 3}, {1, 4, 3}, {2, 4, 3}}, {{1, {3, 4, 3}}});
+  EXPECT_EQ(trace.plans[0].encode, (std::vector<int>{0, 1}));
+  EXPECT_EQ(rows(trace.plans[0]), 8);
+  // Request 2 holds its block from the first plan and waits a plan for the encoder. Request 3
+  // arrives before the second plan, which admits and encodes it.
+  EXPECT_EQ(trace.plans[0].alloc.size(), 3u);
+  EXPECT_EQ(allocations(trace.plans[1], 3), (std::vector<int>{1}));
+  EXPECT_EQ(trace.plans[1].encode, (std::vector<int>{2, 3}));
+  EXPECT_EQ(rows(trace.plans[1]), 1 + 1 + 4 + 4);
+  for (std::size_t step = 2; step < trace.plans.size(); ++step) {
+    EXPECT_TRUE(trace.plans[step].encode.empty()) << step;
+  }
+  for (int id = 0; id < 4; ++id) EXPECT_EQ(trace.generated.at(id), 3) << id;
+}
+
+TEST(EncodingScheduler, APreemptedSequenceIsEncodedAgain) {
+  // The pool and requests of PreemptsTheYoungestSequenceWhenThePoolRunsDry.
+  Scheduler scheduler = encoding(SchedulePolicy::Continuous, 2, 16, 4, 5, 16, 2);
+  const Trace trace = drive(scheduler, {{0, 4, 8}, {1, 4, 8}});
+  EXPECT_EQ(trace.plans[0].encode, (std::vector<int>{0, 1}));
+  EXPECT_EQ(trace.plans[5].preempt, (std::vector<int>{1}));
+  EXPECT_TRUE(trace.plans[5].encode.empty());
+  // Readmitted, request 1 goes through the encoder again before it recomputes its nine tokens.
+  EXPECT_EQ(allocations(trace.plans[8], 1), (std::vector<int>{3}));
+  EXPECT_EQ(trace.plans[8].encode, (std::vector<int>{1}));
+  EXPECT_EQ(rows(trace.plans[8]), 9);
+  EXPECT_EQ(times(trace, &StepPlan::encode, 0), 1);
+  EXPECT_EQ(times(trace, &StepPlan::encode, 1), 2);
+  EXPECT_EQ(trace.generated.at(0), 8);
+  EXPECT_EQ(trace.generated.at(1), 8);
+}
+
+TEST(EncodingScheduler, EncodesOncePerAdmissionInATightPool) {
+  const std::vector<Request> requests = {{0, 5, 3},  {1, 9, 30},  {2, 1, 1}, {3, 20, 12},
+                                         {4, 4, 40}, {5, 30, 30}, {6, 3, 50}};
+  const std::map<std::size_t, Request> late = {{3, {7, 40, 20}}, {200, {8, 2, 2}}};
+  for (const int max_encodes : {1, 4}) {
+    SCOPED_TRACE(max_encodes);
+    Scheduler scheduler = encoding(SchedulePolicy::Continuous, 4, 64, 8, 12, 16, max_encodes);
+    const Trace trace = drive(scheduler, requests, late);
+    int preemptions = 0;
+    for (int id = 0; id <= 8; ++id) {
+      const int preempted = times(trace, &StepPlan::preempt, id);
+      EXPECT_EQ(times(trace, &StepPlan::encode, id), 1 + preempted) << id;
+      preemptions += preempted;
+    }
+    EXPECT_GT(preemptions, 0);
+    for (const Request& r : requests) EXPECT_EQ(trace.generated.at(r.id), r.max_new_tokens);
+    EXPECT_EQ(trace.generated.at(7), 20);
+    EXPECT_EQ(trace.generated.at(8), 2);
+    EXPECT_TRUE(scheduler.done());
+
+    // An encoder that takes every admitted clip at once changes nothing else about the plans.
+    if (max_encodes < 4) continue;
+    Scheduler plain = continuous(4, 64, 8, 12, 16);
+    const Trace without = drive(plain, requests, late);
+    ASSERT_EQ(trace.plans.size(), without.plans.size());
+    for (std::size_t i = 0; i < trace.plans.size(); ++i) {
+      EXPECT_TRUE(without.plans[i].encode.empty());
+      EXPECT_EQ(trace.plans[i].free, without.plans[i].free) << i;
+      EXPECT_EQ(trace.plans[i].preempt, without.plans[i].preempt) << i;
+      EXPECT_EQ(rows(trace.plans[i]), rows(without.plans[i])) << i;
+      EXPECT_EQ(trace.plans[i].alloc.size(), without.plans[i].alloc.size()) << i;
+    }
+  }
+}
+
+TEST(EncodingScheduler, RejectsAnEncoderThatTakesNoClips) {
+  EXPECT_THROW(encoding(SchedulePolicy::Static, 1, 8, 8, 0, 8, 0), kvb::Error);
+  EXPECT_THROW(
+      Scheduler(
+          {.n_slots = 1, .max_ctx = 8, .block_size = 8, .max_step_tokens = 8, .encode_rows = -1}),
+      kvb::Error);
+  // Without an encoder the limit is not read.
+  EXPECT_NO_THROW(Scheduler({.n_slots = 1,
+                             .max_ctx = 8,
+                             .block_size = 8,
+                             .max_step_tokens = 8,
+                             .max_encodes_per_step = 0}));
 }
 
 }  // namespace

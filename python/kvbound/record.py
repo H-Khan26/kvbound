@@ -16,6 +16,32 @@ Metric definitions (all times are wall-clock seconds on the host, GPU work synch
 
 Benchmarks run with a fixed output length (EOS ignored), warmup iterations that are discarded,
 and N measured iterations summarized as p50 / p90 / mean / stdev.
+
+Speech recognition (kind "asr", model family "whisper"). A run transcribes a set of clips, each
+one audio window, and stops each transcription at its end-of-sequence token:
+
+  RTF   real-time factor: seconds of processing per second of audio, as the sum over the
+        clips of the processing time divided by the sum of their durations. Below 1 is faster
+        than real time.
+        rtf_model  from log-mel features on the host to token ids on the host: the encoder,
+                   every decoder step, and the copies in and out.
+        rtf_e2e    from the 16 kHz waveform to text: rtf_model plus the log-mel front end and
+                   detokenization.
+  encoder_ms   encoder latency: one encoder pass over one clip's features, from the features
+               on the host to the cross-attention keys and values of every decoder layer on
+               the device. Covers the conv stem, the encoder layers and those projections.
+  first_token_ms       from a clip's features on the host to its first generated token: the
+                       encoder pass plus the decoder step over the prompt.
+  decode_ms_per_token  (time of last token - time of first token) / (generated tokens - 1).
+  WER   word error rate: the word-level edit distance (substitutions + deletions + insertions)
+        between each transcription and its reference, summed over the clips, divided by the
+        number of reference words summed over the clips. It is a rate over the whole set, not
+        a mean of per-clip rates. `wer` compares normalized text, with the normalization
+        named in params; `wer_raw` compares the text as written.
+  CER   the same over characters: `cer`.
+
+Latencies are per clip and summarized like the benchmark iterations; the rates are single
+numbers per run.
 """
 
 import json
@@ -30,6 +56,16 @@ from kvbound import fingerprint as fp
 from kvbound.paths import RESULTS_RAW
 
 SCHEMA_VERSION = 1
+# Model families a record's "model" entry may name. Records written before the field existed
+# have none and are Llama runs.
+FAMILIES = ("llama", "whisper")
+DEFAULT_FAMILY = "llama"
+
+
+def model_family(record: dict[str, Any]) -> str:
+    """The model family of a record: "llama" or "whisper"."""
+    family: str = (record.get("model") or {}).get("family", DEFAULT_FAMILY)
+    return family
 
 
 def percentile(sorted_values: Sequence[float], q: float) -> float:
@@ -95,11 +131,15 @@ def write_record(
 ) -> Path:
     """Writes one run to results/raw/<device_id>/<run_id>.json and returns the path.
 
-    kind     what was measured, e.g. "generate" or "microbench.bandwidth".
+    kind     what was measured, e.g. "generate", "asr" or "microbench.bandwidth".
     engine   {"name": ..., "version": ...} of whatever produced the timings.
     params   the knobs of this run (batch size, lengths, dtype, seeds).
     metrics  summarized results; samples holds the raw per-iteration values behind them.
+    model    {"name": ..., "hf_repo": ..., "revision": ...} plus "family", one of FAMILIES;
+             a model entry without a family is a Llama.
     """
+    if model is not None and model.get("family", DEFAULT_FAMILY) not in FAMILIES:
+        raise ValueError(f"unknown model family {model['family']!r}; expected one of {FAMILIES}")
     fingerprint = fp.fingerprint(gpu_index)
     now = datetime.now(UTC)
     run_id = f"{now:%Y%m%dT%H%M%SZ}-{kind.replace('.', '-')}-{secrets.token_hex(2)}"

@@ -11,6 +11,7 @@ add_library(kvbound STATIC
   kv/kv_layout.cpp
   memory/planner.cpp
   model/llama/program.cpp
+  model/whisper/program.cpp
   runtime/sampler.cpp
   runtime/step.cpp
   sched/scheduler.cpp

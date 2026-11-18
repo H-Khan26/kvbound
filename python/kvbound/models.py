@@ -72,7 +72,8 @@ class ModelSpec:
     def variant_dir(self, scheme: str) -> Path:
         """data/models/<name>.<scheme> for a quantized variant; the fetched checkpoint for fp16.
 
-        scheme is a variant name: "int8_pc", "int4_g" or "int4_g.mse" (INT4 with mse clipping).
+        scheme is a variant name of kvbound.weight_format.VARIANTS, such as "int8_pc", "int4_g",
+        "int4_g.mse" (INT4 with mse clipping) or "int4_g.awq" (INT4 with activation-aware scales).
         """
         if scheme == "fp16":
             return self.checkpoint_dir

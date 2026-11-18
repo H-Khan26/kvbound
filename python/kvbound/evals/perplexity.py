@@ -40,6 +40,9 @@ DATASET_REVISION = "b08601e04326c79dfdd32d625aee71d232d685c3"
 DATASET_FILE = f"{DATASET}/test-00000-of-00001.parquet"
 DATASET_SHA256 = "5f1bea067869d04849c0f975a2b29c4ff47d867f484f5010ea5e861eab246d91"
 SPLIT = "test"
+# The train split of the same revision: calibration text for kvbound.awq, never scored.
+TRAIN_FILE = f"{DATASET}/train-00000-of-00001.parquet"
+TRAIN_SHA256 = "e83889baabc497075506f91975be5fac0d45c5290b6b20582c8cd1e853d0c9f7"
 DATASETS_DIR = DATA / "datasets"
 
 KV_DTYPES = ("fp16", "int8")
@@ -49,21 +52,21 @@ BACKENDS = ("kvbound", "ref")
 LogitsFn = Callable[[list[int]], Tensor]
 
 
-def fetch_dataset() -> Path:
-    """data/datasets/wikitext-2-raw-v1/<test parquet>, downloaded once and hash-checked."""
-    path = DATASETS_DIR / DATASET_FILE
-    if not path.exists() or sha256_file(path) != DATASET_SHA256:
+def fetch_dataset(file: str = DATASET_FILE, sha256: str = DATASET_SHA256) -> Path:
+    """data/datasets/<file> (by default the test parquet), downloaded once and hash-checked."""
+    path = DATASETS_DIR / file
+    if not path.exists() or sha256_file(path) != sha256:
         hf_hub_download(
             DATASET_REPO,
-            DATASET_FILE,
+            file,
             repo_type="dataset",
             revision=DATASET_REVISION,
             local_dir=DATASETS_DIR,
             force_download=path.exists(),
         )
     digest = sha256_file(path)
-    if digest != DATASET_SHA256:
-        raise ValueError(f"{path} has sha256 {digest}, expected {DATASET_SHA256}")
+    if digest != sha256:
+        raise ValueError(f"{path} has sha256 {digest}, expected {sha256}")
     return path
 
 

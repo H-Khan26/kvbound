@@ -171,22 +171,29 @@ def test_continuous_batches_match_reference(kvb):
 
 @pytest.fixture(scope="module")
 def quantized_fixture(tmp_path_factory):
-    """The fixture checkpoint in each quantized scheme. Its rows are 64 and 128 wide, so INT4
-    uses groups of 32."""
+    """The fixture checkpoint in each quantized variant. Its rows are 64 and 128 wide, so INT4
+    uses groups of 32. The AWQ variant is calibrated on seeded random tokens."""
     dirs = {}
     for scheme in ("int8_pc", "int4_g"):
         dirs[scheme] = tmp_path_factory.mktemp(scheme)
         quantize.convert(FIXTURE_DIR, dirs[scheme], scheme, group_size=32)
+    gen = torch.Generator().manual_seed(0)
+    calibration = torch.randint(fixture.HF_CONFIG["vocab_size"], (8, 32), generator=gen)
+    dirs["int4_g.awq"] = tmp_path_factory.mktemp("int4_g.awq")
+    quantize.convert(
+        FIXTURE_DIR, dirs["int4_g.awq"], "int4_g", group_size=32, clip="awq", awq=calibration
+    )
     return dirs
 
 
-@pytest.mark.parametrize("scheme", ["int8_pc", "int4_g"])
-def test_quantized_weights_match_the_dequantizing_reference(kvb, quantized_fixture, scheme):
+@pytest.mark.parametrize("variant", ["int8_pc", "int4_g", "int4_g.awq"])
+def test_quantized_weights_match_the_dequantizing_reference(kvb, quantized_fixture, variant):
     """The engine on quantized weights against the reference model computing in FP32 on the same
     weights dequantized. Every way of multiplying is covered: in place, on tensor cores
     (quantized_gemm_rows=0 takes that path on every step), and expanded to FP16 for cuBLAS, whole
-    and two output channels at a time."""
-    model_dir = quantized_fixture[scheme]
+    and two output channels at a time. An AWQ checkpoint is an int4_g one to the engine."""
+    model_dir = quantized_fixture[variant]
+    scheme = variant.partition(".")[0]
     model = load_llama(model_dir)
     manifest, tensors = golden.load(FIXTURE_DIR)
     limits = manifest["thresholds"]["fp16"]["rel_rms_max"]

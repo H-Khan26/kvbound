@@ -1,0 +1,871 @@
+{
+  "schema_version": 1,
+  "run_id": "20261117T204547Z-eval-sites-14cf",
+  "kind": "eval.sites",
+  "created_utc": "2026-11-17T20:45:47+00:00",
+  "tags": [
+    "os=windows"
+  ],
+  "engine": {
+    "name": "kvbound",
+    "preset": "cuda"
+  },
+  "model": {
+    "name": "llama-3.2-1b",
+    "hf_repo": "meta-llama/Llama-3.2-1B",
+    "revision": "4e20de362430cd3b72f300e6b0f18e50e7166e08"
+  },
+  "params": {
+    "weights": "int8_pc",
+    "kv": "int8",
+    "golden_sha256": "a90a475cca0fc29cf16fbd123b8e57ff31a46ca25a1b2332e96df164779543aa",
+    "n_prompts": 4,
+    "new_tokens": 48
+  },
+  "metrics": {
+    "logits_rel_rms": 0.04889434660140797,
+    "logits_cosine": 0.9988074628906746,
+    "top1_mismatches": 5,
+    "positions": 128,
+    "mean_kl_max": 0.0025165701994140544,
+    "by_depth": [
+      {
+        "rel_rms": 0.04317298384144403,
+        "cosine": 0.9990752577598451,
+        "max_abs": 0.1660747528076172
+      },
+      {
+        "rel_rms": 0.04074745130046397,
+        "cosine": 0.9991701304637859,
+        "max_abs": 1.53680419921875
+      },
+      {
+        "rel_rms": 0.06982340721124135,
+        "cosine": 0.9975943789011357,
+        "max_abs": 1.6188201904296875
+      },
+      {
+        "rel_rms": 0.06567412439855688,
+        "cosine": 0.99785143603853,
+        "max_abs": 1.6231689453125
+      },
+      {
+        "rel_rms": 0.06114436563079902,
+        "cosine": 0.9981412915044855,
+        "max_abs": 1.589080810546875
+      },
+      {
+        "rel_rms": 0.05786084904651896,
+        "cosine": 0.9983321744097768,
+        "max_abs": 1.5490875244140625
+      },
+      {
+        "rel_rms": 0.06093012292981276,
+        "cosine": 0.9981457608491704,
+        "max_abs": 1.566375732421875
+      },
+      {
+        "rel_rms": 0.057890421724462966,
+        "cosine": 0.9983238606121025,
+        "max_abs": 1.5665435791015625
+      },
+      {
+        "rel_rms": 0.055731929184959436,
+        "cosine": 0.9984593936219887,
+        "max_abs": 1.498382568359375
+      },
+      {
+        "rel_rms": 0.0675325507435798,
+        "cosine": 0.997731284761592,
+        "max_abs": 1.4326629638671875
+      },
+      {
+        "rel_rms": 0.06770306444632329,
+        "cosine": 0.997706776768484,
+        "max_abs": 1.4971923828125
+      },
+      {
+        "rel_rms": 0.06493804905637603,
+        "cosine": 0.9979227386722387,
+        "max_abs": 1.5560302734375
+      },
+      {
+        "rel_rms": 0.06534802826108771,
+        "cosine": 0.9978817596697765,
+        "max_abs": 1.5532684326171875
+      },
+      {
+        "rel_rms": 0.07386608626257792,
+        "cosine": 0.9973798017067135,
+        "max_abs": 1.5903167724609375
+      },
+      {
+        "rel_rms": 0.0783332709271679,
+        "cosine": 0.996934539712671,
+        "max_abs": 1.5997772216796875
+      },
+      {
+        "rel_rms": 0.05016770837325213,
+        "cosine": 0.9987443713529596,
+        "max_abs": 2.5691680908203125
+      },
+      {
+        "rel_rms": 0.04889434660140797,
+        "cosine": 0.9988074628906746,
+        "max_abs": 1.9152641296386719
+      }
+    ]
+  },
+  "samples": {
+    "sites": {
+      "embed": {
+        "rel_rms": 0.018681414187459968,
+        "cosine": 0.9998255483820161,
+        "max_abs": 0.0013580322265625
+      },
+      "final_norm": {
+        "rel_rms": 0.04762517531686635,
+        "cosine": 0.9988663215843937,
+        "max_abs": 1.1231670379638672
+      },
+      "layers.0.attn_norm": {
+        "rel_rms": 0.019380410986400545,
+        "cosine": 0.9998121855232883,
+        "max_abs": 0.06366908550262451
+      },
+      "layers.0.attn_out": {
+        "rel_rms": 0.04317298384144403,
+        "cosine": 0.9990752577598451,
+        "max_abs": 0.006996229290962219
+      },
+      "layers.0.mlp_norm": {
+        "rel_rms": 0.038981188158660605,
+        "cosine": 0.9992418178856762,
+        "max_abs": 0.04690210521221161
+      },
+      "layers.0.mlp_out": {
+        "rel_rms": 0.013809648831320055,
+        "cosine": 0.9999315972231053,
+        "max_abs": 0.16594696044921875
+      },
+      "layers.0.resid_mid": {
+        "rel_rms": 0.033755182070616924,
+        "cosine": 0.9994304229559108,
+        "max_abs": 0.006935194134712219
+      },
+      "layers.0.resid_post": {
+        "rel_rms": 0.013878506633502964,
+        "cosine": 0.9999299950137217,
+        "max_abs": 0.1660747528076172
+      },
+      "layers.1.attn_norm": {
+        "rel_rms": 0.029470861195372965,
+        "cosine": 0.999565673985206,
+        "max_abs": 0.1256009340286255
+      },
+      "layers.1.attn_out": {
+        "rel_rms": 0.04074745130046397,
+        "cosine": 0.9991701304637859,
+        "max_abs": 0.012695610523223877
+      },
+      "layers.1.mlp_norm": {
+        "rel_rms": 0.03496650156225506,
+        "cosine": 0.9993897615380545,
+        "max_abs": 0.1197456419467926
+      },
+      "layers.1.mlp_out": {
+        "rel_rms": 0.013348840857213657,
+        "cosine": 0.9999253860233392,
+        "max_abs": 1.53680419921875
+      },
+      "layers.1.resid_mid": {
+        "rel_rms": 0.01569749917685626,
+        "cosine": 0.9998985359127401,
+        "max_abs": 0.17215538024902344
+      },
+      "layers.1.resid_post": {
+        "rel_rms": 0.013393239498238362,
+        "cosine": 0.9999249292687091,
+        "max_abs": 1.5305938720703125
+      },
+      "layers.10.attn_norm": {
+        "rel_rms": 0.04057160593070462,
+        "cosine": 0.9991788833333013,
+        "max_abs": 0.4580564498901367
+      },
+      "layers.10.attn_out": {
+        "rel_rms": 0.06770306444632329,
+        "cosine": 0.997706776768484,
+        "max_abs": 0.07656395435333252
+      },
+      "layers.10.mlp_norm": {
+        "rel_rms": 0.04530076453228303,
+        "cosine": 0.9989758493649763,
+        "max_abs": 0.08736312389373779
+      },
+      "layers.10.mlp_out": {
+        "rel_rms": 0.051804333647271036,
+        "cosine": 0.9986572803392736,
+        "max_abs": 0.04683832824230194
+      },
+      "layers.10.resid_mid": {
+        "rel_rms": 0.01384122235187,
+        "cosine": 0.9999161667227344,
+        "max_abs": 1.4412994384765625
+      },
+      "layers.10.resid_post": {
+        "rel_rms": 0.013812089553524129,
+        "cosine": 0.9999165362641663,
+        "max_abs": 1.4971923828125
+      },
+      "layers.11.attn_norm": {
+        "rel_rms": 0.04023362794021156,
+        "cosine": 0.9991920149994227,
+        "max_abs": 0.33211803436279297
+      },
+      "layers.11.attn_out": {
+        "rel_rms": 0.06493804905637603,
+        "cosine": 0.9979227386722387,
+        "max_abs": 0.059186697006225586
+      },
+      "layers.11.mlp_norm": {
+        "rel_rms": 0.04317352617007665,
+        "cosine": 0.999068274474006,
+        "max_abs": 0.09675419330596924
+      },
+      "layers.11.mlp_out": {
+        "rel_rms": 0.05009195690649708,
+        "cosine": 0.9987446180307776,
+        "max_abs": 0.05707913637161255
+      },
+      "layers.11.resid_mid": {
+        "rel_rms": 0.014128809452963824,
+        "cosine": 0.9999120020443728,
+        "max_abs": 1.5182342529296875
+      },
+      "layers.11.resid_post": {
+        "rel_rms": 0.014361460608203225,
+        "cosine": 0.9999092937809122,
+        "max_abs": 1.5560302734375
+      },
+      "layers.12.attn_norm": {
+        "rel_rms": 0.039467474305002866,
+        "cosine": 0.9992216012009869,
+        "max_abs": 0.26538586616516113
+      },
+      "layers.12.attn_out": {
+        "rel_rms": 0.06534802826108771,
+        "cosine": 0.9978817596697765,
+        "max_abs": 0.07434637099504471
+      },
+      "layers.12.mlp_norm": {
+        "rel_rms": 0.04265742990012809,
+        "cosine": 0.999091377655087,
+        "max_abs": 0.09463363885879517
+      },
+      "layers.12.mlp_out": {
+        "rel_rms": 0.05222295750385772,
+        "cosine": 0.9986373859860543,
+        "max_abs": 0.08428555727005005
+      },
+      "layers.12.resid_mid": {
+        "rel_rms": 0.014535149036433976,
+        "cosine": 0.999906011455772,
+        "max_abs": 1.5532684326171875
+      },
+      "layers.12.resid_post": {
+        "rel_rms": 0.014840019215850233,
+        "cosine": 0.9999012063854038,
+        "max_abs": 1.531402587890625
+      },
+      "layers.13.attn_norm": {
+        "rel_rms": 0.040172017698347814,
+        "cosine": 0.9991938345574574,
+        "max_abs": 0.358650803565979
+      },
+      "layers.13.attn_out": {
+        "rel_rms": 0.07386608626257792,
+        "cosine": 0.9973798017067135,
+        "max_abs": 0.09974342584609985
+      },
+      "layers.13.mlp_norm": {
+        "rel_rms": 0.045123405250485756,
+        "cosine": 0.9989817215377599,
+        "max_abs": 0.11056464910507202
+      },
+      "layers.13.mlp_out": {
+        "rel_rms": 0.05110823323680293,
+        "cosine": 0.9986938134898545,
+        "max_abs": 0.1150839775800705
+      },
+      "layers.13.resid_mid": {
+        "rel_rms": 0.015276516982546838,
+        "cosine": 0.9998941639911556,
+        "max_abs": 1.523468017578125
+      },
+      "layers.13.resid_post": {
+        "rel_rms": 0.01591403600636529,
+        "cosine": 0.9998838484067675,
+        "max_abs": 1.5903167724609375
+      },
+      "layers.14.attn_norm": {
+        "rel_rms": 0.041858661609046596,
+        "cosine": 0.9991247517277824,
+        "max_abs": 0.3017716407775879
+      },
+      "layers.14.attn_out": {
+        "rel_rms": 0.0783332709271679,
+        "cosine": 0.996934539712671,
+        "max_abs": 0.1866987943649292
+      },
+      "layers.14.mlp_norm": {
+        "rel_rms": 0.04744756507747329,
+        "cosine": 0.9988757831700135,
+        "max_abs": 0.11266367137432098
+      },
+      "layers.14.mlp_out": {
+        "rel_rms": 0.031211595727402543,
+        "cosine": 0.999524492967333,
+        "max_abs": 0.14652132987976074
+      },
+      "layers.14.resid_mid": {
+        "rel_rms": 0.016489360408268417,
+        "cosine": 0.9998743671256026,
+        "max_abs": 1.5997772216796875
+      },
+      "layers.14.resid_post": {
+        "rel_rms": 0.01727334160133408,
+        "cosine": 0.9998617628851141,
+        "max_abs": 1.5972442626953125
+      },
+      "layers.15.attn_norm": {
+        "rel_rms": 0.04572804125392723,
+        "cosine": 0.9989563093460605,
+        "max_abs": 0.22253108024597168
+      },
+      "layers.15.attn_out": {
+        "rel_rms": 0.049821096115555644,
+        "cosine": 0.9987626069934391,
+        "max_abs": 0.22358572483062744
+      },
+      "layers.15.mlp_norm": {
+        "rel_rms": 0.05016770837325213,
+        "cosine": 0.9987443713529596,
+        "max_abs": 0.1273813731968403
+      },
+      "layers.15.mlp_out": {
+        "rel_rms": 0.016153430774530655,
+        "cosine": 0.9998760404255151,
+        "max_abs": 1.2936248779296875
+      },
+      "layers.15.resid_mid": {
+        "rel_rms": 0.017669798200751995,
+        "cosine": 0.9998539046316867,
+        "max_abs": 1.5571136474609375
+      },
+      "layers.15.resid_post": {
+        "rel_rms": 0.02671234425380851,
+        "cosine": 0.9996635635379358,
+        "max_abs": 2.5691680908203125
+      },
+      "layers.2.attn_norm": {
+        "rel_rms": 0.03452098918605243,
+        "cosine": 0.9994042065008415,
+        "max_abs": 0.1763635277748108
+      },
+      "layers.2.attn_out": {
+        "rel_rms": 0.06982340721124135,
+        "cosine": 0.9975943789011357,
+        "max_abs": 0.023906201124191284
+      },
+      "layers.2.mlp_norm": {
+        "rel_rms": 0.043742932448062495,
+        "cosine": 0.9990440199617114,
+        "max_abs": 0.06785309314727783
+      },
+      "layers.2.mlp_out": {
+        "rel_rms": 0.050706719315580906,
+        "cosine": 0.9987141827979127,
+        "max_abs": 0.021561741828918457
+      },
+      "layers.2.resid_mid": {
+        "rel_rms": 0.013507810281953742,
+        "cosine": 0.9999238877607235,
+        "max_abs": 1.5710906982421875
+      },
+      "layers.2.resid_post": {
+        "rel_rms": 0.013496212543438768,
+        "cosine": 0.9999237475583749,
+        "max_abs": 1.6188201904296875
+      },
+      "layers.3.attn_norm": {
+        "rel_rms": 0.03822587816610851,
+        "cosine": 0.9992697536711306,
+        "max_abs": 0.19119977951049805
+      },
+      "layers.3.attn_out": {
+        "rel_rms": 0.06567412439855688,
+        "cosine": 0.99785143603853,
+        "max_abs": 0.03188350796699524
+      },
+      "layers.3.mlp_norm": {
+        "rel_rms": 0.04706099429650415,
+        "cosine": 0.9988930561975231,
+        "max_abs": 0.09434986114501953
+      },
+      "layers.3.mlp_out": {
+        "rel_rms": 0.05730186639857339,
+        "cosine": 0.9983598451102504,
+        "max_abs": 0.03456880524754524
+      },
+      "layers.3.resid_mid": {
+        "rel_rms": 0.013637434927285676,
+        "cosine": 0.9999217431334076,
+        "max_abs": 1.6231689453125
+      },
+      "layers.3.resid_post": {
+        "rel_rms": 0.013593547417715991,
+        "cosine": 0.9999225379957736,
+        "max_abs": 1.574951171875
+      },
+      "layers.4.attn_norm": {
+        "rel_rms": 0.0395283312852434,
+        "cosine": 0.9992189596997183,
+        "max_abs": 0.21924638748168945
+      },
+      "layers.4.attn_out": {
+        "rel_rms": 0.06114436563079902,
+        "cosine": 0.9981412915044855,
+        "max_abs": 0.035423099994659424
+      },
+      "layers.4.mlp_norm": {
+        "rel_rms": 0.04770685681834932,
+        "cosine": 0.9988619417996565,
+        "max_abs": 0.0852060317993164
+      },
+      "layers.4.mlp_out": {
+        "rel_rms": 0.058311673099327305,
+        "cosine": 0.9982984654276229,
+        "max_abs": 0.04340534657239914
+      },
+      "layers.4.resid_mid": {
+        "rel_rms": 0.013700982737978817,
+        "cosine": 0.9999205000165272,
+        "max_abs": 1.589080810546875
+      },
+      "layers.4.resid_post": {
+        "rel_rms": 0.013570712887292505,
+        "cosine": 0.999921833208732,
+        "max_abs": 1.541778564453125
+      },
+      "layers.5.attn_norm": {
+        "rel_rms": 0.040899305274273996,
+        "cosine": 0.9991674659299218,
+        "max_abs": 0.5178852081298828
+      },
+      "layers.5.attn_out": {
+        "rel_rms": 0.05504302374759544,
+        "cosine": 0.9984861740618538,
+        "max_abs": 0.04086460079997778
+      },
+      "layers.5.mlp_norm": {
+        "rel_rms": 0.04702118478211754,
+        "cosine": 0.9988945792325461,
+        "max_abs": 0.09941291809082031
+      },
+      "layers.5.mlp_out": {
+        "rel_rms": 0.05786084904651896,
+        "cosine": 0.9983321744097768,
+        "max_abs": 0.06229478120803833
+      },
+      "layers.5.resid_mid": {
+        "rel_rms": 0.01369726848401536,
+        "cosine": 0.9999199257280643,
+        "max_abs": 1.5399169921875
+      },
+      "layers.5.resid_post": {
+        "rel_rms": 0.013589270410310147,
+        "cosine": 0.9999214679169289,
+        "max_abs": 1.5490875244140625
+      },
+      "layers.6.attn_norm": {
+        "rel_rms": 0.04261898778103151,
+        "cosine": 0.9990932048081964,
+        "max_abs": 0.18664336204528809
+      },
+      "layers.6.attn_out": {
+        "rel_rms": 0.057062182038268947,
+        "cosine": 0.9983706389393747,
+        "max_abs": 0.02753022313117981
+      },
+      "layers.6.mlp_norm": {
+        "rel_rms": 0.04703310730071276,
+        "cosine": 0.9988965995474639,
+        "max_abs": 0.10590016841888428
+      },
+      "layers.6.mlp_out": {
+        "rel_rms": 0.06093012292981276,
+        "cosine": 0.9981457608491704,
+        "max_abs": 0.06644219160079956
+      },
+      "layers.6.resid_mid": {
+        "rel_rms": 0.01373725783279819,
+        "cosine": 0.999919292607601,
+        "max_abs": 1.5513458251953125
+      },
+      "layers.6.resid_post": {
+        "rel_rms": 0.01361739154815603,
+        "cosine": 0.9999211170689755,
+        "max_abs": 1.566375732421875
+      },
+      "layers.7.attn_norm": {
+        "rel_rms": 0.044709759764036086,
+        "cosine": 0.9990020022689805,
+        "max_abs": 0.22955811023712158
+      },
+      "layers.7.attn_out": {
+        "rel_rms": 0.05585609578235829,
+        "cosine": 0.9984502828915769,
+        "max_abs": 0.03059256076812744
+      },
+      "layers.7.mlp_norm": {
+        "rel_rms": 0.04864193678694319,
+        "cosine": 0.9988229001623994,
+        "max_abs": 0.12207883596420288
+      },
+      "layers.7.mlp_out": {
+        "rel_rms": 0.057890421724462966,
+        "cosine": 0.9983238606121025,
+        "max_abs": 0.07462823390960693
+      },
+      "layers.7.resid_mid": {
+        "rel_rms": 0.013782714893351962,
+        "cosine": 0.9999188579206932,
+        "max_abs": 1.5665435791015625
+      },
+      "layers.7.resid_post": {
+        "rel_rms": 0.013593497579460082,
+        "cosine": 0.9999210952136974,
+        "max_abs": 1.51446533203125
+      },
+      "layers.8.attn_norm": {
+        "rel_rms": 0.04418509728074553,
+        "cosine": 0.9990258139619566,
+        "max_abs": 0.30190443992614746
+      },
+      "layers.8.attn_out": {
+        "rel_rms": 0.05423371837566534,
+        "cosine": 0.998532446985186,
+        "max_abs": 0.05379891395568848
+      },
+      "layers.8.mlp_norm": {
+        "rel_rms": 0.04689732435258612,
+        "cosine": 0.9989031264185859,
+        "max_abs": 0.09866183996200562
+      },
+      "layers.8.mlp_out": {
+        "rel_rms": 0.055731929184959436,
+        "cosine": 0.9984593936219887,
+        "max_abs": 0.05872100591659546
+      },
+      "layers.8.resid_mid": {
+        "rel_rms": 0.013721028838041468,
+        "cosine": 0.9999190068673366,
+        "max_abs": 1.498382568359375
+      },
+      "layers.8.resid_post": {
+        "rel_rms": 0.013520729190042354,
+        "cosine": 0.9999211538742993,
+        "max_abs": 1.439666748046875
+      },
+      "layers.9.attn_norm": {
+        "rel_rms": 0.04198128115332683,
+        "cosine": 0.9991213758165766,
+        "max_abs": 0.241166353225708
+      },
+      "layers.9.attn_out": {
+        "rel_rms": 0.0675325507435798,
+        "cosine": 0.997731284761592,
+        "max_abs": 0.05495373159646988
+      },
+      "layers.9.mlp_norm": {
+        "rel_rms": 0.04544958236763475,
+        "cosine": 0.9989698041160846,
+        "max_abs": 0.12054443359375
+      },
+      "layers.9.mlp_out": {
+        "rel_rms": 0.055057043176041306,
+        "cosine": 0.998485268188595,
+        "max_abs": 0.05234837532043457
+      },
+      "layers.9.resid_mid": {
+        "rel_rms": 0.013758281856020174,
+        "cosine": 0.999917219534143,
+        "max_abs": 1.4326629638671875
+      },
+      "layers.9.resid_post": {
+        "rel_rms": 0.01365278979980636,
+        "cosine": 0.9999188788824126,
+        "max_abs": 1.426055908203125
+      },
+      "logits": {
+        "rel_rms": 0.04889434660140797,
+        "cosine": 0.9988074628906746,
+        "max_abs": 1.9152641296386719
+      }
+    },
+    "generated": [
+      {
+        "id": "p0",
+        "prompt": "The capital of France is",
+        "tokens": [
+          12366,
+          13,
+          1102,
+          374,
+          279,
+          1455,
+          95551,
+          3363,
+          304,
+          279,
+          3224,
+          323,
+          279,
+          1455,
+          95551,
+          16036,
+          3158,
+          304,
+          279,
+          7665,
+          9323,
+          13,
+          12366,
+          374,
+          279,
+          10954,
+          315,
+          279,
+          8753,
+          3109,
+          323,
+          279,
+          26097,
+          315,
+          1690,
+          6625,
+          11351,
+          13,
+          1102,
+          374,
+          1101,
+          279,
+          1455,
+          12263,
+          3363,
+          304,
+          279,
+          1917
+        ],
+        "text": " Paris. It is the most populous city in the country and the most populous urban area in the European Union. Paris is the seat of the French government and the headquarters of many international organizations. It is also the most visited city in the world"
+      },
+      {
+        "id": "p1",
+        "prompt": "def fibonacci(n):\n    if n < 2:\n        return n\n    return",
+        "tokens": [
+          76798,
+          1471,
+          12,
+          16,
+          8,
+          489,
+          76798,
+          1471,
+          12,
+          17,
+          696,
+          755,
+          76798,
+          17,
+          1471,
+          997,
+          262,
+          422,
+          308,
+          366,
+          220,
+          17,
+          512,
+          286,
+          471,
+          308,
+          198,
+          262,
+          471,
+          76798,
+          17,
+          1471,
+          12,
+          16,
+          8,
+          489,
+          76798,
+          17,
+          1471,
+          12,
+          17,
+          696,
+          755,
+          76798,
+          18,
+          1471,
+          997,
+          262
+        ],
+        "text": " fibonacci(n-1) + fibonacci(n-2)\n\ndef fibonacci2(n):\n    if n < 2:\n        return n\n    return fibonacci2(n-1) + fibonacci2(n-2)\n\ndef fibonacci3(n):\n   "
+      },
+      {
+        "id": "p2",
+        "prompt": "In 1969, the Apollo 11 mission landed the first humans on the Moon. The crew consisted of Neil Armstrong, Buzz Aldrin and Michael Collins. Armstrong became the first person to",
+        "tokens": [
+          4321,
+          389,
+          279,
+          17781,
+          13,
+          578,
+          9131,
+          36513,
+          220,
+          17,
+          2919,
+          323,
+          220,
+          1644,
+          4207,
+          13,
+          578,
+          9131,
+          574,
+          264,
+          2450,
+          323,
+          279,
+          13941,
+          6052,
+          21676,
+          311,
+          9420,
+          13,
+          578,
+          9131,
+          574,
+          264,
+          6908,
+          2450,
+          323,
+          279,
+          13941,
+          6244,
+          23757,
+          13,
+          578,
+          9131,
+          574,
+          264,
+          2450,
+          323,
+          279
+        ],
+        "text": " walk on the Moon. The mission lasted 2 days and 33 hours. The mission was a success and the crew returned safely to Earth. The mission was a huge success and the crew became heroes. The mission was a success and the"
+      },
+      {
+        "id": "p3",
+        "prompt": "Memory bandwidth, not arithmetic, limits how fast a language model can generate text one token at a time. Every decode step reads each weight exactly once, so the time per token cannot be shorter than the size of the weights divided by the rate at which the GPU can read memory. This is why smaller number formats make generation",
+        "tokens": [
+          10819,
+          11,
+          719,
+          8294,
+          6305,
+          1304,
+          433,
+          29493,
+          13,
+          578,
+          1396,
+          315,
+          9660,
+          304,
+          264,
+          2273,
+          374,
+          220,
+          843,
+          11,
+          779,
+          279,
+          1396,
+          315,
+          9660,
+          304,
+          264,
+          2273,
+          843,
+          374,
+          220,
+          843,
+          11,
+          323,
+          279,
+          1396,
+          315,
+          9660,
+          304,
+          264,
+          2273,
+          1227,
+          374,
+          220,
+          1227,
+          13,
+          578,
+          1396
+        ],
+        "text": " faster, but larger ones make it slower. The number of bits in a float is 32, so the number of bits in a float32 is 32, and the number of bits in a float64 is 64. The number"
+      }
+    ]
+  },
+  "nvml": null,
+  "fingerprint": {
+    "device_id": "rtx3060ti-fd7b40d5",
+    "device_config": "rtx3060ti",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3060 Ti",
+      "uuid": "GPU-fd7b40d5-161e-fadf-f3ad-10e7ae835d42",
+      "compute_capability": "8.6",
+      "memory_total_mib": 8192,
+      "driver_version": "576.02",
+      "sm_clock_max_mhz": 2100,
+      "pcie_gen_max": 3,
+      "pcie_width_max": 16,
+      "power_limit_w": 220.0,
+      "persistence_mode": null
+    },
+    "software": {
+      "os_class": "windows",
+      "os": "Windows 10 (10.0.19045)",
+      "cpu": "Intel64 Family 6 Model 165 Stepping 5, GenuineIntel",
+      "python": "3.12.14",
+      "torch": "2.11.0+cu128",
+      "torch_cuda": "12.8",
+      "nvcc": "12.9",
+      "cmake": "4.4.4"
+    },
+    "git": {
+      "sha": "c4427594fea69e2880833cb8b60de78dc6c75368",
+      "dirty": false
+    }
+  }
+}

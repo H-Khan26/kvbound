@@ -71,7 +71,8 @@ class Precision:
 
     @classmethod
     def named(cls, weights: str, kv: str, head_dim: int = 64, group_size: int = 128) -> "Precision":
-        """weights is a variant name (fp16, int8_pc, int4_g, int4_g.mse); kv is fp16, int8 or fp8.
+        """weights is a variant name (fp16, int8_pc, int4_g, int4_g.mse, int4_g.awq, ...); kv is
+        fp16, int8 or fp8.
 
         Bytes include the FP16 scales: one per group_size weights for int4_g (one per row for
         int8_pc, which is negligible), one per cached vector of head_dim elements for an int8
@@ -83,7 +84,8 @@ class Precision:
         # two FP16 modes, so the result stays a lower bound for kernels that accumulate in FP32.
         weight_bytes = {"fp16": 2.0, "int8_pc": 1.0, "int4_g": 0.5 + 2 / group_size}
         kv_bytes = {"fp16": 2.0, "int8": 1.0 + 2 / head_dim, "fp8": 1.0}
-        return cls(weight_bytes[weights.removesuffix(".mse")], kv_bytes[kv], "fp16_acc16")
+        # A variant is its scheme, then how the scales were chosen, which costs no bytes.
+        return cls(weight_bytes[weights.partition(".")[0]], kv_bytes[kv], "fp16_acc16")
 
 
 def kv_bytes_per_token(arch: Arch, kv_bytes: float) -> float:
