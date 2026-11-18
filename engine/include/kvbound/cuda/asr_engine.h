@@ -33,6 +33,11 @@ struct AsrOptions {
   // a fork: every child but one gets copies of all its parent's blocks. Both give the same
   // tokens and scores; the second leaves nothing for copy-on-write to get wrong.
   bool beam_share_blocks = true;
+  // Beam search ranks each beam's candidates on the device (kernels::beam_candidates, in the
+  // decoder step's graph), so only n_candidates() pairs per beam cross to the host. Otherwise
+  // the logits rows cross and the host ranks them (append_beam_candidates). Both rank the same
+  // way; their FP64 sums may round differently in the last bit (kernels::beam_candidates).
+  bool beam_topk_device = true;
 };
 
 // What beam_transcribe() is told besides the model's rules.
@@ -181,11 +186,16 @@ class AsrEngine {
   // Encodes clip i into Cross block blocks[i].
   void encode_clips(std::span<const std::span<const float>> clips, std::span<const int> blocks,
                     const ForwardOptions& options);
+  // forward() that also ranks each output row's beam_k best candidates on the device when
+  // beam_k > 0, which needs raw_logits; beam_candidates_on_device() then reads them.
+  void decode_step(std::span<const StepRow> rows, std::span<const std::int32_t> out_rows,
+                   const ForwardOptions& options, int beam_k);
   // Beam candidates from the last decoder step: copies its logits rows to the host and appends
-  // each row's k best (append_beam_candidates). The only place beam search reads logits, so a
-  // top-k on the device can take its place.
+  // each row's k best (append_beam_candidates).
   void beam_candidates_on_host(std::span<const std::int32_t> suppressed, int k,
                                std::vector<BeamCandidate>& out);
+  // Appends the candidates the last decode_step() ranked on the device, k per output row.
+  void beam_candidates_on_device(int k, std::vector<BeamCandidate>& out) const;
 
   EngineConfig config_;
   AsrOptions options_;
@@ -205,6 +215,15 @@ class AsrEngine {
   PinnedBuffer mel_host_;
   DeviceBuffer mel_dev_;
   GraphCache graphs_;  // decoder steps, keyed by (n_tokens, n_out)
+  // Beam candidates on the device: per token the kernels::kSuppress* flags of the decoding
+  // rules, the ranking's scratch, and its output with a pinned host copy, each sized for
+  // max_seqs rows of max_seqs + 1 candidates.
+  DeviceBuffer beam_suppress_;
+  DeviceBuffer beam_scratch_;
+  DeviceBuffer beam_out_dev_;
+  PinnedBuffer beam_out_host_;
+  int beam_max_k_ = 0;
+  int beam_out_count_ = 0;  // candidates the latest decode_step() fetched
   double encode_seconds_ = 0.0;
   OpTimes* encoder_times_ = nullptr;
   OpTimes* decoder_times_ = nullptr;

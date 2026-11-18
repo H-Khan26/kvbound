@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <string_view>
 
+#include "kvbound/beam_search.h"
 #include "kvbound/kv_layout.h"
 #include "kvbound/step.h"
 #include "kvbound/weight_format.h"
@@ -83,6 +84,27 @@ void gather_rows(const f16* x, const std::int32_t* out_rows, f16* out, int n_out
 
 // out[r] = index of the largest element of logits[r]; the lowest index wins ties.
 void argmax(const float* logits, std::int32_t* out, int n_rows, int n_cols, cudaStream_t stream);
+
+// Flags of beam_candidates()' suppress mask, one byte per token.
+inline constexpr std::uint8_t kSuppressAlways = 1;  // in every row
+inline constexpr std::uint8_t kSuppressBegin = 2;   // in a row at begin_pos
+
+// Bytes of scratch beam_candidates() needs for n_out rows of `vocab` logits and k candidates.
+std::size_t beam_candidates_scratch_bytes(int n_out, int vocab, int k);
+
+// append_beam_candidates() of each logits row on the device: out [n_out, k] gets the k largest
+// log-probabilities of row o of logits [n_out, vocab], best first, the lower token first on a
+// tie, padded with {-1, -inf} when fewer are finite. The log-softmax runs over the whole row, as
+// the host's does: the maximum, then the sum of exp(x - max) in FP64, then
+// log_prob = float(x - (max + log(sum))). Tokens are then left out where suppress[token] has
+// kSuppressAlways, or kSuppressBegin and the row's step row rows[out_rows[o]] is at begin_pos.
+// The sum runs in another order than the host's and the device's FP64 exp may differ from the
+// host's by an ulp, so a log-probability may differ from the host's in its last bit where the
+// FP64 sums round differently. scratch holds
+// beam_candidates_scratch_bytes(n_out, vocab, k) bytes and must be 8-byte aligned.
+void beam_candidates(const float* logits, const StepRow* rows, const std::int32_t* out_rows,
+                     int n_out, int vocab, const std::uint8_t* suppress, int begin_pos, int k,
+                     void* scratch, BeamCandidate* out, cudaStream_t stream);
 
 // Stores each row's keys and values [n_kv_heads, head_dim] at its kv_slot. Row t's keys start at
 // k[t * in_stride] and its values at v[t * in_stride]: n_kv_heads * head_dim for separate k and

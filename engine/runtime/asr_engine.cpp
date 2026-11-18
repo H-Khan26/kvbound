@@ -83,6 +83,28 @@ AsrEngine::AsrEngine(const std::filesystem::path& model_dir, const EngineConfig&
   buffers_ = StepBuffers(max_rows, config_.max_outputs);
   mel_host_ = PinnedBuffer(options_.max_encode_batch * feature_size() * sizeof(float));
   mel_dev_ = DeviceBuffer(mel_host_.bytes());
+
+  const int vocab = static_cast<int>(cfg.vocab_size);
+  const Suppress& suppress = model_->programs().decoder.suppress;
+  std::vector<std::uint8_t> flags(static_cast<std::size_t>(vocab), 0);
+  const auto flag = [&](std::span<const std::int32_t> tokens, std::uint8_t bit) {
+    for (const std::int32_t token : tokens) {
+      if (token < 0 || token >= vocab) throw Error("a suppressed token is outside the vocabulary");
+      flags[token] |= bit;
+    }
+  };
+  flag(suppress.always, kernels::kSuppressAlways);
+  flag(suppress.begin, kernels::kSuppressBegin);
+  beam_suppress_ = DeviceBuffer(flags.size());
+  KVB_CUDA(cudaMemcpyAsync(beam_suppress_.as(), flags.data(), flags.size(), cudaMemcpyHostToDevice,
+                           stream_));
+  beam_max_k_ = config_.max_seqs + 1;
+  beam_scratch_ =
+      DeviceBuffer(kernels::beam_candidates_scratch_bytes(config_.max_seqs, vocab, beam_max_k_));
+  const std::size_t out_bytes =
+      static_cast<std::size_t>(config_.max_seqs) * beam_max_k_ * sizeof(BeamCandidate);
+  beam_out_dev_ = DeviceBuffer(out_bytes);
+  beam_out_host_ = PinnedBuffer(out_bytes);
   KVB_CUDA(cudaStreamSynchronize(stream_));
 }
 
@@ -214,6 +236,15 @@ void AsrEngine::encode_clips(std::span<const std::span<const float>> clips,
 
 void AsrEngine::forward(std::span<const StepRow> rows, std::span<const std::int32_t> out_rows,
                         const ForwardOptions& options) {
+  decode_step(rows, out_rows, options, 0);
+}
+
+void AsrEngine::decode_step(std::span<const StepRow> rows, std::span<const std::int32_t> out_rows,
+                            const ForwardOptions& options, int beam_k) {
+  if (beam_k < 0 || beam_k > beam_max_k_ || (beam_k > 0 && !options.raw_logits) ||
+      (beam_k > 0 && static_cast<int>(out_rows.size()) > config_.max_seqs)) {
+    throw Error("beam candidates need raw logits, at most max_seqs rows and k <= max_seqs + 1");
+  }
   check_step(rows, out_rows,
              {.max_step_tokens = config_.max_step_tokens,
               .max_outputs = config_.max_outputs,
@@ -239,17 +270,31 @@ void AsrEngine::forward(std::span<const StepRow> rows, std::span<const std::int3
   const RunHooks hooks = step_hooks(model_->programs().decoder, n_tokens, n_out, stream_,
                                     options.capture, options.times);
   // Decode steps replay a graph. The suppress rules read each row's position from the step's
-  // rows, so one graph serves the first generated token too.
+  // rows, so one graph serves the first generated token too. The variant tells the suppressed
+  // logits (0), the raw ones (1) and the raw ones ranked into k candidates per row (1 + k) apart.
+  const int vocab = static_cast<int>(model_->config().vocab_size);
   graphs_.step(
       config_.use_graph, n_tokens, n_out, n_tiles, config_.max_seqs, hooked, stream_,
       [&](bool graphed) {
         model_->run(buffers_.rows(), buffers_.out_rows(), n_tokens, n_out,
                     graphed ? nullptr : buffers_.tiles(), graphed ? 0 : n_tiles, *self_, *cross_,
                     stream_, hooked ? &hooks : nullptr, !options.raw_logits);
+        if (beam_k > 0) {
+          kernels::beam_candidates(model_->logits(), buffers_.rows(), buffers_.out_rows(), n_out,
+                                   vocab, beam_suppress_.as<std::uint8_t>(),
+                                   model_->programs().decoder.suppress.begin_position, beam_k,
+                                   beam_scratch_.as(), beam_out_dev_.as<BeamCandidate>(), stream_);
+        }
       },
-      options.raw_logits ? 1 : 0);
+      options.raw_logits ? 1 + beam_k : 0);
 
   buffers_.fetch_next_ids(model_->next_ids(), static_cast<std::size_t>(n_out), stream_);
+  beam_out_count_ = beam_k * n_out;
+  if (beam_k > 0) {
+    KVB_CUDA(cudaMemcpyAsync(beam_out_host_.as(), beam_out_dev_.as(),
+                             static_cast<std::size_t>(beam_out_count_) * sizeof(BeamCandidate),
+                             cudaMemcpyDeviceToHost, stream_));
+  }
   KVB_CUDA(cudaStreamSynchronize(stream_));
 }
 
@@ -365,6 +410,12 @@ void AsrEngine::beam_candidates_on_host(std::span<const std::int32_t> suppressed
   }
 }
 
+void AsrEngine::beam_candidates_on_device(int k, std::vector<BeamCandidate>& out) const {
+  if (k <= 0 || beam_out_count_ % k != 0) throw Error("the last step ranked no such candidates");
+  const BeamCandidate* host = beam_out_host_.as<BeamCandidate>();
+  out.insert(out.end(), host, host + beam_out_count_);
+}
+
 BeamTranscript AsrEngine::beam_transcribe(std::span<const float> features,
                                           const BeamOptions& options) {
   using Clock = std::chrono::steady_clock;
@@ -443,13 +494,20 @@ BeamTranscript AsrEngine::beam_transcribe(std::span<const float> features,
     std::vector<std::int32_t> out_rows{n_prompt - 1};
     std::vector<BeamCandidate> candidates;
     std::vector<std::pair<BlockCopy, int>> copies;  // and the positions to copy
+    const int k = search.n_candidates();
+    const bool on_device = options_.beam_topk_device;
     while (true) {
-      forward(step_rows, out_rows, {.times = decoder_times_, .raw_logits = true});
+      decode_step(step_rows, out_rows, {.times = decoder_times_, .raw_logits = true},
+                  on_device ? k : 0);
       // Every live beam now caches positions [0, n).
       const int n = step_rows.back().position + 1;
       candidates.clear();
-      beam_candidates_on_host(n == n_prompt ? first_suppressed : rules.suppress_tokens,
-                              search.n_candidates(), candidates);
+      if (on_device) {
+        beam_candidates_on_device(k, candidates);
+      } else {
+        beam_candidates_on_host(n == n_prompt ? first_suppressed : rules.suppress_tokens, k,
+                                candidates);
+      }
       const BeamStep& step = search.step(candidates);
       result.step_s.push_back(elapsed());
       if (step.done) break;

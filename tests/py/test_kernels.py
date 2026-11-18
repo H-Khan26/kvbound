@@ -118,6 +118,29 @@ def test_argmax(kvb, gen, n_cols):
     assert kvb.argmax(logits.numpy()).tolist() == expected
 
 
+# Shorter than one chunk of the kernel, exactly one, one and a bit, and Whisper's vocabulary.
+@pytest.mark.parametrize("vocab", [7, 2048, 2049, 51865])
+@pytest.mark.parametrize("k", [1, 6, 9])
+def test_beam_candidates_equal_the_hosts(kvb, gen, vocab, k):
+    """The device ranking against append_beam_candidates() on the host, bit for bit: ties
+    (logits on a grid of 0.25), suppressed tokens, the begin list in the row at begin_pos, and a
+    row with fewer finite logits than k, which is padded."""
+    rows = 5
+    logits = torch.round(torch.randn(rows, vocab, generator=gen) * 12.0) / 4.0
+    logits[3, torch.randperm(vocab, generator=gen)[: vocab - 4]] = float("-inf")
+    positions = np.array([2, 1, 1, 3, 1], dtype=np.int32)
+    picks = torch.randperm(vocab, generator=gen).tolist()
+    always, begin = picks[: vocab // 10 + 1], picks[vocab // 10 + 1 : vocab // 5 + 2]
+    args = (logits.numpy(), positions, always, begin, 1, k)
+    tokens, log_probs = kvb.beam_candidates(*args)
+    host_tokens, host_log_probs = kvb.beam_candidates(*args, on_host=True)
+    assert np.array_equal(tokens, host_tokens)
+    assert np.array_equal(log_probs, host_log_probs)
+    assert not np.isin(tokens, always).any() and not np.isin(tokens[[1, 2, 4]], begin).any()
+    if k > 4:
+        assert (tokens[3, 4:] == -1).all() and np.isneginf(log_probs[3, 4:]).all()
+
+
 @pytest.mark.parametrize(("n_out", "n_in"), [(8, 8), (256, 2048), (5632, 2048), (100, 37)])
 @pytest.mark.parametrize("rows", [1, 5])
 def test_linear(kvb, gen, rows, n_out, n_in):

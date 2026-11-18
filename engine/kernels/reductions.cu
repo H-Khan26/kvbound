@@ -1,4 +1,5 @@
-// Kernels with one block per row that reduce across the row: RMSNorm, LayerNorm and argmax.
+// Kernels that reduce across a row: RMSNorm, LayerNorm and argmax with one block per row, and
+// the candidates of beam search over a grid of row chunks.
 
 #include <math_constants.h>
 
@@ -245,7 +246,204 @@ __global__ void argmax_kernel(const float* logits, std::int32_t* out, int n_cols
   }
 }
 
+// --- Beam candidates -------------------------------------------------------------------------
+//
+// Four passes over grids of (chunk, row): each chunk's maximum; each chunk's sum of
+// exp(x - row max) in FP64; each chunk's k best log-probabilities; then each row's k best of its
+// chunks' candidates. A pass reads only what earlier launches wrote, so the order of every sum is
+// fixed by the launch shape alone.
+
+// Logits of one row one block covers in the first three passes: kBeamPerThread per thread.
+constexpr int kBeamPerThread = 8;
+constexpr int kBeamChunk = kBeamPerThread * kBlockThreads;
+
+int beam_chunks(int vocab) { return (vocab + kBeamChunk - 1) / kBeamChunk; }
+
+// A candidate ranked as append_beam_candidates() ranks them: log-probability descending, then
+// token ascending. {-inf, INT_MAX} stands for no candidate and is behind every finite one.
+struct Ranked {
+  float log_prob;
+  int token;
+};
+
+__device__ inline bool ahead(Ranked a, Ranked b) {
+  return a.log_prob > b.log_prob || (a.log_prob == b.log_prob && a.token < b.token);
+}
+
+// Whether c may be picked after `last`: it is finite and behind `last`, or nothing is picked yet.
+__device__ inline bool eligible(Ranked c, Ranked last, bool first) {
+  return isfinite(c.log_prob) && (first || ahead(last, c));
+}
+
+// The best of every thread's v, returned to every thread. scratch holds one Ranked per warp.
+__device__ Ranked block_best(Ranked v, Ranked* scratch) {
+  for (int offset = kWarpSize / 2; offset > 0; offset >>= 1) {
+    const Ranked other{__shfl_xor_sync(0xffffffffu, v.log_prob, offset),
+                       __shfl_xor_sync(0xffffffffu, v.token, offset)};
+    if (ahead(other, v)) v = other;
+  }
+  if ((threadIdx.x & (kWarpSize - 1)) == 0) scratch[threadIdx.x / kWarpSize] = v;
+  __syncthreads();
+  Ranked best = scratch[0];
+  for (int warp = 1; warp < kBlockWarps; ++warp) {
+    if (ahead(scratch[warp], best)) best = scratch[warp];
+  }
+  __syncthreads();  // every thread has read scratch before the next call writes it
+  return best;
+}
+
+// Sum over the block in FP64, returned to every thread, in an order fixed by the thread layout.
+__device__ double block_sum_f64(double v, double* scratch) {
+  for (int offset = kWarpSize / 2; offset > 0; offset >>= 1) {
+    v += __shfl_xor_sync(0xffffffffu, v, offset);
+  }
+  if ((threadIdx.x & (kWarpSize - 1)) == 0) scratch[threadIdx.x / kWarpSize] = v;
+  __syncthreads();
+  double total = 0.0;
+  for (int warp = 0; warp < kBlockWarps; ++warp) total += scratch[warp];
+  __syncthreads();
+  return total;
+}
+
+// chunk_max[row * n_chunks + chunk] = the largest logit of the chunk.
+__global__ void beam_max_kernel(const float* logits, int vocab, float* chunk_max) {
+  __shared__ float warp_max[kBlockWarps];
+  const int chunk = blockIdx.x, n_chunks = gridDim.x, row = blockIdx.y;
+  const float* x = logits + static_cast<std::size_t>(row) * vocab;
+  float best = -CUDART_INF_F;
+  for (int i = 0; i < kBeamPerThread; ++i) {
+    const int token = chunk * kBeamChunk + i * kBlockThreads + threadIdx.x;
+    if (token < vocab) best = fmaxf(best, x[token]);
+  }
+  for (int offset = kWarpSize / 2; offset > 0; offset >>= 1) {
+    best = fmaxf(best, __shfl_xor_sync(0xffffffffu, best, offset));
+  }
+  if ((threadIdx.x & (kWarpSize - 1)) == 0) warp_max[threadIdx.x / kWarpSize] = best;
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    for (int warp = 1; warp < kBlockWarps; ++warp) best = fmaxf(best, warp_max[warp]);
+    chunk_max[row * n_chunks + chunk] = best;
+  }
+}
+
+// The row's largest logit, from its chunks' maxima.
+__device__ inline float row_max(const float* chunk_max, int row, int n_chunks) {
+  float top = -CUDART_INF_F;
+  for (int c = 0; c < n_chunks; ++c) top = fmaxf(top, chunk_max[row * n_chunks + c]);
+  return top;
+}
+
+// chunk_sum[row * n_chunks + chunk] = the chunk's sum of exp(x - row max), in FP64.
+__global__ void beam_sum_kernel(const float* logits, int vocab, const float* chunk_max,
+                                double* chunk_sum) {
+  __shared__ double warp_sum[kBlockWarps];
+  __shared__ float shared_top;
+  const int chunk = blockIdx.x, n_chunks = gridDim.x, row = blockIdx.y;
+  const float* x = logits + static_cast<std::size_t>(row) * vocab;
+  if (threadIdx.x == 0) shared_top = row_max(chunk_max, row, n_chunks);
+  __syncthreads();
+  const double top = shared_top;
+  double total = 0.0;
+  for (int i = 0; i < kBeamPerThread; ++i) {
+    const int token = chunk * kBeamChunk + i * kBlockThreads + threadIdx.x;
+    if (token < vocab) total += exp(static_cast<double>(x[token]) - top);
+  }
+  total = block_sum_f64(total, warp_sum);
+  if (threadIdx.x == 0) chunk_sum[row * n_chunks + chunk] = total;
+}
+
+// chunk_best[(row * n_chunks + chunk) * k + r] = the chunk's r-th best candidate, or no
+// candidate when it has fewer than r + 1.
+__global__ void beam_chunk_best_kernel(const float* logits, const StepRow* rows,
+                                       const std::int32_t* out_rows, int vocab,
+                                       const std::uint8_t* suppress, int begin_pos, int k,
+                                       const float* chunk_max, const double* chunk_sum,
+                                       Ranked* chunk_best) {
+  __shared__ Ranked warp_best[kBlockWarps];
+  __shared__ double shared_log_total;
+  const int chunk = blockIdx.x, n_chunks = gridDim.x, row = blockIdx.y;
+  const float* x = logits + static_cast<std::size_t>(row) * vocab;
+  if (threadIdx.x == 0) {
+    double total = 0.0;
+    for (int c = 0; c < n_chunks; ++c) total += chunk_sum[row * n_chunks + c];
+    shared_log_total = static_cast<double>(row_max(chunk_max, row, n_chunks)) + log(total);
+  }
+  __syncthreads();
+  const double log_total = shared_log_total;
+  const bool at_begin = rows[out_rows[row]].position == begin_pos;
+  const std::uint8_t skip = kSuppressAlways | (at_begin ? kSuppressBegin : 0);
+
+  Ranked mine[kBeamPerThread];
+  for (int i = 0; i < kBeamPerThread; ++i) {
+    const int token = chunk * kBeamChunk + i * kBlockThreads + threadIdx.x;
+    mine[i] = {-CUDART_INF_F, INT_MAX};
+    if (token < vocab && (suppress[token] & skip) == 0) {
+      mine[i] = {static_cast<float>(static_cast<double>(x[token]) - log_total), token};
+    }
+  }
+  Ranked* out = chunk_best + static_cast<std::size_t>(row * n_chunks + chunk) * k;
+  Ranked last{-CUDART_INF_F, INT_MAX};
+  for (int r = 0; r < k; ++r) {
+    Ranked best{-CUDART_INF_F, INT_MAX};
+    for (int i = 0; i < kBeamPerThread; ++i) {
+      if (eligible(mine[i], last, r == 0) && ahead(mine[i], best)) best = mine[i];
+    }
+    best = block_best(best, warp_best);
+    if (threadIdx.x == 0) out[r] = best;
+    last = best;
+  }
+}
+
+// out[row * k + r] = the row's r-th best candidate over its chunks', padded with {-1, -inf}.
+__global__ void beam_merge_kernel(const Ranked* chunk_best, int n_chunks, int k,
+                                  BeamCandidate* out) {
+  __shared__ Ranked warp_best[kBlockWarps];
+  const int row = blockIdx.x;
+  const Ranked* candidates = chunk_best + static_cast<std::size_t>(row) * n_chunks * k;
+  const int n = n_chunks * k;
+  Ranked last{-CUDART_INF_F, INT_MAX};
+  for (int r = 0; r < k; ++r) {
+    Ranked best{-CUDART_INF_F, INT_MAX};
+    for (int i = threadIdx.x; i < n; i += kBlockThreads) {
+      if (eligible(candidates[i], last, r == 0) && ahead(candidates[i], best)) best = candidates[i];
+    }
+    best = block_best(best, warp_best);
+    if (threadIdx.x == 0) {
+      out[row * k + r] = isfinite(best.log_prob) ? BeamCandidate{best.token, best.log_prob}
+                                                 : BeamCandidate{-1, -CUDART_INF_F};
+    }
+    last = best;
+  }
+}
+
 }  // namespace
+
+std::size_t beam_candidates_scratch_bytes(int n_out, int vocab, int k) {
+  const std::size_t n = static_cast<std::size_t>(n_out) * beam_chunks(vocab);
+  return n * (sizeof(double) + sizeof(float) + static_cast<std::size_t>(k) * sizeof(Ranked));
+}
+
+void beam_candidates(const float* logits, const StepRow* rows, const std::int32_t* out_rows,
+                     int n_out, int vocab, const std::uint8_t* suppress, int begin_pos, int k,
+                     void* scratch, BeamCandidate* out, cudaStream_t stream) {
+  if (n_out <= 0 || vocab <= 0 || k <= 0) throw Error("beam candidates need rows, logits and k");
+  const int n_chunks = beam_chunks(vocab);
+  const std::size_t n = static_cast<std::size_t>(n_out) * n_chunks;
+  // The FP64 sums first, so every part stays aligned to its element.
+  double* chunk_sum = static_cast<double*>(scratch);
+  float* chunk_max = reinterpret_cast<float*>(chunk_sum + n);
+  Ranked* chunk_best = reinterpret_cast<Ranked*>(chunk_max + n);
+  const dim3 grid(n_chunks, n_out);
+  beam_max_kernel<<<grid, kBlockThreads, 0, stream>>>(logits, vocab, chunk_max);
+  KVB_CUDA(cudaGetLastError());
+  beam_sum_kernel<<<grid, kBlockThreads, 0, stream>>>(logits, vocab, chunk_max, chunk_sum);
+  KVB_CUDA(cudaGetLastError());
+  beam_chunk_best_kernel<<<grid, kBlockThreads, 0, stream>>>(
+      logits, rows, out_rows, vocab, suppress, begin_pos, k, chunk_max, chunk_sum, chunk_best);
+  KVB_CUDA(cudaGetLastError());
+  beam_merge_kernel<<<n_out, kBlockThreads, 0, stream>>>(chunk_best, n_chunks, k, out);
+  KVB_CUDA(cudaGetLastError());
+}
 
 void rms_norm(const f16* x, const f16* weight, f16* out, int n_rows, int dim, float eps,
               cudaStream_t stream) {

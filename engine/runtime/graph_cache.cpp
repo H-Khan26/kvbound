@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <string>
 
 #include "kvbound/cuda/device.h"
 
@@ -46,12 +47,15 @@ void GraphCache::run(std::int64_t key, cudaStream_t stream, const std::function<
 void GraphCache::step(bool graphs, int n_tokens, int n_out, int n_tiles, int max_rows, bool hooked,
                       cudaStream_t stream, const std::function<void(bool graphed)>& launch,
                       int variant) {
-  if (variant < 0 || variant > 3) throw Error("a graph variant is between 0 and 3");
+  if (variant < 0 || variant >= kMaxGraphVariants) {
+    throw Error("a graph variant is between 0 and " + std::to_string(kMaxGraphVariants - 1));
+  }
   // Kernel arguments are frozen in a graph, so it serves only steps whose launches depend on
   // nothing but the row count: never the tiled attention, never a hook's synchronization.
-  if (graphs && !hooked && n_tiles == 0 && n_out == n_tokens && n_tokens <= max_rows) {
-    const std::int64_t key = static_cast<std::int64_t>(variant) << 61 |
-                             static_cast<std::int64_t>(n_tokens) << 32 | n_out;
+  if (graphs && !hooked && n_tiles == 0 && n_out == n_tokens && n_tokens <= max_rows &&
+      n_tokens < kMaxGraphRows) {
+    const std::int64_t key = static_cast<std::int64_t>(variant) << 40 |
+                             static_cast<std::int64_t>(n_tokens) << 20 | n_out;
     run(key, stream, [&] { launch(true); });
     return;
   }

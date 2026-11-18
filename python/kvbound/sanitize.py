@@ -15,8 +15,9 @@ unfused programs, kvbound's kernels and cuBLAS, INT8 caches, and INT8 and INT4 c
 weights on each of their three paths. It then transcribes the clips greedily through the
 scheduler: a static batch eager and with CUDA graphs, and continuous batching in a Self pool small
 enough to preempt and re-encode a sequence and to evict a graph. Last, it transcribes them by beam
-search over 4-token blocks: forks sharing blocks with copy-on-write under CUDA graphs, and forks
-copying every block of an INT8 Self cache, scales included, eagerly.
+search over 4-token blocks: forks sharing blocks with copy-on-write under CUDA graphs, forks
+copying every block of an INT8 Self cache, scales included, eagerly, both with each beam's
+candidates ranked on the device, and once more with them ranked on the host.
 
 Usage: python -m kvbound.sanitize [--family llama|whisper]
 """
@@ -127,6 +128,7 @@ def whisper_cases(preset: str, tmp: Path) -> list[Case]:
             fp16,
             [*beam, "--graph", "0", "--beam-share-blocks", "0", "--kv-dtype", "int8"],
         ),
+        ("whisper beam, host candidates", fp16, [*beam, "--beam-topk-device", "0"]),
     ]
     for scheme in ("int8_pc", "int4_g"):
         quantized = tmp / f"whisper.{scheme}"

@@ -1,5 +1,6 @@
 """Beam-search transcription through the speech engine: against the reference beam search and its
-committed traces on the fixture, with blocks shared or private, and against Hugging Face
+committed traces on the fixture, with blocks shared or private and candidates ranked on the device
+or the host, and against Hugging Face
 `generate(num_beams=5)` on a real checkpoint."""
 
 import functools
@@ -217,6 +218,27 @@ def test_private_blocks_give_the_same_search(kvb, options):
         assert_blocks_returned(engine)
 
 
+@pytest.mark.parametrize(
+    "options",
+    [{}, {"kv_block_size": 4, "kv_dtype": "int8", "graph": False}],
+    ids=lambda o: ",".join(f"{k}={v}" for k, v in o.items()) or "default",
+)
+def test_candidates_on_the_device_give_the_same_search(kvb, options):
+    """Candidates ranked on the device against the logits ranked on the host: the same ids,
+    scores and hypotheses, bit for bit, with the ranking inside the step's graph when it has one."""
+    device = kvb.AsrEngine(str(WHISPER_FIXTURE_DIR), max_seqs=5, **options)
+    host = kvb.AsrEngine(str(WHISPER_FIXTURE_DIR), max_seqs=5, beam_topk_device=False, **options)
+    assert device.config()["beam_topk_device"] and not host.config()["beam_topk_device"]
+    for name in traces():
+        a, b = run_case(device, name), run_case(host, name)
+        for key in ("ids", "score", "hypotheses", "steps", "block_copies"):
+            assert a[key] == b[key], (name, key)
+    graphed = options.get("graph", True)
+    for engine in (device, host):
+        assert (engine.graph_stats()["replayed"] > 0) == graphed
+        assert_blocks_returned(engine)
+
+
 def test_one_beam_is_greedy(kvb):
     """num_beams 1 returns the greedy ids, and beam and greedy runs share an engine."""
     manifest, tensors = golden.load(WHISPER_FIXTURE_DIR)
@@ -301,6 +323,12 @@ def test_real_model_beam_equals_hf_or_near_tie(kvb):
     recognizer = asr.Recognizer(spec.checkpoint_dir, max_seqs=5)
     ours = [recognizer.transcribe_beam(w.numpy(), 5)[0] for w in windows]
     assert_blocks_returned(recognizer.engine)
+    # Candidates ranked on the host from copied logits choose the same tokens.
+    on_host = asr.Recognizer(spec.checkpoint_dir, max_seqs=5, beam_topk_device=False)
+    for window, mine in zip(windows, ours, strict=True):
+        host_t = on_host.transcribe_beam(window.numpy(), 5)[0]
+        assert (host_t.tokens, host_t.score) == (mine.tokens, mine.score)
+    del on_host
 
     model = load_whisper(spec.checkpoint_dir)
     exact, ties = 0, []
