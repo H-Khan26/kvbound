@@ -39,8 +39,8 @@ Six changes, each an engine option so that its before and after ran back to back
 
 | RTX 3060 Ti | Phase 5 paths | Phase 6 |
 | --- | --- | --- |
-| TinyLlama decode, batch 1, FP16 / INT8 / INT4 | 162 / 293 / 450 tok/s | **178 / 315 / 477 tok/s** (89% / 79% / 62% of the ceiling) |
-| Llama 3.2 decode, batch 1, FP16 / INT8 / INT4 | 138 / 253 / 414 tok/s | **146 / 266 / 441 tok/s** (87% / 80% / 69%) |
+| TinyLlama decode, batch 1, FP16 / INT8 / INT4 | 162 / 293 / 449 tok/s | **178 / 314 / 494 tok/s** (89% / 79% / 64% of the ceiling) |
+| Llama 3.2 decode, batch 1, FP16 / INT8 / INT4 | 142 / 269 / 437 tok/s | **152 / 281 / 469 tok/s** (91% / 84% / 73%) |
 | TinyLlama / Llama 3.2 time to first token, 1,024-token prompt | 205.4 / 167.0 ms | **76.4 / 72.4 ms** |
 | TinyLlama serving 96 requests, FP16 / INT8 / INT4 | 1,463 / 979 / 1,013 tok/s | **1,740 / 2,163 / 2,219 tok/s** |
 | Llama 3.2 serving 96 requests, FP16 / INT8 / INT4 | 1,554 / 937 / 1,002 tok/s | **1,827 / 2,217 / 2,342 tok/s** |
@@ -53,24 +53,29 @@ at the 59 TFLOPS FP16 peak with FP32 accumulation. On the RTX 3060 Ti that peak 
 60.7 of TinyLlama's 76.4 ms. Per-kernel Nsight Compute counters of one step (`make step-counters`) are in
 `results/profiles/*-counters-*`.
 
-Each table is one set of back-to-back runs, so a row's before and after are comparable, but the RTX 3060 Ti shares
-its desktop and reads about 6% apart from run to run. Its Llama 3.2 pair ran about 5% slow on both sides, and one
-TinyLlama INT4 run was disturbed; later runs of the same state read 154 to 155 / 284 / 472 tok/s for Llama 3.2 decode
-and 504 tok/s for TinyLlama INT4, and those later runs are what the sections below quote.
+Each table is one set of back-to-back runs. The RTX 3060 Ti shares its desktop, and other programs take the GPU
+during some steps of a run, so its decode rows, here and in the sections below, are read by the median step of a run
+and not by the mean step. On the RTX 4070 the two readings agree within 0.5%, and its table is as recorded. On the
+RTX 3060 Ti they differ by 3.1% to 6.3% in 14 of the 34 Phase 6 decode runs. In the pair those are the TinyLlama INT4
+"after" run, which reads 477 tok/s as recorded and 494 by the median step, and all six Llama 3.2 runs, which read
+138 / 253 / 414 and 146 / 266 / 441 tok/s as recorded. Time to first token and serving have no second reading and
+are as recorded; the Llama 3.2 pair's 72.4 ms is 70.3 ms in a later undisturbed run.
 
 **The two cards.** The RTX 4070 has 1.14 times the memory bandwidth of the RTX 3060 Ti (475 against 415 GB/s), 1.81
 times its tensor-core peak for FP16 products with FP32 accumulation (59.1 against 32.7 TFLOPS), and a 36 MiB L2
 against 3 MiB.
 
-- **Memory bandwidth** sets FP16 decode, which is 1.18 to 1.26 times faster on the 4070: the FP16 GEMV reads at 95%
-  and 97% of the two ceilings. The gap widens as the weights shrink, to between 1.32 and 1.41 times in INT4, because
-  the rest of the step follows the SM clock (1.41 times higher on the 4070) and the INT4 kernel reads at only 66% of
-  the 3060 Ti's bandwidth, against 85% on the 4070.
-- **Tensor-core throughput** sets the 1,024-token prompt (1.98 and 1.83 times faster on the 4070) and most of serving
+- **Memory bandwidth** sets the floor of a decode step, the weights read once: 5.00 ms on the 3060 Ti and 4.37 ms on
+  the 4070 for TinyLlama in FP16, where the FP16 GEMV reads at 95% and 97% of the two ceilings. The rest of the step
+  is 0.56 to 0.73 ms on the 3060 Ti and 0.24 to 0.36 ms on the 4070 at every weight precision, so the 4070 is 1.19
+  to 1.21 times faster in FP16 and 1.32 to 1.37 times in INT4. Why the rest is twice as long is not established: the
+  SM clock (1.41 times higher on the 4070) is a candidate.
+- **Tensor-core throughput** sets the 1,024-token prompt (1.77 to 1.98 times faster on the 4070) and most of serving
   (1.36 to 1.78 times).
-- **L2 size** does not show in decode. In a 1,024-row step it shows as DRAM traffic: the 3060 Ti moves 8.7 times the
-  bytes of the 4070 through the INT4 tensor-core products, and its norms, whose writes also cross DRAM there, take
-  1.92 times as long in the profiles. No record isolates what the extra traffic costs the products.
+- **L2 size** does not show in decode. In a 1,024-row step the two cards' counters differ in DRAM traffic: the INT4
+  tensor-core products read 6.9 times and write 15.7 times the bytes on the 3060 Ti that they do on the 4070. The
+  writes are 5.1 times the products' output, which points at kvbound's own kernel and not only at cache size. The
+  mechanism has not been profiled, and no record says what the traffic costs.
 - **FP8** tensor cores exist only on the 4070. No FP8 path is built, so they explain none of this.
 
 The evidence for each line is in the [log](docs/optimization-log.md#the-two-cards-compared).
@@ -84,9 +89,9 @@ The evidence for each line is in the [log](docs/optimization-log.md#the-two-card
 | Dependent-load latency, L1 / L2 / DRAM | about 21 / 135 / 312 ns | `kvb-pointer_chase` |
 | GEMM peak, FP16 with FP16 / FP32 accumulate; INT8 | about 58 / 33 TFLOPS; 115 TOPS | `kvb-gemm_peak` (cuBLASLt) |
 | Decode ceiling, batch 1, FP16 | about 200 tokens/s (weights 2.07 GB read once per token) | `python -m kvbound.perfmodel` |
-| **kvbound decode, batch 1, FP16** | **168 tokens/s, 84% of the ceiling** (5.96 ms per token; 158 tokens/s without CUDA graphs) | `python -m kvbound.bench` (`make bench`) |
+| **kvbound decode, batch 1, FP16** | **175 tokens/s, 88% of the ceiling** (5.70 ms per token; 167 tokens/s without CUDA graphs) | `python -m kvbound.bench` (`make bench`) |
 | kvbound time to first token | 11 ms for a 128-token prompt, 76 ms for 1,024 tokens | `python -m kvbound.bench` (`make bench`) |
-| **kvbound decode, batch 1, INT8 / INT4 weights** | **315 / 504 tokens/s**, 79% / 65% of their ceilings | `python -m kvbound.bench --weights ...` (`make precision`) |
+| **kvbound decode, batch 1, INT8 / INT4 weights** | **314 / 507 tokens/s**, 79% / 66% of their ceilings | `python -m kvbound.bench --weights ...` (`make precision`) |
 | kvbound static batching, 8 slots | 955 tokens/s on equal-length requests, 451 on long-tailed lengths (173 to 175 one at a time) | `python -m kvbound.serve` |
 | **kvbound paged KV, continuous batching, same pool** | **1776 tokens/s on equal-length requests, 1469 on long-tailed lengths** | `python -m kvbound.serve --policy continuous` |
 | Hugging Face Transformers decode, batch 1 | 17 to 33 tokens/s, depending on where the unlocked GPU clock settles | `python -m kvbound.baselines.hf` |
@@ -96,14 +101,16 @@ stays within the FP16 limits in the golden manifest (`make test-real`).
 
 Where an FP16 decode step's kernel time goes (Nsight Compute counters of one step, `results/profiles/*-counters-*`):
 90% in kvbound's GEMV streaming the weights, 5% in attention, 5% in the small kernels (norms, RoPE with the cache
-write, SwiGLU). The step is 204 kernel launches. Replayed from a CUDA graph it takes 5.96 ms; launched one by one,
-6.32 ms.
+write, SwiGLU). The step is 204 kernel launches. Replayed from a CUDA graph it takes 5.70 ms; launched one by one,
+6.00 ms.
 
 These runs come from a shared Windows desktop with unlocked GPU clocks. The engine's decode, time-to-first-token and
 serving numbers in this section and the ones below are from the Phase 6 records of this card (`make bench`,
 `make precision`, `make serve` and `make serve-load` at one commit); the kernel microbenchmarks keep the records of
-the phase that made them. Runs of one state differ by about 6%: FP16 decode reads 168 tokens/s in `make bench`, 170
-in `make precision` and 178 in the Phase 6 pair above. Through the Phase 5 paths the same request reads 162 tokens/s.
+the phase that made them. Decode is read by the median step of each run, as explained under the Phase 6 tables. By
+that reading FP16 decode is 175 tokens/s in `make bench`, 176 in `make precision` and 178 in the Phase 6 pair, 1.3%
+apart. By the mean step the same three runs read 168, 170 and 178 tokens/s, because the first two were disturbed.
+Through the Phase 5 paths the same request reads 162 tokens/s.
 
 ### What the static memory design costs
 
@@ -186,35 +193,37 @@ The last two columns serve 96 `fixed` requests at once in a KV pool of the same 
 
 | TinyLlama 1.1B | Perplexity | Weights on device | KV bytes per token | Decode tokens/s | Of its ceiling | Sequences at once | Tokens/s under load |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| FP16 weights, FP16 KV | 8.87 | 2,098 MiB | 22,528 | 170 | 85% | 30 | 1746 |
+| FP16 weights, FP16 KV | 8.87 | 2,098 MiB | 22,528 | 176 | 88% | 30 | 1746 |
 | FP16 weights, INT8 KV | 8.87 | 2,098 MiB | 11,616 | 177 | 88% | 58 | 2168 |
-| INT8 weights, FP16 KV | 8.87 | 1,050 MiB | 22,528 | 315 | 79% | 30 | 2270 |
-| INT8 weights, INT8 KV | 8.87 | 1,050 MiB | 11,616 | 314 | 79% | 58 | 2370 |
-| INT4 weights, FP16 KV | 9.96 | 541 MiB | 22,528 | 504 | 65% | 30 | 2356 |
-| INT4 weights, INT8 KV | 9.96 | 541 MiB | 11,616 | 496 | 64% | 58 | 2440 |
+| INT8 weights, FP16 KV | 8.87 | 1,050 MiB | 22,528 | 314 | 79% | 30 | 2270 |
+| INT8 weights, INT8 KV | 8.87 | 1,050 MiB | 11,616 | 313 | 78% | 58 | 2370 |
+| INT4 weights, FP16 KV | 9.96 | 541 MiB | 22,528 | 507 | 66% | 30 | 2356 |
+| INT4 weights, INT8 KV | 9.96 | 541 MiB | 11,616 | 499 | 65% | 58 | 2440 |
 
 ![Precision](reports/rtx3060ti/precision.png)
 
+The decode columns are by the median step. The figure plots the same records by their mean step, which reads 170 for
+the first bar, whose run was disturbed, and 315, 314, 504 and 496 for the last four.
+
 Read against the roofline:
 
-- **Decode speed follows the bytes.** A decode step is the weights crossing the memory bus once plus 0.7 to 0.9 ms
-  of everything else. The floor set by the weights shrinks from 5.0 to 2.5 to 1.3 ms and the measured step from 5.9
-  to 3.2 to 2.0 ms. The share of the ceiling falls because the rest does not shrink, and because on this card the
-  INT4 kernel reads the weights at 273 GB/s of the measured 415.
+- **Decode speed follows the bytes.** A decode step is the weights crossing the memory bus once plus 0.7 ms of
+  everything else, at every weight precision. The floor set by the weights shrinks from 5.0 to 2.5 to 1.3 ms and the
+  measured step from 5.7 to 3.2 to 2.0 ms. The share of the ceiling falls because the rest does not shrink.
 - **INT8 weights are free in accuracy. INT4 is not, and activation-aware scales recover half of what it loses.**
   Round-to-nearest INT4 raises perplexity by 12% on TinyLlama and 34% on Llama 3.2. With AWQ scales it is 6% and
   18% above FP16; the numbers and the method follow this list.
 - **An INT8 cache buys concurrency, not decode speed.** The same pool holds 992 blocks instead of 512, so 58
-  sequences run at once instead of 30. Under load that is 24% more tokens/s with FP16 weights and 4% more with INT8
-  or INT4 weights, and each token takes longer to arrive: with FP16 weights the median time per output token rises
-  from 12.9 to 19.2 ms. Batch-1 decode does not change: 170 and 177 tokens/s with FP16 weights are 4.5% apart,
-  inside the run-to-run spread. Attention over an INT8 cache is 10% faster at batch 8, but attention is a few
-  percent of a step and was never bound by bandwidth.
+  sequences run at once instead of 30. Under load that is 24% more tokens/s with FP16 weights, and each token takes
+  longer to arrive: the median time per output token rises from 12.9 to 19.2 ms. With INT8 or INT4 weights it makes
+  no measurable difference in these records: the INT8-cache runs read 4.4% and 3.6% higher, and all four of those
+  runs are tagged `clock_varied`. Batch-1 decode does not change: 176 and 177 tokens/s with FP16 weights. Attention
+  over an INT8 cache is 10% faster at batch 8, but attention is a few percent of a step and was never bound by
+  bandwidth.
 - **Under load, quantized weights are now faster than FP16**: 2270 and 2356 tokens/s with INT8 and INT4 weights
   against 1746, 30% and 35% more. Steps wider than 3 rows multiply the packed weights on tensor cores and read each
   matrix once at its packed size. Phase 5 found the opposite, because wide steps expanded each matrix to FP16 for
-  cuBLAS: through those paths the same workload still runs at 979 and 1,013 tokens/s against 1,463 in FP16. The four
-  serve runs with quantized weights in the table are tagged `clock_varied`.
+  cuBLAS: through those paths the same workload still runs at 979 and 1,013 tokens/s against 1,463 in FP16.
 - The engine and the dequantizing reference agree on every capture site within the FP16 limits (`make test-gpu`); the
   reference model scores 8.87 on the FP16 checkpoint where the engine scores 8.87.
 
@@ -251,7 +260,7 @@ and barely moves Llama 3.2: the clip has to be chosen by its effect on the outpu
 perplexity over FP16 on TinyLlama and 18% on Llama 3.2. Its decode and serving speed have not been recorded: the
 speed columns of the precision table are plain INT4.
 
-Known gaps after Phase 6: INT4 decode on this card stops at 62% to 65% of its ceiling; INT4 with AWQ scales still
+Known gaps after Phase 6: INT4 decode on this card stops at 64% to 66% of its ceiling; INT4 with AWQ scales still
 costs the perplexity above and has no speed record; FP16 steps of 5 to 64 rows still go through cuBLAS; decode
 attention still runs one block per head at long context; steps that mix prefill and decode run without CUDA graphs;
 prefix sharing is not built, and the FP8 KV cache is not built. The largest Phase 5 gap is closed: a 1,024-token
@@ -267,21 +276,22 @@ Greedy output matches the reference token for token on every golden prompt, and 
 | --- | --- | --- |
 | Weights read per token, FP16 | 2.47 GB | 2.07 GB |
 | Decode ceiling, batch 1, FP16 | 168 tokens/s | 200 tokens/s |
-| kvbound decode, batch 1, FP16 (`make bench`) | 154 tokens/s, 92% of the ceiling | 168 tokens/s, 84% |
-| kvbound decode without CUDA graphs | 150 tokens/s | 158 tokens/s |
+| kvbound decode, batch 1, FP16 (`make bench`) | 154 tokens/s, 92% of the ceiling | 175 tokens/s, 88% |
+| kvbound decode without CUDA graphs | 150 tokens/s | 167 tokens/s |
 | Time to first token, 128 / 1,024 prompt tokens | 11 ms / 70 ms | 11 ms / 76 ms |
 | Static batching, 8 slots: `fixed` / `uniform` / `longtail` | 883 / 658 / 397 tokens/s | 955 / 723 / 451 tokens/s |
 | Paged, continuous batching, same pool (256 / 176 MiB) | 1877 / 1628 / 1397 tokens/s | 1776 / 1593 / 1469 tokens/s |
 | Most sequences in a step, paged | 30 / 28 / 48 | 30 / 28 / 48 |
 | Perplexity, FP16 / INT8 / INT4 weights | 10.99 / 11.01 / 14.76 | 8.87 / 8.87 / 9.96 |
 | Perplexity, INT4 weights with AWQ scales | 12.91 | 9.40 |
-| Decode, batch 1, FP16 / INT8 / INT4 weights (`make precision`) | 155 / 284 / 472 tokens/s | 170 / 315 / 504 tokens/s |
+| Decode, batch 1, FP16 / INT8 / INT4 weights (`make precision`) | 154 / 283 / 474 tokens/s | 176 / 314 / 507 tokens/s |
 | Sequences at once, FP16 / INT8 KV, 96 `fixed` requests | 30 / 58 | 30 / 58 |
 | Hugging Face Transformers decode, batch 1 | 47 tokens/s | 17 to 33 tokens/s |
 
 Llama 3.2 reads 19% more weight bytes per token than TinyLlama but has 16 layers instead of 22, so a decode step is
 150 kernel launches instead of 204 and less of the step goes to work that is not reading weights: the step ends 0.5
-to 0.6 ms above its floor at every weight precision, where TinyLlama's ends 0.7 to 0.9 ms above.
+to 0.6 ms above its floor at every weight precision, where TinyLlama's ends 0.7 ms above. Decode rows are by the
+median step, like every decode figure for this card.
 
 These runs come from Windows (WDDM), where GPU clocks cannot be locked, so every record is tagged `os=windows`, and
 `clock_varied` when the clock moved during the run. Numbers meant for publication come from native Ubuntu with locked

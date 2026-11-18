@@ -234,20 +234,28 @@ resident: it is a memory stream, and the remaining gap to 475 GB/s is the smalle
 The same pairs with the same options, workloads and pool sizes, back to back at `c442759`. Each
 share is of this card's own ceiling, set by the 415 GB/s measured here (475 GB/s on the 4070).
 
+Decode on this card is read by the median step of a run (`decode_step_p50_s`), not by its mean
+step (`decode_tok_s`, which the 4070 summary above prints). Other programs on this desktop take
+the GPU during some of a run's steps. That lengthens the mean step and leaves the median where it
+was, which is why every record keeps both. On the 4070 the two readings agree within 0.5% in every
+pair record. Here they differ by more than 2% in 14 of the 34 Phase 6 decode records, by 3.1% to
+6.3%; those runs are called disturbed below. TTFT and serving throughput have no second reading
+and are as recorded.
+
 | TinyLlama 1.1B | Before | After | Change |
 | --- | --- | --- | --- |
-| FP16 decode | 162 tok/s (81% of the ceiling) | 178 tok/s (89%) | +9.6% |
-| INT8 decode | 293 tok/s (73%) | 315 tok/s (79%) | +7.2% |
-| INT4 decode | 450 tok/s (58%) | 477 tok/s (62%) | +5.8% |
+| FP16 decode | 162 tok/s (81% of the ceiling) | 178 tok/s (89%) | +9.5% |
+| INT8 decode | 293 tok/s (73%) | 314 tok/s (79%) | +7.1% |
+| INT4 decode | 449 tok/s (58%) | 494 tok/s (64%) | +10.0% |
 | TTFT, 128-token prompt (FP16 / INT4) | 14.3 / 20.3 ms | 10.5 / 11.4 ms | 1.4x / 1.8x |
 | TTFT, 1,024-token prompt (FP16) | 205.4 ms | 76.4 ms | 2.7x |
 | Serving FP16 / INT8 / INT4 | 1,463 / 979 / 1,013 tok/s | 1,740 / 2,163 / 2,219 tok/s | 1.2x / 2.2x / 2.2x |
 
 | Llama 3.2 1B | Before | After | Change |
 | --- | --- | --- | --- |
-| FP16 decode | 138 tok/s (82%) | 146 tok/s (87%) | +5.5% |
-| INT8 decode | 253 tok/s (76%) | 266 tok/s (80%) | +5.3% |
-| INT4 decode | 414 tok/s (64%) | 441 tok/s (69%) | +6.8% |
+| FP16 decode | 142 tok/s (85%) | 152 tok/s (91%) | +7.1% |
+| INT8 decode | 269 tok/s (81%) | 281 tok/s (84%) | +4.5% |
+| INT4 decode | 437 tok/s (68%) | 469 tok/s (73%) | +7.3% |
 | TTFT, 1,024-token prompt (FP16) | 167.0 ms | 72.4 ms | 2.3x |
 | Serving FP16 / INT8 / INT4 | 1,554 / 937 / 1,002 tok/s | 1,827 / 2,217 / 2,342 tok/s | 1.2x / 2.4x / 2.3x |
 
@@ -256,26 +264,29 @@ card. They are now 21% to 28% faster. The median time per output token while ser
 from 22.4 to 10.0 ms on TinyLlama and from 22.7 to 9.5 ms on Llama 3.2. Perplexity matches the
 4070's to within 0.0001: 8.8723, 9.9563, 10.9866 and 14.7617.
 
-This card sits in a shared desktop. Three things in these records come from that, not from the
-engine:
+Which runs were disturbed, and what each reading gives:
 
-- **The TinyLlama INT4 "after" run was disturbed.** Its ten iterations read 414 to 509 tok/s, a
-  standard deviation of 34.8 tok/s against 8.5 before. By the median step time, which every record
-  keeps because an occasional delayed step does not move it, the pair reads 449 and 494 tok/s
-  (+10.0%), and the `make precision` run later the same evening reads 504 tok/s. The table's
-  +5.8% is the low end of the gain, not a result that differs from the 4070's +10%.
-- **The Llama 3.2 pair ran about 5% slow on both sides.** In each of its decode runs the mean
-  step is longer than the median step (FP16 after: 146 tok/s by the mean, 152 by the median). The
-  later `make bench` and `make precision` runs read 154 to 155 / 284 / 472 tok/s where the pair's
-  "after" reads 146 / 266 / 441. Both sides of each pair were slowed alike: by the median step
-  the changes are +7.1% / +4.5% / +7.3%, against +5.5% / +5.3% / +6.8% in the table.
-- **Run-to-run spread is about 6%.** TinyLlama FP16 decode in the final state reads 178 tok/s in
-  the pair, 168 in `make bench` and 170 in `make precision`. A difference of that size between
-  two records is not a gain or a loss. Only the back-to-back pairs support a before/after claim.
+- **TinyLlama INT4 "after".** Its ten iterations read 414 to 509 tok/s by the mean step, with a
+  standard deviation of 34.8 tok/s against 8.5 before. As recorded the run is 477 tok/s and the
+  pair +5.8%. By the median step it is 494 tok/s and the pair +10.0%.
+- **All six Llama 3.2 decode runs of the pair.** Their mean steps are 3.1% to 6.3% longer than
+  their medians. As recorded they read 138 to 146, 253 to 266 and 414 to 441 tok/s (+5.5%, +5.3%,
+  +6.8%). The table has the median reading.
+- **The 1,024-token runs: TinyLlama "after" and both Llama 3.2 runs** (3.2% to 4.5% in their
+  decode phase). Their TTFT is as recorded and may be a few percent long. The later Llama 3.2
+  `make bench` run is clean and reads 70.3 ms where the pair reads 72.4 ms. TinyLlama has no clean
+  1,024-token run; its `make bench` run reads 76.3 ms and is disturbed as well.
+- **After the pairs: the TinyLlama `make bench` runs with and without CUDA graphs and the FP16
+  `make precision` decode run.** As recorded they read 168, 158 and 170 tok/s. By the median step
+  they read 175, 167 and 176.
 
-Of the records in the tables, the serving "after" runs with quantized weights are tagged
-`clock_varied` (TinyLlama INT8 and INT4, Llama 3.2 INT8): the SM clock moved between 1,815 and
-1,950 MHz during them.
+By the median step, the final-state runs of one configuration (pair, `make bench`,
+`make precision`) agree within 1.4% in FP16 and INT8 on both models, and within 2.6% in INT4. By
+the mean step the same runs are up to 6.8% apart, which is the disturbance, not the engine.
+
+The three passes of every serving run in the tables are within 1.6% of each other. Of those runs,
+the "after" runs with quantized weights are tagged `clock_varied` (TinyLlama INT8 and INT4,
+Llama 3.2 INT8): the SM clock moved between 1,815 and 1,950 MHz during them.
 
 ## Per-kernel counters, one TinyLlama step (RTX 3060 Ti)
 
@@ -295,8 +306,12 @@ parentheses. Profiles: `results/profiles/20261117T2123*` to `20261117T2125*`.
 | Prefill, 1,024 tokens | FP16 before | FP16 after | INT4 before | INT4 after |
 | --- | --- | --- | --- | --- |
 | Attention | 173,538 (22), no tensor pipe | 4,976 (22), tensor pipe 42% | 173,554 (22) | 4,889 (22), 43% |
-| Matrix products | 90,104 (199), cuBLAS, tensor pipe 41 to 48% | 88,499 (89), cuBLAS, 47 to 48% | 97,386 (353): expand 7,533 + cuBLAS | 83,428 (89), own, tensor pipe 46% |
+| Matrix products | 89,789 (198), cuBLAS, tensor pipe 41 to 48% | 88,169 (88), cuBLAS, 47 to 48% | 97,288 (352): expand 7,533 + cuBLAS | 83,330 (88), own, tensor pipe 46% |
 | Step | 270,234 (401) | 99,424 (204) | 277,521 (555) | 94,267 (204) |
+
+As in the 4070 tables, the decode row of matrix products includes the vocabulary projection, and
+the prefill row leaves out the one GEMV launch that projects the last row onto the vocabulary
+(97 to 330 µs here). The step totals include everything.
 
 What the counters show on this card:
 
@@ -308,12 +323,16 @@ What the counters show on this card:
   4070 all 155 products went through the GEMV, at 92% of that card's ceiling.
 - **kvbound's FP16 GEMV reads at 394 GB/s, 95% of the ceiling.** By matrix: q|k|v 380 GB/s,
   o_proj and down_proj 373, gate|up 411, and the vocabulary projection 417, which is the measured
-  ceiling. Product time falls 10.7% (5.6% on the 4070), because cuBLAS started further from the
-  ceiling here.
-- **The INT4 GEMV does not reach the memory ceiling on any matrix.** Fusion raises it from 241 to
-  273 GB/s (warps resident from 63% to 81%), which is 66% of the ceiling. By matrix it reads at
-  211 GB/s (q|k|v) to 348 GB/s (the vocabulary projection, 84% of the ceiling). On the 4070 the
-  same kernel reads at 401 GB/s, 85% of its ceiling, and at 98% on the vocabulary projection.
+  ceiling. Product time falls 10.7% within this card's profiles and 5.6% within the 4070's. The
+  drop comes from the GEMV and from stacking q|k|v and gate|up, which turns 155 products into 89;
+  the counters do not separate the two. cuBLAS started further from the ceiling here.
+- **In the profile, the INT4 GEMV does not reach the memory ceiling on any matrix.** Fusion
+  raises it from 241 to 273 GB/s (warps resident from 63% to 81%), which is 66% of the ceiling.
+  By matrix it reads at 211 GB/s (q|k|v) to 348 GB/s (the vocabulary projection, 84% of the
+  ceiling). In the 4070's profile the same kernel reads at 401 GB/s, 85% of its ceiling, and at
+  98% on the vocabulary projection. These are profile rates: the profiled INT4 step is 27% longer
+  than the recorded one here (see the next items), so the kernel is faster in a recorded step,
+  by an amount the records cannot give.
 - **Tiled prefill attention: 7,888 to 226 µs per layer (35x), tensor pipe 42%.** The old kernel
   was 64% of the profiled step.
 - **Prefill products run the tensor pipe at 46% to 48%**, against the FP16-accumulate rate, as on
@@ -321,11 +340,17 @@ What the counters show on this card:
   variants). Under the profiler `gemm_quantized` is the faster of the two on this card: 83,330 µs
   for the 88 INT4 products against 88,169 µs for the same 88 in FP16 through cuBLAS. On the 4070
   cuBLAS was the faster one.
-- **The profiler overstates prefill time on this card.** The profiled FP16 decode step is 5.87 ms
-  against 5.62 ms recorded (+4%; +3% on the 4070). The profiled 1,024-token prefill is 99.4 ms
-  against a recorded TTFT of 76.4 ms (+30%); on the 4070 it is 44.2 against 38.6 ms (+15%). The
-  shares and counters inside one profile stand. Ratios of prefill kernel time between the two
-  cards do not: the profiles say 2.25x, the records 1.98x.
+- **Profiled time is not recorded time, and the gap differs between the cards.** The profiled
+  FP16 decode step is 5.87 ms against 5.63 ms recorded (+4%, and +4% on the 4070). The profiled
+  INT4 decode step is 2.57 ms against 2.03 ms (+27%; +16% on the 4070). The profiled 1,024-token
+  prefill is 99.4 ms against a recorded TTFT of 76.4 ms (+30%; +15% on the 4070, 44.2 against
+  38.6 ms). So a time in a profile is compared below only with other times in the same profile.
+  The one exception is the FP16 decode step, where both profiles are within 4% of their records.
+- **The clock during profiling is not recorded.** `step_counters` does not set Nsight Compute's
+  `--clock-control` option, so the tool's default applies, and its summaries hold no SM clock.
+  Whether a profile ran at the clock of the recorded runs is unknown. The counters it collects
+  are DRAM bytes, tensor-pipe activity, resident warps and registers per thread: no L2 or
+  local-memory counters.
 
 ## The two cards compared
 
@@ -339,93 +364,114 @@ What Phase 1 measured on each card (`microbench` records under `results/raw/`):
 | GEMM peak, FP8 E4M3 | not supported | 118.3 TFLOPS | |
 | L2 cache, as the driver reports it | 3 MiB | 36 MiB | 12 |
 | Dependent-load latency at a 4 MiB working set | 308 ns | 141 ns | |
-| SMs; SM clock under load | 38; about 1,980 MHz | 46; about 2,790 MHz | 1.21; 1.41 |
+| SMs | 38 | 46 | 1.21 |
+| SM clock under load, NVML samples of the decode pair runs | about 1,980 MHz | about 2,790 MHz | 1.41 |
 
 The 3 MiB is what the device query in the bandwidth sweep returns; `configs/devices/rtx3060ti.toml`
 lists the spec sheet's 4 MB.
 
-What Phase 6 measured, final state, from each card's back-to-back pair:
+What Phase 6 measured, final state, from each card's back-to-back pair. Decode is by the median
+step on both cards, so a 4070 figure here can differ by a unit from its summary above, which
+prints the mean step. TTFT and serving are as recorded.
 
 | Phase 6 paths | RTX 3060 Ti | RTX 4070 | 4070 / 3060 Ti |
 | --- | --- | --- | --- |
-| TinyLlama decode, FP16 / INT8 / INT4 | 178 / 315 / 477 tok/s | 212 / 391 / 673 tok/s | 1.19 / 1.24 / 1.41 |
-| Llama 3.2 decode, FP16 / INT8 / INT4 | 146 / 266 / 441 tok/s | 183 / 348 / 624 tok/s | 1.26 / 1.31 / 1.41 |
-| TinyLlama share of the ceiling | 89% / 79% / 62% | 92% / 86% / 76% | |
-| Llama 3.2 share of the ceiling | 87% / 80% / 69% | 96% / 91% / 85% | |
+| TinyLlama decode, FP16 / INT8 / INT4 | 178 / 314 / 494 tok/s | 212 / 392 / 674 tok/s | 1.19 / 1.25 / 1.37 |
+| Llama 3.2 decode, FP16 / INT8 / INT4 | 152 / 281 / 469 tok/s | 183 / 349 / 625 tok/s | 1.20 / 1.24 / 1.33 |
+| TinyLlama share of the ceiling | 89% / 79% / 64% | 93% / 86% / 77% | |
+| Llama 3.2 share of the ceiling | 91% / 84% / 73% | 96% / 91% / 85% | |
+| TinyLlama decode step above its memory floor | 0.63 / 0.68 / 0.73 ms | 0.34 / 0.36 / 0.35 ms | |
+| Llama 3.2 decode step above its memory floor | 0.59 / 0.56 / 0.58 ms | 0.24 / 0.25 / 0.24 ms | |
 | TTFT, 1,024-token prompt, TinyLlama / Llama 3.2 | 76.4 / 72.4 ms | 38.6 / 39.6 ms | 1.98 / 1.83 |
 | TinyLlama serving, FP16 / INT8 / INT4 | 1,740 / 2,163 / 2,219 tok/s | 2,824 / 3,623 / 3,943 tok/s | 1.62 / 1.67 / 1.78 |
 | Llama 3.2 serving, FP16 / INT8 / INT4 | 1,827 / 2,217 / 2,342 tok/s | 2,608 / 3,562 / 4,017 tok/s | 1.43 / 1.61 / 1.72 |
 
-The 3060 Ti's later `make precision` records differ from its pair by up to 7% (see the notes under
-its summary). Taking either for that card, the decode ratios span 1.18 to 1.26 in FP16, 1.23 to
-1.31 in INT8 and 1.32 to 1.41 in INT4, and the serving ratios 1.36 to 1.78.
+Over all of the 3060 Ti's final-state records (the pair, `make bench`, `make precision`) the
+decode ratios span 1.19 to 1.21 in FP16, 1.23 to 1.25 in INT8 and 1.32 to 1.37 in INT4. The
+Llama 3.2 TTFT ratio is 1.77 with that card's clean `make bench` run. The serving ratios span
+1.36 to 1.78 with its `make precision` runs included.
 
-### Memory bandwidth: FP16 decode, and less of the step as the weights shrink
+### Memory bandwidth: the floor of a decode step, not the part above it
 
-- The FP16 products are a memory stream on both cards. `linear_f16` reads at 394 GB/s here and
-  460 GB/s on the 4070, 95% and 97% of each ceiling, so its time differs by 1.17x where the
-  bandwidths differ by 1.14x.
-- The rest of the step does not follow memory. The 115 launches that are not products take
-  593 µs here and 388 µs on the 4070 (1.53x), and each small kernel is 1.42 to 1.58 times slower.
-  That is close to the ratio of the SM clocks (1.41), not to that of the bandwidths: at one row
-  these kernels read 0.03 to 0.19 MB per launch, far too little for bandwidth to matter.
-- So TinyLlama's FP16 step differs by 1.20x in the profiles and 1.19x in the pair records, and
-  the ratio grows as the weights shrink and the fixed part becomes a larger share: 1.23x to 1.31x
-  in INT8 and 1.32x to 1.41x in INT4 over both models.
-- In INT4 the product kernel itself is off the memory bound on this card: 273 of 415 GB/s (66%),
-  against 401 of 475 (85%) on the 4070, 1.48x in time. Resident warps are about the same (81% and
-  84%), so occupancy is not what separates the cards. The counters say that memory is not the
-  limit here. They do not say which instruction resource is: 1.48x lies between the clock ratio
-  (1.41) and the ratio of SMs times clock (1.71).
-- This is why the 3060 Ti is further from its own ceiling at every precision, and furthest in
-  INT4: TinyLlama's recorded step is 1.99 to 2.10 ms against a floor of 1.30 ms.
+- **The FP16 products are a memory stream on both cards.** `linear_f16` reads at 394 GB/s here
+  and 460 GB/s on the 4070, 95% and 97% of each card's ceiling in its own profile.
+- **The records split a step into a floor and a remainder.** The floor is the weights read once
+  at the measured bandwidth: 5.00 ms here and 4.37 ms on the 4070 for TinyLlama in FP16, the
+  ratio of the bandwidths. The remainder is 0.56 to 0.73 ms here and 0.24 to 0.36 ms on the 4070
+  over both models and all three precisions. It is about twice as long on this card, and it does
+  not shrink with the weights.
+- **So the cards move apart as the weights shrink.** The 4070 is 1.19x to 1.21x faster in FP16,
+  where the bandwidths differ by 1.14x, then 1.23x to 1.25x in INT8 and 1.32x to 1.37x in INT4.
+  For the same reason the 3060 Ti is further from its own ceiling at every precision, and
+  furthest in INT4, where TinyLlama's step is 1.97 to 2.03 ms against a floor of 1.30 ms.
+- **What the remainder consists of rests on the profiles, and is less certain.**
+  - The 115 launches of a step that are not products take 593 µs in this card's profile and
+    388 µs in the 4070's, and each small kernel is 1.42 to 1.58 times as long here. They read
+    0.03 to 0.19 MB per launch, far too little for bandwidth to matter. The SM clock is a
+    candidate: NVML shows about 1,980 MHz here and 2,790 MHz on the 4070 during the recorded
+    decode runs, a ratio of 1.41. It is not established, because the clock during profiling is
+    not recorded and the profiler lengthens small kernels on both cards.
+  - In its profile the INT4 product kernel reads at 273 of 415 GB/s here (66%), and at 401 of
+    475 GB/s (85%) in the 4070's, with about the same resident warps (81% and 84%). That points
+    at a kernel further from the memory bound on this card. The profiled INT4 steps are 27% and
+    16% longer than the recorded ones, so the records neither confirm the size of that gap nor
+    say what limits the kernel.
 
 ### Tensor-core throughput: prefill and most of serving
 
-- The 1,024-token prompt is 1.98x (TinyLlama) and 1.83x (Llama 3.2) slower here. The FP16 GEMM
-  peak with FP32 accumulation, which the engine's products use, differs by 1.81x.
+- The 1,024-token prompt takes 1.98x (TinyLlama) and 1.83x (Llama 3.2) as long here, and 1.77x
+  for Llama 3.2 with this card's clean run. The FP16 GEMM peak with FP32 accumulation, which the
+  engine's products use, differs by 1.81x. TinyLlama's 76.4 ms comes from a disturbed run, so its
+  ratio may be a few percent high.
 - TinyLlama's prompt is 1.98 TFLOP of matrix products. At each card's Phase 1 peak that is
   60.7 ms of the 76.4 ms here and 33.6 ms of the 38.6 ms on the 4070. For Llama 3.2 it is 61.0 of
   72.4 ms and 33.7 of 39.6 ms. For TinyLlama that leaves 15.6 ms here and 5.1 ms on the 4070 for
   everything else, including any shortfall of the products from their peak.
-- The tensor pipe is as busy on one card as on the other, each against its own peak: 47 to 48%
-  here and 48 to 49% on the 4070 in cuBLAS, 46% and 45% in `gemm_quantized`, 42% and 41% in
-  prefill attention.
-- Serving steps carry up to 30 rows and sit between the two bounds: 1.43x to 1.78x. The ratio is
-  highest with INT4 weights (1.72x and 1.78x), where the least memory traffic is left in a step.
+- Within each card's own profile the tensor pipe is about as busy, against that card's peak: 47
+  to 48% here and 48 to 49% on the 4070 in cuBLAS, 46% and 45% in `gemm_quantized`, 42% and 41%
+  in prefill attention.
+- Serving steps carry up to 30 rows and sit between the two bounds: 1.43x to 1.78x in the pairs.
+  The ratio is highest with INT4 weights (1.72x and 1.78x), where the least memory traffic is
+  left in a step.
 
-### L2 size: DRAM traffic in wide steps
+### L2 size: what the counters show, and what they do not
 
 - **Decode does not depend on it.** The weights never fit either L2. One sequence's keys and
-  values for a layer are 132 KB at 129 tokens and 1 MiB at 1,024 tokens, which fit both. Decode
-  attention takes 272 µs here and 172 µs on the 4070 for 22 layers (1.58x), the same ratio as the
-  other small kernels, and reads 4.1 against 3.6 MB from DRAM.
+  values for a layer are 132 KB at 129 tokens and 1 MiB at 1,024 tokens, which fit both. In each
+  card's decode profile attention reads about the same bytes from DRAM over the 22 layers (4.1 MB
+  here, 3.6 MB on the 4070) and is about the same share of the non-product kernel time (46% and
+  44%).
 - **The Phase 3 KV layout benchmark agrees.** For decode attention at batch 1 the ratio between
   the cards falls from 1.59 at 128 cached tokens to 1.32 at 4,096 tokens, where a layer's keys
   and values are 4 MiB. At batch 8 it stays between 1.34 and 1.42 from 2 MiB to 32 MiB per layer.
   Nothing changes where the working set passes 3 MiB, because the kernel reads each key once.
-- **A 1,024-row step does depend on it.** Its activations are 4.2 MB per tensor at the hidden
-  width and up to 23.1 MB (the gate|up output): more than 3 MiB, less than 36 MiB.
-  - The fused add-and-norm reads 8.2 MB and writes 6.8 MB per launch. Here both cross DRAM while
-    the kernel runs: 397 GB/s of reads plus writes, 95% of the ceiling, 1,708 µs for the 45
-    launches. On the 4070 the counters show no DRAM writes during the kernel and reads at
-    411 GB/s: 891 µs. That is 1.92x where the bandwidths differ by 1.14x. Norms, SwiGLU, RoPE
-    with the cache write, the add and the embedding are 5,938 µs of the profiled step here and
-    3,147 µs on the 4070, 6.0% and 7.1% of each.
-  - The tensor-core products move far more bytes here. For the 88 INT4 products the 4070 reads
-    1,032 MB from DRAM and writes 262 MB. The 3060 Ti reads 7,114 MB and writes 4,128 MB, 8.7
-    times the traffic. Per launch, gate|up reads 175.7 MB here against 16.1 MB, and q|k|v 37.6
-    against 6.9 MB. The FP16 products through cuBLAS read 5,970 MB against 2,608 MB. We read the
-    excess as each column of blocks fetching the step's input rows again once they have left L2.
-  - No record shows what that traffic costs. In `gemm_quantized` it adds up to 135 GB/s, 32% of
-    the ceiling. The tensor pipe is as busy as on the 4070 (45.7% against 45.5%). And in the
-    profiles the three matrix shapes are 1.95 to 2.12 times slower than on the 4070, about the
-    same for each, although they read 4.6 to 10.9 times the 4070's bytes.
 - **Phase 1 isolates L2 on its own.** A chain of dependent loads over a 4 MiB working set costs
   308 ns per load here and 141 ns on the 4070, whose L2 still holds it.
-- **What would isolate it in the engine:** the same product at 256 rows, whose input is 1 MiB,
-  and at 1,024 rows on this card, timed outside the profiler; or a variant that walks the rows in
-  tiles small enough to stay in L2. Phase 6 recorded neither.
+- **In a 1,024-row step the two cards' counters differ in DRAM traffic.** The step's activations
+  are 4.2 MB per tensor at the hidden width and up to 23.1 MB (the gate|up output): more than
+  3 MiB, less than 36 MiB. Each observation below is within one card's profile.
+  - **Norms.** A launch reads 8.2 MB and, on this card, writes 6.8 MB to DRAM while it runs.
+    Reads alone are at 216 GB/s, 52% of the ceiling; reads plus writes are at 397 GB/s, 95% of
+    it. In the 4070's profile the same kernel writes nothing to DRAM while it runs and reads at
+    411 GB/s, 86% of that card's ceiling. Over the whole FP16 step the 3060 Ti writes 1,752 MB to
+    DRAM and the 4070 285 MB. Outputs that leave a 3 MiB L2 during the kernel and stay in a
+    36 MiB one would look like this; no counter here measures L2 itself.
+  - **Reads of the tensor-core products.** The 88 INT4 products through `gemm_quantized` read
+    7,114 MB here and 1,032 MB on the 4070 (6.9x). The 88 FP16 products through cuBLAS read
+    5,832 MB here and 2,476 MB there (2.4x).
+  - **Writes of the tensor-core products.** `gemm_quantized` writes 4,128 MB here and 262 MB on
+    the 4070. The outputs of the 88 products are 807 MB. On this card the kernel writes 5.1 times
+    its output for each of its three matrix shapes (26.88, 21.53 and 117.73 MB per launch for
+    outputs of 5.24, 4.19 and 23.07 MB), where cuBLAS on the same card writes 978 MB, 1.2 times
+    the outputs.
+  - **The mechanism is not verified.** Input rows that leave L2 and are fetched again would add
+    reads, not writes, and they would not single out one kernel. Writes of five times the output
+    point at `gemm_quantized` itself: a store pattern, or register spills to local memory, that
+    stay inside the 36 MiB L2 on the 4070 and reach DRAM here. `step_counters` collects no L2 or
+    local-memory counters, so this log does not claim an L2-size effect for the products.
+  - **The cost is not known either.** In this card's profile the traffic of `gemm_quantized`
+    adds up to 135 GB/s, 32% of the ceiling, and its tensor pipe is 45.7% active (45.5% in the
+    4070's).
 
 ### FP8: explains none of it
 
@@ -433,25 +479,36 @@ Only the 4070 has FP8 tensor cores. Phase 1 measured 118.3 TFLOPS for an FP8 E4M
 and the 3060 Ti (compute capability 8.6) cannot run it. The engine has no FP8 path, since the
 FP8 KV cache is not built, so no number in this log depends on it.
 
-### What Phase 6 bought on each card
+### What Phase 6 changed on each card
 
-- **The FP16 GEMV bought twice as much here**: +9.6% against +4.5% on TinyLlama decode, +5.5%
-  against +3.1% on Llama 3.2. cuBLAS was at 85% of the ceiling on this card and 92% on the 4070.
-- **Tensor-core products for quantized weights bought about the same**: serving is 2.2x to 2.4x
-  faster here and 1.8x to 2.4x on the 4070. Before, quantized weights were 31% to 40% slower than
-  FP16 under load here and 15% to 31% there.
-- **Tiled prefill attention bought slightly less in TTFT**: 2.7x and 2.3x here, 3.0x and 2.4x on
-  the 4070. The old kernel was the same share of the profiled step on both (64% and 66%). What
-  remains is products, for which this card's peak is 1.81 times lower.
+Each pair switches all six changes at once, so a pair gives the gain of Phase 6 as a whole. Only
+the counters can be tied to one change.
+
+- **Decode.** By the median step, Phase 6 as a whole gains +9.5% / +7.1% / +10.0% here and
+  +4.7% / +5.5% / +10.1% on the 4070 for TinyLlama in FP16 / INT8 / INT4, and +7.1% / +4.5% /
+  +7.3% against +3.1% / +3.7% / +6.8% for Llama 3.2. Within each card's profiles the FP16 product
+  time falls 10.7% here and 5.6% on the 4070, from the GEMV and the stacking together; cuBLAS was
+  at 85% of the ceiling in this card's profile and 92% in the 4070's.
+- **Serving with quantized weights.** Phase 6 as a whole is 2.2x to 2.4x here and 1.8x to 2.4x on
+  the 4070. Before, quantized weights were 31% to 40% slower than FP16 under load here and 15% to
+  31% there.
+- **The 1,024-token prompt.** Phase 6 as a whole is 2.7x and 2.3x here, 3.0x and 2.4x on the
+  4070. Within each card's profiles tiled attention takes a layer from 7,888 to 226 µs here (35x)
+  and from 3,759 to 116 µs on the 4070 (32x), and the old kernel was 64% and 66% of the step.
+  What remains is products, for which this card's peak is 1.81 times lower.
 
 ## Not done in Phase 6
 
-- **Wide products on a small L2.** At 1,024 rows the 3060 Ti moves 8.7 times the DRAM bytes of
-  the 4070 through `gemm_quantized`. Whether tiling the rows would shorten the step has not been
-  measured.
-- **INT4 decode on the 3060 Ti.** The product kernel reads at 66% of the memory ceiling there,
-  and the step is at 62% to 65% of its ceiling. The entries above were developed and their
-  crossovers (`f16_gemv_rows`, `quantized_gemm_rows`) chosen on the 4070.
+- **Profile `gemm_quantized` on the 3060 Ti with L2 and local-memory counters.** At 1,024 rows it
+  reads 6.9 times and writes 15.7 times the DRAM bytes it does on the 4070, and writes 5.1 times
+  its output. The L2 hit rate and the local-memory traffic would say whether that is the kernel's
+  own stores or spills. Timing the same product at 256 rows, whose input is 1 MiB, and at 1,024
+  rows outside the profiler would say whether it costs time.
+- **Record the SM clock in the step-counter summaries**, or pin it, so that kernel times can be
+  compared between cards and with the recorded runs.
+- **INT4 decode on the 3060 Ti.** The step is at 64% to 66% of its ceiling there. The entries
+  above were developed and their crossovers (`f16_gemv_rows`, `quantized_gemm_rows`) chosen on
+  the 4070.
 - **Decode attention at long context.** At batch 1 a 1,100-token context costs about 0.3 ms
   more per step than a 190-token one. The kernel runs one block per head, 32 blocks on 46 SMs.
   Splitting each head's context across blocks (flash decoding) would use the idle SMs.
