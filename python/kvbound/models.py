@@ -97,6 +97,16 @@ def load_spec(name: str) -> ModelSpec:
     )
 
 
+def model_entry(spec: ModelSpec) -> dict[str, str]:
+    """The "model" entry of a result record (kvbound.record) for a model of the registry."""
+    return {
+        "name": spec.name,
+        "hf_repo": spec.hf_repo,
+        "revision": spec.revision,
+        "family": spec.family,
+    }
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as f:

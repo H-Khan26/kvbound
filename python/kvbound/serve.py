@@ -22,7 +22,7 @@ import dataclasses
 from typing import Any
 
 from kvbound import bench, record, workload
-from kvbound.models import load_spec
+from kvbound.models import load_spec, model_entry
 from kvbound.perfmodel.model import Arch, Precision, kv_bytes_per_token
 from kvbound.weight_format import VARIANTS
 
@@ -148,7 +148,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "kind": "serve",
         "engine": {"name": "kvbound", "preset": args.preset},
-        "model": {"name": spec.name, "hf_repo": spec.hf_repo, "revision": spec.revision},
+        "model": model_entry(spec),
         "params": {
             "workload": load.name,
             "workload_seed": load.seed,
