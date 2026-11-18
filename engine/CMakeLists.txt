@@ -12,6 +12,7 @@ add_library(kvbound STATIC
   memory/planner.cpp
   model/llama/program.cpp
   model/whisper/program.cpp
+  runtime/beam_search.cpp
   runtime/sampler.cpp
   runtime/sequence.cpp
   runtime/step.cpp
