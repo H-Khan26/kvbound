@@ -1,4 +1,4 @@
-.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters step-counters microbench quantize eval precision report predict lint format typecheck clean
+.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters step-counters microbench quantize eval precision eval-asr bench-asr report predict lint format typecheck clean
 
 # torch wheel: cu128 on GPU machines, cpu in CI and on machines without a GPU
 TORCH ?= cu128
@@ -15,6 +15,9 @@ WEIGHTS ?= fp16
 KV ?= fp16
 # The weights:kv pairs `make precision` measures
 PRECISIONS ?= fp16:fp16 fp16:int8 int8_pc:fp16 int8_pc:int8 int4_g:fp16 int4_g:int8
+# Speech stack and beam width of `make eval-asr`: hf | faster-whisper, 1 for greedy
+BACKEND ?= hf
+BEAMS ?= 1
 
 # On Windows, recipes need a POSIX sh (Git Bash) and cmake/ctest run inside the MSVC environment.
 ifeq ($(OS),Windows_NT)
@@ -128,6 +131,20 @@ precision:        ## every pair in PRECISIONS: perplexity, per-layer error, deco
 	  uv run python -m kvbound.evals.sites --model $(MODEL) --weights $$w --kv $$k || exit 1; \
 	  uv run python -m kvbound.bench --model $(MODEL) --weights $$w --kv $$k --prompt-len 128 --profile-ops || exit 1; \
 	  $(SERVE) --weights $$w --kv $$k --workload fixed --requests 96 $(PAGED) || exit 1; \
+	done
+
+# One speech stack on the 1,000-clip subset; `uv run python -m kvbound.evals.asr subset` fetches it.
+ASR = uv run python -m kvbound.evals.asr eval --model $(MODEL)
+
+eval-asr:         ## WER and real-time factor of one speech stack on the recitation subset (MODEL=... BACKEND=hf BEAMS=1)
+	$(ASR) --backend $(BACKEND) --beams $(BEAMS)
+
+bench-asr:        ## speech baselines, greedy and beam 5: Hugging Face, faster-whisper on the GPU and the CPU (MODEL=...)
+	for b in 1 5; do \
+	  $(ASR) --backend hf --beams $$b || exit 1; \
+	  $(ASR) --backend faster-whisper --compute-type float16 --beams $$b || exit 1; \
+	  $(ASR) --backend faster-whisper --compute-type int8_float16 --beams $$b || exit 1; \
+	  $(ASR) --backend faster-whisper --device cpu --compute-type int8 --beams $$b || exit 1; \
 	done
 
 report:           ## roofline, bandwidth and latency figures from the records (MODEL=... DEVICE=...)
