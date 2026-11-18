@@ -12,8 +12,9 @@ namespace kvb {
 // How a checkpoint stores its weight matrices. kvbound.quantize writes the format into the
 // safetensors "__metadata__" map and python/kvbound/weight_format.py mirrors this header.
 //
-// A quantized file keeps every tensor name. Each matrix W [out, in] becomes integers q plus a
-// companion tensor "<name>.scale" of FP16 scales; one-dimensional tensors stay FP16.
+// A quantized file keeps every tensor name. Each matrix W [out, in] that activations are
+// multiplied by becomes integers q plus a companion tensor "<name>.scale" of FP16 scales; every
+// other tensor stays FP16 (biases, norm weights, convolution weights, position tables).
 enum class WeightScheme : std::uint8_t {
   F16,  // floating point as stored (FP16, BF16 or FP32, held as FP16 on the device)
   // I8 [out, in] with scale [out]: W[o][i] = scale[o] * q[o][i], q in [-127, 127].

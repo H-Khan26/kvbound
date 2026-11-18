@@ -1,5 +1,6 @@
-// Python bindings: each kernel as a function over NumPy arrays, and the Engine. Arrays cross
-// the boundary on the host; FP16 data travels as uint16 (view it with .view(np.float16)).
+// Python bindings: each kernel as a function over NumPy arrays, the Engine and the AsrEngine.
+// Arrays cross the boundary on the host; FP16 data travels as uint16 (view it with
+// .view(np.float16)).
 // Meant for tests and evals, where a copy per call does not matter.
 
 #include <nanobind/nanobind.h>
@@ -12,12 +13,14 @@
 #include <algorithm>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <span>
 #include <string>
 #include <vector>
 
+#include "kvbound/cuda/asr_engine.h"
 #include "kvbound/cuda/blas.h"
 #include "kvbound/cuda/engine.h"
 #include "kvbound/cuda/generate.h"
@@ -682,6 +685,190 @@ class PyEngine {
   std::map<std::string, int> serve_stats_;
 };
 
+// --- AsrEngine
+// ------------------------------------------------------------------------------------
+
+// Captured sites of a step of `program` as arrays [rows, columns of the site's value].
+std::map<std::string, Out<float>> site_arrays(const kvb::cuda::Capture& sites,
+                                              const kvb::Program& program) {
+  std::map<std::string, std::size_t> cols;
+  for (const kvb::Op& op : program.ops) {
+    if (!op.in0_site.empty()) cols[op.in0_site] = program.values[op.in0].cols;
+    if (!op.site.empty()) cols[op.site] = program.values[op.out].cols;
+  }
+  std::map<std::string, Out<float>> result;
+  for (const auto& [name, values] : sites) {
+    const std::size_t n_cols = cols.at(name);
+    result.emplace(name, to_numpy(values, {values.size() / n_cols, n_cols}));
+  }
+  return result;
+}
+
+// The speech engine with its two raw steps: encode clips into the Cross cache of block-table
+// rows, and feed tokens of one sequence (teacher forcing). feed() gives row r the Self blocks
+// r * blocks_per_seq... in order.
+class PyAsrEngine {
+ public:
+  PyAsrEngine(const std::string& model_dir, int max_seqs, int max_ctx, int max_step_tokens,
+              int kv_block_size, int kv_blocks, const std::string& kv_layout,
+              const std::string& kv_dtype, const std::string& cross_kv_dtype, int max_encode_batch,
+              const std::string& gemm, bool graph, int max_graphs, const std::string& plan,
+              bool wide_key_loads, int quantized_gemm_rows, std::size_t dequant_slice_bytes,
+              bool fuse, int f16_gemv_rows, bool expand_quantized, bool prefill_attention)
+      : engine_(model_dir,
+                kvb::cuda::EngineConfig{
+                    .max_ctx = max_ctx,
+                    .max_seqs = max_seqs,
+                    .max_step_tokens = max_step_tokens,
+                    // feed() asks for the logits of every row: as many as a step has.
+                    .max_outputs = std::numeric_limits<int>::max(),
+                    .kv_block_size = kv_block_size,
+                    .kv_blocks = kv_blocks,
+                    .kv_layout = layout_from(kv_layout),
+                    .kv_dtype = kv_dtype_from(kv_dtype),
+                    .plan = plan == "naive" ? kvb::PlanStrategy::Naive
+                                            : kvb::PlanStrategy::GreedyBySize,
+                    .gemm = accumulate_from(gemm),
+                    .fuse = fuse,
+                    .f16_gemv_rows = f16_gemv_rows,
+                    .wide_key_loads = wide_key_loads,
+                    .prefill_attention = prefill_attention,
+                    .quantized_gemm_rows = quantized_gemm_rows,
+                    .expand_quantized = expand_quantized,
+                    .dequant_slice_bytes = dequant_slice_bytes,
+                    .use_graph = graph,
+                    .max_graphs = max_graphs,
+                },
+                kvb::cuda::AsrOptions{.max_encode_batch = max_encode_batch,
+                                      .cross_kv_dtype = kv_dtype_from(cross_kv_dtype)}),
+        plan_(plan) {}
+
+  // Encodes clips in one encoder step: features [n_mels, n_frames] or [clips, n_mels,
+  // n_frames], clip i into the Cross block of block-table row seqs[i] (by default row i).
+  // Returns every "encoder.*" site when capture is set, the clips' rows end to end.
+  std::map<std::string, Out<float>> encode(In<float> features,
+                                           const std::optional<std::vector<int>>& seqs,
+                                           bool capture) {
+    if (features.ndim() != 2 && features.ndim() != 3) {
+      throw kvb::Error("features must be [n_mels, n_frames] or [clips, n_mels, n_frames]");
+    }
+    const kvb::WhisperConfig& cfg = engine_.model_config();
+    const std::size_t n_clips = features.ndim() == 3 ? features.shape(0) : 1;
+    const std::size_t first = features.ndim() - 2;
+    if (static_cast<std::int64_t>(features.shape(first)) != cfg.n_mels ||
+        static_cast<std::int64_t>(features.shape(first + 1)) != cfg.n_frames()) {
+      throw kvb::Error("each clip needs features [" + std::to_string(cfg.n_mels) + ", " +
+                       std::to_string(cfg.n_frames()) + "]");
+    }
+    std::vector<int> rows(n_clips);
+    std::iota(rows.begin(), rows.end(), 0);
+    kvb::cuda::Capture sites;
+    engine_.encode({features.data(), features.size()}, seqs ? *seqs : rows,
+                   {.capture = capture ? &sites : nullptr});
+    return site_arrays(sites, engine_.programs().encoder);
+  }
+
+  // Processes `ids` as positions start, start + 1, ... of block-table row `seq`, whose clip
+  // must have been encoded, with every row an output. With capture set, returns every
+  // "decoder.*" site and the logits [n, vocab] as computed; otherwise the logits alone, with
+  // the tokens the rules suppress at -inf.
+  std::map<std::string, Out<float>> feed(const std::vector<std::int32_t>& ids, int start, int seq,
+                                         bool capture) {
+    const int block_size = engine_.kv_block_size();
+    const int blocks_per_seq = (engine_.config().max_ctx + block_size - 1) / block_size;
+    if (seq < 0 || (seq + 1) * blocks_per_seq > engine_.config().kv_blocks) {
+      throw kvb::Error("feed() has no Self blocks for row " + std::to_string(seq));
+    }
+    std::vector<int> blocks;
+    for (int i = 0; i < blocks_per_seq; ++i) blocks.push_back(seq * blocks_per_seq + i);
+    engine_.set_blocks(seq, blocks);
+
+    std::vector<StepRow> rows;
+    std::vector<std::int32_t> out_rows;
+    for (int i = 0; i < static_cast<int>(ids.size()); ++i) {
+      rows.push_back({.token_id = ids[i],
+                      .position = start + i,
+                      .seq = seq,
+                      .kv_slot = seq * blocks_per_seq * block_size + start + i});
+      out_rows.push_back(i);
+    }
+    kvb::cuda::Capture sites;
+    engine_.forward(rows, out_rows, {.capture = capture ? &sites : nullptr});
+    if (!capture) sites["logits"] = engine_.logits();
+    return site_arrays(sites, engine_.programs().decoder);
+  }
+
+  // Greedy token of each row of the last feed(), after the suppress rules.
+  std::vector<std::int32_t> next_ids() const {
+    const std::span<const std::int32_t> ids = engine_.next_ids();
+    return {ids.begin(), ids.end()};
+  }
+
+  // "fp16", "int8_pc" or "int4_g": how the loaded checkpoint stores its matrices.
+  std::string weights() const {
+    return std::string(kvb::weight_scheme_name(engine_.weight_format().scheme));
+  }
+
+  // Every engine option as the engine resolved it, for result records.
+  nb::dict config() const {
+    const kvb::cuda::EngineConfig& c = engine_.config();
+    const kvb::cuda::AsrOptions& o = engine_.options();
+    nb::dict d;
+    d["max_seqs"] = c.max_seqs;
+    d["max_ctx"] = c.max_ctx;
+    d["max_step_tokens"] = c.max_step_tokens;
+    d["max_outputs"] = c.max_outputs;
+    d["kv_block_size"] = c.kv_block_size;
+    d["kv_blocks"] = c.kv_blocks;
+    d["kv_layout"] = std::string(kvb::kv_layout_name(c.kv_layout));
+    d["kv_dtype"] = std::string(kvb::kv_dtype_name(c.kv_dtype));
+    d["cross_kv_dtype"] = std::string(kvb::kv_dtype_name(o.cross_kv_dtype));
+    d["max_encode_batch"] = o.max_encode_batch;
+    d["gemm"] = std::string(kvb::cuda::gemm_accumulate_name(c.gemm));
+    d["graph"] = c.use_graph;
+    d["max_graphs"] = c.max_graphs;
+    d["plan"] = plan_;
+    d["wide_key_loads"] = c.wide_key_loads;
+    d["quantized_gemm_rows"] = c.quantized_gemm_rows;
+    d["dequant_slice_bytes"] = c.dequant_slice_bytes;
+    d["fuse"] = c.fuse;
+    d["f16_gemv_rows"] = c.f16_gemv_rows;
+    d["expand_quantized"] = c.expand_quantized;
+    d["prefill_attention"] = c.prefill_attention;
+    d["weights"] = weights();
+    d["weight_group_size"] = engine_.weight_format().group_size;
+    return d;
+  }
+
+  // The decoding rules the engine read from generation.json.
+  nb::dict rules() const {
+    const kvb::WhisperRules& r = engine_.rules();
+    nb::dict d;
+    d["prompt"] = r.prompt;
+    d["suppress_tokens"] = r.suppress_tokens;
+    d["begin_suppress_tokens"] = r.begin_suppress_tokens;
+    d["eos_token_id"] = r.eos_token_id;
+    d["max_length"] = r.max_length;
+    return d;
+  }
+
+  // Device bytes: weights, self_kv, cross_kv, arena, encoder_arena, decoder_arena, dequant.
+  std::map<std::string, std::size_t> memory() const {
+    const kvb::cuda::AsrMemory m = engine_.memory();
+    return {{"weights", m.weights},
+            {"self_kv", m.self_kv},
+            {"cross_kv", m.cross_kv},
+            {"arena", m.arena},
+            {"encoder_arena", m.encoder_arena},
+            {"decoder_arena", m.decoder_arena},
+            {"dequant", m.dequant}};
+  }
+
+ private:
+  kvb::cuda::AsrEngine engine_;
+  std::string plan_;
+};
+
 }  // namespace
 
 NB_MODULE(_kvb, m) {
@@ -742,4 +929,23 @@ NB_MODULE(_kvb, m) {
       .def("memory", &PyEngine::memory)
       .def("serve_stats", &PyEngine::serve_stats)
       .def("graph_stats", &PyEngine::graph_stats);
+
+  nb::class_<PyAsrEngine>(m, "AsrEngine")
+      .def(nb::init<const std::string&, int, int, int, int, int, const std::string&,
+                    const std::string&, const std::string&, int, const std::string&, bool, int,
+                    const std::string&, bool, int, std::size_t, bool, int, bool, bool>(),
+           "model_dir"_a, "max_seqs"_a = 1, "max_ctx"_a = 0, "max_step_tokens"_a = 0,
+           "kv_block_size"_a = 16, "kv_blocks"_a = 0, "kv_layout"_a = "head_major",
+           "kv_dtype"_a = "fp16", "cross_kv_dtype"_a = "fp16", "max_encode_batch"_a = 1,
+           "gemm"_a = "fp32", "graph"_a = true, "max_graphs"_a = 16, "plan"_a = "greedy",
+           "wide_key_loads"_a = true, "quantized_gemm_rows"_a = 3,
+           "dequant_slice_bytes"_a = std::size_t{32} << 20, "fuse"_a = true, "f16_gemv_rows"_a = 4,
+           "expand_quantized"_a = false, "prefill_attention"_a = true)
+      .def("encode", &PyAsrEngine::encode, "features"_a, "seqs"_a = nb::none(), "capture"_a = false)
+      .def("feed", &PyAsrEngine::feed, "ids"_a, "start"_a = 0, "seq"_a = 0, "capture"_a = false)
+      .def("next_ids", &PyAsrEngine::next_ids)
+      .def("weights", &PyAsrEngine::weights)
+      .def("config", &PyAsrEngine::config)
+      .def("rules", &PyAsrEngine::rules)
+      .def("memory", &PyAsrEngine::memory);
 }

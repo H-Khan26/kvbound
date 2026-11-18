@@ -10,6 +10,12 @@ void check(cudaError_t status, const char* what) {
   }
 }
 
+cudaStream_t create_stream() {
+  cudaStream_t stream = nullptr;
+  KVB_CUDA(cudaStreamCreate(&stream));
+  return stream;
+}
+
 DeviceBuffer::DeviceBuffer(std::size_t bytes) : bytes_(bytes) {
   if (bytes > 0) KVB_CUDA(cudaMalloc(&data_, bytes));
 }

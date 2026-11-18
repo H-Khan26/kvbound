@@ -4,7 +4,6 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <map>
 #include <memory>
 #include <span>
 #include <string>
@@ -15,6 +14,7 @@
 #include "kvbound/cuda/device.h"
 #include "kvbound/cuda/kv_pool.h"
 #include "kvbound/cuda/llama_model.h"
+#include "kvbound/cuda/run_hooks.h"
 #include "kvbound/sampler.h"
 #include "kvbound/step.h"
 
@@ -34,7 +34,7 @@ struct EngineConfig {
   PlanStrategy plan = PlanStrategy::GreedyBySize;
   GemmAccumulate gemm = GemmAccumulate::F32;
   // The fused program, and the row count up to which FP16 products use kvbound's own kernel
-  // instead of cuBLAS (0: always cuBLAS). See LlamaModelConfig.
+  // instead of cuBLAS (0: always cuBLAS). See LinearOptions.
   bool fuse = true;
   int f16_gemv_rows = 4;
   // Read cached keys 16 bytes at a time where the KV layout allows it.
@@ -58,6 +58,10 @@ struct EngineConfig {
   int max_graphs = 16;
 };
 
+// The config with every field left at 0 filled in. Throws kvb::Error on limits that do not fit
+// together.
+EngineConfig resolved(EngineConfig config);
+
 // How the engine launched its steps so far.
 struct GraphStats {
   std::int64_t replayed = 0;  // steps launched from a graph
@@ -66,9 +70,6 @@ struct GraphStats {
   int evicted = 0;
   double capture_s = 0.0;  // time spent capturing and instantiating
 };
-
-// Capture-site name to values, row-major with one row per token (or per output), as FP32.
-using Capture = std::map<std::string, std::vector<float>>;
 
 struct ForwardOptions {
   Capture* capture = nullptr;

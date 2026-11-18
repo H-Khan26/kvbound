@@ -6,10 +6,8 @@
 #include <numeric>
 
 #include "kvbound/cuda/kernels.h"
-#include "kvbound/dtype.h"
 
 namespace kvb::cuda {
-namespace {
 
 EngineConfig resolved(EngineConfig config) {
   if (config.max_ctx <= 0 || config.max_seqs <= 0) throw Error("max_ctx and max_seqs must be > 0");
@@ -29,17 +27,9 @@ EngineConfig resolved(EngineConfig config) {
   return config;
 }
 
-cudaStream_t make_stream() {
-  cudaStream_t stream = nullptr;
-  KVB_CUDA(cudaStreamCreate(&stream));
-  return stream;
-}
-
-}  // namespace
-
 Engine::Engine(const std::filesystem::path& model_dir, const EngineConfig& config)
     : config_(resolved(config)),
-      stream_(make_stream()),
+      stream_(create_stream()),
       blocks_(config_.kv_blocks),
       rows_(config_.max_seqs),
       rows_host_(config_.max_step_tokens * sizeof(StepRow)),
@@ -57,10 +47,10 @@ Engine::Engine(const std::filesystem::path& model_dir, const EngineConfig& confi
                        .plan = config_.plan,
                        .gemm = config_.gemm,
                        .fuse = config_.fuse,
-                       .f16_gemv_rows = config_.f16_gemv_rows,
+                       .linear = {.f16_gemv_rows = config_.f16_gemv_rows,
+                                  .quantized_gemm_rows = config_.quantized_gemm_rows,
+                                  .expand_quantized = config_.expand_quantized},
                        .wide_key_loads = config_.wide_key_loads,
-                       .quantized_gemm_rows = config_.quantized_gemm_rows,
-                       .expand_quantized = config_.expand_quantized,
                        .dequant_slice_bytes = config_.dequant_slice_bytes},
       stream_);
   const ModelConfig& cfg = model_->config();
@@ -150,28 +140,8 @@ void Engine::forward(std::span<const StepRow> rows, std::span<const std::int32_t
                 tiles_dev_.as<AttnTile>(), n_tiles, *kv_, stream_);
   } else {
     graph_stats_.eager += 1;
-    RunHooks hooks;
-    hooks.times = options.times;
-    if (options.capture != nullptr) {
-      hooks.on_site = [&](const std::string& site, int id, const void* data) {
-        const Value& value = model_->program().values[id];
-        const std::size_t n =
-            static_cast<std::size_t>(value.rows == RowKind::Token ? n_tokens : n_out) * value.cols;
-        std::vector<float>& host = (*options.capture)[site];
-        host.resize(n);
-        if (value.dtype == DType::F32) {
-          KVB_CUDA(cudaMemcpyAsync(host.data(), data, n * sizeof(float), cudaMemcpyDeviceToHost,
-                                   stream_));
-          KVB_CUDA(cudaStreamSynchronize(stream_));
-          return;
-        }
-        std::vector<std::uint16_t> bits(n);
-        KVB_CUDA(cudaMemcpyAsync(bits.data(), data, n * sizeof(std::uint16_t),
-                                 cudaMemcpyDeviceToHost, stream_));
-        KVB_CUDA(cudaStreamSynchronize(stream_));
-        std::transform(bits.begin(), bits.end(), host.begin(), half_bits_to_float);
-      };
-    }
+    const RunHooks hooks =
+        step_hooks(model_->program(), n_tokens, n_out, stream_, options.capture, options.times);
     model_->run(rows_dev_.as<StepRow>(), out_rows_dev_.as<std::int32_t>(), n_tokens, n_out,
                 tiles_dev_.as<AttnTile>(), n_tiles, *kv_, stream_, &hooks);
   }

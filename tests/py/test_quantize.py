@@ -22,23 +22,25 @@ from kvbound.awq import (
     pick_windows,
     rescaled_norm,
 )
-from kvbound.fixture import FIXTURE_DIR, HF_CONFIG
-from kvbound.models import sha256_file
+from kvbound.fixture import FIXTURE_DIR, HF_CONFIG, WHISPER_FIXTURE_DIR
+from kvbound.models import GENERATION_FILE, load_spec, sha256_file
 from kvbound.perfmodel.model import Precision
 from kvbound.quantize import (
     MANIFEST_FILE,
     convert,
+    dequantize,
     dequantize_int4_g,
     dequantize_int8_pc,
     f16_scales,
     load_dequantized,
     pack_int4,
+    quantize,
     quantize_int4_g,
     quantize_int4_g_with_scales,
     quantize_int8_pc,
     unpack_int4,
 )
-from kvbound.ref import load_llama
+from kvbound.ref import load_llama, load_whisper
 from kvbound.weight_format import (
     KEY_ACT_SCALES,
     KEY_CALIB_DATASET,
@@ -568,3 +570,71 @@ def test_convert_rejects_awq_combinations(tmp_path):
         convert(FIXTURE_DIR, tmp_path / "q", "int4_g", GROUP, device="cpu", awq=ids,
                 calib_meta={KEY_SOURCE: "x"})  # fmt: skip
     assert not (tmp_path / "q").exists()
+
+
+# Tensors of a Whisper checkpoint that are not matrices: stored FP16 whatever the scheme.
+WHISPER_KEPT = (
+    "model.encoder.conv1.weight",
+    "model.encoder.conv2.weight",
+    "model.encoder.embed_positions.weight",
+    "model.decoder.embed_positions.weight",
+    "model.encoder.layers.0.self_attn.k_proj.bias",
+    "model.decoder.layers.1.encoder_attn_layer_norm.weight",
+)
+# Measured on the fixture's three prompts (rel-RMS of the logits against the FP16 reference):
+# int8_pc 0.010 to 0.011, int4_g (group 32) 0.155 to 0.165. The limits leave about 3x of margin.
+WHISPER_LOGIT_REL_RMS_MAX = {"int8_pc": 0.03, "int4_g": 0.5}
+
+
+@pytest.mark.parametrize("scheme", ["int8_pc", "int4_g"])
+def test_convert_whisper_quantizes_only_its_matrices(tmp_path, scheme):
+    out = tmp_path / scheme
+    manifest = convert(WHISPER_FIXTURE_DIR, out, scheme, GROUP, device="cpu")
+    source = load_file(str(WHISPER_FIXTURE_DIR / "model.safetensors"))
+    stored = load_file(str(out / "model.safetensors"))
+    fmt, loaded = load_dequantized(out)
+    assert fmt == WeightFormat.make(scheme, GROUP) and set(loaded) == set(source)
+
+    matrices = {n for n, w in source.items() if w.ndim == 2 and "embed_positions" not in n}
+    assert set(manifest["tensors"]) == matrices
+    assert not matrices & set(WHISPER_KEPT) and set(WHISPER_KEPT) <= set(source)
+    assert {"model.decoder.embed_tokens.weight", "model.encoder.layers.0.fc1.weight"} <= matrices
+    for name, w in source.items():
+        if name in matrices:
+            q, scale = quantize(w, fmt)
+            assert torch.equal(stored[name], q) and torch.equal(stored[f"{name}.scale"], scale)
+            assert torch.equal(loaded[name], dequantize(q, scale, fmt))
+        else:
+            # The fixture is FP16 already, so the tensor is stored unchanged.
+            assert f"{name}.scale" not in stored
+            assert stored[name].dtype == torch.float16 and torch.equal(stored[name], w)
+            assert torch.equal(loaded[name], w.float())
+    for file in ("config.json", GENERATION_FILE):
+        assert (out / file).read_bytes() == (WHISPER_FIXTURE_DIR / file).read_bytes()
+
+    # The reference model computes with the dequantized matrices.
+    model, reference = load_whisper(out), load_whisper(WHISPER_FIXTURE_DIR)
+    assert torch.equal(model.decoder.embed.weight, loaded["model.decoder.embed_tokens.weight"])
+    assert torch.equal(model.encoder.conv1.weight, reference.encoder.conv1.weight)
+    golden_manifest, goldens = golden.load(WHISPER_FIXTURE_DIR)
+    for prompt in golden_manifest["prompts"]:
+        features = goldens[f"{prompt['id']}/input_features"][None]
+        ids = goldens[f"{prompt['id']}/input_ids"][None].long()
+        actual, expected = model(features, ids)[0], reference(features, ids)[0]
+        assert tolerance.rel_rms(actual, expected) <= WHISPER_LOGIT_REL_RMS_MAX[scheme]
+
+
+def test_convert_refuses_awq_for_whisper(tmp_path):
+    with pytest.raises(ValueError, match="Whisper checkpoint takes none"):
+        convert(WHISPER_FIXTURE_DIR, tmp_path / "q", "int4_g", GROUP, device="cpu",
+                awq=calibration_ids())  # fmt: skip
+    assert not (tmp_path / "q").exists()
+
+
+@pytest.mark.parametrize("name", ["whisper-base-ar-quran", "whisper-tiny-ar-quran", "whisper-tiny"])
+def test_default_int4_groups_divide_every_whisper_row(name):
+    arch = load_spec(name).arch
+    fmt = WeightFormat.make("int4_g")
+    for width in (arch["d_model"], arch["encoder_ffn_dim"], arch["decoder_ffn_dim"]):
+        fmt.check_shape((1, width))
+        WeightFormat.make("int8_pc").check_shape((1, width))

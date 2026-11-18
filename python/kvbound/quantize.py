@@ -6,9 +6,11 @@ engine multiplies by, and load_dequantized() returns those values for the refere
 format itself is described in kvbound.weight_format.
 
 With --awq, int4_g weights are rescaled by activation statistics of calibration text before they
-are rounded, and clipped by their effect on the output (kvbound.awq).
+are rounded, and clipped by their effect on the output (kvbound.awq). That search runs text
+through a Llama, so it does not apply to a Whisper checkpoint.
 
 Usage: python -m kvbound.quantize tinyllama-1.1b --scheme int4_g --group-size 128
+       python -m kvbound.quantize whisper-base-ar-quran --scheme int8_pc
 """
 
 import argparse
@@ -25,7 +27,7 @@ from safetensors import safe_open
 from safetensors.torch import save_file
 from torch import Tensor
 
-from kvbound.models import load_spec, sha256_file
+from kvbound.models import GENERATION_FILE, load_spec, sha256_file
 from kvbound.ref import load_llama
 from kvbound.weight_format import (
     CALIB_KEYS,
@@ -44,6 +46,7 @@ WEIGHTS_FILE = "model.safetensors"
 MANIFEST_FILE = "quantize_manifest.json"
 COPIED_FILES = (
     "config.json",
+    GENERATION_FILE,
     "generation_config.json",
     "tokenizer.json",
     "tokenizer_config.json",
@@ -53,6 +56,8 @@ COPIED_FILES = (
 
 # Tensors of the transformer layers, the ones activation scales are folded into.
 LAYER_PREFIX = "model.layers."
+# Tensors named like this are position tables: 2-D, but added to activations, never multiplied.
+POSITION_TABLE = "embed_positions"
 
 # Clip ratios the mse search tries per group, largest first; 1.0 is plain min-max.
 CLIP_RATIOS = tuple(1.0 - 0.5 * i / 19 for i in range(20))
@@ -196,6 +201,13 @@ def quantize_tensor(
     return torch.cat(qs), torch.cat(scales), sqnr
 
 
+def is_matrix(name: str, shape: tuple[int, ...] | list[int]) -> bool:
+    """Whether a checkpoint tensor is a matrix activations are multiplied by: the tensors that
+    are quantized. Biases, norm parameters, convolution weights [out, in, kernel] and position
+    tables are not."""
+    return len(shape) == 2 and POSITION_TABLE not in name
+
+
 def to_f16(tensor: Tensor, name: str) -> Tensor:
     half = tensor.to(torch.float16)
     if not torch.isfinite(half).all():
@@ -216,17 +228,18 @@ def convert(
 ) -> dict[str, Any]:
     """Writes a quantized copy of the plain checkpoint in src_dir to out_dir; returns its manifest.
 
-    Every 2-D tensor is quantized under its own name with a "<name>.scale" companion; 1-D tensors
-    are stored as F16. Tensors are converted one at a time, a block of rows at a time on `device`
-    (the GPU when available). out_dir also gets config.json, the tokenizer files and
-    quantize_manifest.json (format, per-tensor SQNR and bits per weight, sizes, source hash).
+    Every matrix (is_matrix) is quantized under its own name with a "<name>.scale" companion;
+    every other tensor is stored as F16. Tensors are converted one at a time, a block of rows at
+    a time on `device` (the GPU when available). out_dir also gets config.json, the decoding
+    rules and tokenizer files and quantize_manifest.json (format, per-tensor SQNR and bits per
+    weight, sizes, source hash).
 
     awq, calibration token ids [n, len], makes an activation-aware int4_g checkpoint (kvbound.awq):
     scales searched on those tokens on `device` are folded into the layers' tensors before they
     are quantized, one layer in memory at a time, and clip "awq" also takes the clip scales the
     search finds. SQNR is then relative to the scaled weights. out_dir also gets
     awq_scales.safetensors and the manifest an "awq" section; calib_meta holds the header keys
-    that say where the tokens came from.
+    that say where the tokens came from. A Whisper checkpoint takes no awq.
     """
     fmt = WeightFormat.make(scheme, group_size, clip, "awq" if awq is not None else "")
     if not fmt.quantized:
@@ -235,6 +248,9 @@ def convert(
         raise ValueError(f"calib_meta takes the keys {CALIB_KEYS}, with awq only")
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     src_dir, out_dir = Path(src_dir), Path(out_dir)
+    config = json.loads((src_dir / "config.json").read_text(encoding="utf-8"))
+    if awq is not None and config.get("model_type") == "whisper":
+        raise ValueError("awq calibrates on text through a Llama; a Whisper checkpoint takes none")
     src = src_dir / WEIGHTS_FILE
     started = time.perf_counter()
 
@@ -251,7 +267,7 @@ def convert(
         names = list(f.keys())
         shapes = {name: f.get_slice(name).get_shape() for name in names}
         for name, shape in shapes.items():
-            if len(shape) != 1:
+            if is_matrix(name, shape):
                 fmt.check_shape(shape, name)
 
         if awq is not None:
@@ -291,7 +307,7 @@ def convert(
                     scaled, i, awq_result.s_attn[i], awq_result.s_mlp[i], awq_result.s_down[i]
                 )
             w = scaled.pop(name) if name in scaled else f.get_tensor(name)
-            if w.ndim == 1:
+            if not is_matrix(name, shapes[name]):
                 tensors[name] = to_f16(w, name)
                 continue
             q, scale, sqnr = quantize_tensor(w, unclipped, device, clip_scales.get(name))
@@ -416,6 +432,8 @@ def main() -> None:
         parser.error("--clip awq needs --awq")
 
     spec = load_spec(args.model)
+    if args.awq and spec.family != "llama":
+        parser.error(f"--awq calibrates on text through a Llama; {spec.name} is a {spec.family}")
     fmt = WeightFormat.make(args.scheme, args.group_size, clip, "awq" if args.awq else "")
     out_dir = spec.variant_dir(fmt.variant)
     windows = calib_meta = None

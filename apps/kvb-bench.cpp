@@ -12,13 +12,13 @@
 
 #include <chrono>
 #include <cstdio>
-#include <cstdlib>
 #include <exception>
 #include <map>
 #include <set>
 #include <string>
 #include <vector>
 
+#include "args.h"
 #include "kvbound/cuda/engine.h"
 #include "kvbound/cuda/serve.h"
 #include "kvbound/json.h"
@@ -55,42 +55,6 @@ std::vector<Request> load_trace(const std::string& path) {
   if (requests.empty()) throw kvb::Error("trace has no requests");
   return requests;
 }
-
-// --name value pairs.
-class Args {
- public:
-  Args(int argc, char** argv) {
-    if (argc % 2 == 0) throw kvb::Error("every option needs a value");
-    for (int i = 1; i + 1 < argc; i += 2) {
-      const std::string key = argv[i];
-      if (key.rfind("--", 0) != 0) throw kvb::Error("expected --option, got " + key);
-      values_[key.substr(2)] = argv[i + 1];
-    }
-  }
-  std::string required(const std::string& key) {
-    const auto it = values_.find(key);
-    if (it == values_.end()) throw kvb::Error("missing --" + key);
-    return take(it);
-  }
-  std::string str(const std::string& key, const std::string& fallback) {
-    const auto it = values_.find(key);
-    return it == values_.end() ? fallback : take(it);
-  }
-  int integer(const std::string& key, int fallback) {
-    return std::atoi(str(key, std::to_string(fallback)).c_str());
-  }
-  void expect_consumed() const {
-    if (!values_.empty()) throw kvb::Error("unknown option --" + values_.begin()->first);
-  }
-
- private:
-  std::string take(std::map<std::string, std::string>::iterator it) {
-    std::string value = std::move(it->second);
-    values_.erase(it);
-    return value;
-  }
-  std::map<std::string, std::string> values_;
-};
 
 template <typename T, typename Format>
 void print_array(const char* name, const std::vector<T>& values, Format format) {

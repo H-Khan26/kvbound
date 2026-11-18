@@ -334,7 +334,8 @@ def real_audio_prompts(model: Whisper, rules: WhisperRules) -> list[AudioPrompt]
     """The first fetched clip (kvbound.evals.asr) of each of REAL_MODEL_CLIPS reciters.
 
     The decoder ids fed with a clip are the ones greedy decoding gives for it, so the goldens
-    cover the path the engine takes when it transcribes the clip.
+    cover the path the engine takes when it transcribes the clip. A prompt carries the clip's id
+    and not its transcript: the manifest is committed and the dataset's text is not.
     """
     clips: dict[str, asr.Clip] = {}
     for clip in asr.load_clips():
@@ -343,7 +344,7 @@ def real_audio_prompts(model: Whisper, rules: WhisperRules) -> list[AudioPrompt]
     for clip in list(clips.values())[:REAL_MODEL_CLIPS]:
         features = audio.features(clip.audio(), model.cfg.n_mels)
         ids = ref_whisper.greedy(model, features, rules)
-        prompts.append(AudioPrompt(clip.id, features, ids, ids, clip.text))
+        prompts.append(AudioPrompt(clip.id, features, ids, ids))
     return prompts
 
 

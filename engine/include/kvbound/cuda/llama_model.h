@@ -2,15 +2,15 @@
 
 #include <cuda_runtime.h>
 
-#include <array>
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <vector>
 
 #include "kvbound/cuda/blas.h"
 #include "kvbound/cuda/device.h"
 #include "kvbound/cuda/kv_pool.h"
+#include "kvbound/cuda/linear.h"
+#include "kvbound/cuda/run_hooks.h"
 #include "kvbound/cuda/weights.h"
 #include "kvbound/memory_plan.h"
 #include "kvbound/model_config.h"
@@ -18,19 +18,6 @@
 #include "kvbound/step.h"
 
 namespace kvb::cuda {
-
-// Wall time spent in each kind of op, measured by synchronizing after every launch.
-struct OpTimes {
-  std::array<double, kOpKindCount> seconds{};
-  std::array<std::int64_t, kOpKindCount> calls{};
-};
-
-struct RunHooks {
-  // Called for each capture site an op fills, with the program value and its device pointer.
-  std::function<void(const std::string& site, int value, const void* data)> on_site;
-  // When set, the stream is synchronized after every op and the time is added here.
-  OpTimes* times = nullptr;
-};
 
 struct LlamaModelConfig {
   int max_ctx = 0;          // positions the RoPE table covers
@@ -41,16 +28,9 @@ struct LlamaModelConfig {
   // Build the fused program: stacked q|k|v and gate|up products, residual adds folded into norms,
   // RoPE folded into the cache write.
   bool fuse = true;
-  // FP16 matrices are multiplied by kvbound's own kernel for steps of up to this many rows, and
-  // by cuBLAS for wider steps; 0 means always cuBLAS.
-  int f16_gemv_rows = 4;
+  LinearOptions linear;  // which kernel multiplies by each matrix
   // Read cached keys 16 bytes at a time where the KV layout allows it.
   bool wide_key_loads = true;
-  // Quantized matrices are multiplied in place for steps of up to this many rows. Wider steps
-  // use tensor cores on the quantized weights, or with expand_quantized, expand each matrix to
-  // FP16 first for cuBLAS.
-  int quantized_gemm_rows = 3;
-  bool expand_quantized = false;
   // An expanded matrix is written this many bytes at a time, as whole output channels, so the
   // vocabulary projection needs no scratch of its own size.
   std::size_t dequant_slice_bytes = std::size_t{32} << 20;

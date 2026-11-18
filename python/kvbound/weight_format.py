@@ -1,8 +1,10 @@
 """Quantized weight format: the safetensors header contract shared with the C++ loader.
 
-A quantized checkpoint keeps the Hugging Face tensor names. Every 2-D tensor is stored as integers
-under its own name plus an F16 scale tensor named "<name>.scale"; 1-D tensors stay F16. The
-header's __metadata__ says how to read them:
+A quantized checkpoint keeps the Hugging Face tensor names. Every matrix that activations are
+multiplied by is stored as integers under its own name plus an F16 scale tensor named
+"<name>.scale"; the other tensors stay F16: biases and norm parameters, and in a Whisper
+checkpoint the convolution weights and the position tables. The header's __metadata__ says how to
+read the matrices:
 
   int8_pc  per output channel: name I8 [out, in], scale F16 [out],
            W[o, i] = scale[o] * q[o, i], q in [-127, 127].

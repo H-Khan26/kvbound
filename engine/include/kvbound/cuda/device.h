@@ -14,6 +14,9 @@ void check(cudaError_t status, const char* what);
 
 #define KVB_CUDA(call) ::kvb::cuda::check((call), #call)
 
+// A new stream; the caller destroys it with cudaStreamDestroy.
+cudaStream_t create_stream();
+
 // Owning device allocation. Move-only.
 class DeviceBuffer {
  public:

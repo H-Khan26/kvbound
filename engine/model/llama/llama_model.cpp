@@ -114,13 +114,13 @@ DeviceWeights load_weights(const std::filesystem::path& model_dir, const Program
 // more rows than the in-place kernel takes, up to one slice. None unless the engine expands.
 std::size_t dequant_scratch_bytes(const Program& program, const DeviceWeights& weights,
                                   const LlamaModelConfig& limits) {
-  if (!limits.expand_quantized) return 0;
+  if (!limits.linear.expand_quantized) return 0;
   std::size_t bytes = 0;
   for (const Op& op : program.ops) {
     if (op.kind != OpKind::Linear || weights.ref(op.weight).scheme == WeightScheme::F16) continue;
     const Value& out = program.values[op.out];
-    const int max_rows = out.rows == RowKind::Token ? limits.max_step_tokens : limits.max_outputs;
-    if (max_rows <= limits.quantized_gemm_rows) continue;
+    const std::int64_t max_rows = row_count(out.rows, limits.max_step_tokens, limits.max_outputs);
+    if (max_rows <= limits.linear.quantized_gemm_rows) continue;
     bytes = std::max(bytes, expand_scratch_bytes(program.values[op.in0].cols, out.cols,
                                                  limits.dequant_slice_bytes));
   }
@@ -160,7 +160,7 @@ void LlamaModel::run(const StepRow* rows, const std::int32_t* out_rows, int n_to
     const Value* in0 = op.in0 >= 0 ? &program_.values[op.in0] : nullptr;
     // Row count of the op: outputs are produced for n_out rows, everything else per token.
     const Value* shaped = out != nullptr ? out : in0;
-    const int n_rows = shaped->rows == RowKind::Token ? n_tokens : n_out;
+    const int n_rows = static_cast<int>(row_count(shaped->rows, n_tokens, n_out));
     if (n_rows == 0) continue;
 
     const Clock::time_point start = timed ? Clock::now() : Clock::time_point{};
@@ -187,10 +187,7 @@ void LlamaModel::run(const StepRow* rows, const std::int32_t* out_rows, int n_to
       case OpKind::Linear:
         run_linear(weights_.ref(op.weight), nullptr, value<f16>(op.in0), value<void>(op.out),
                    n_rows, static_cast<int>(in0->cols), static_cast<int>(out->cols), out->dtype,
-                   {.f16_gemv_rows = limits_.f16_gemv_rows,
-                    .quantized_gemm_rows = limits_.quantized_gemm_rows,
-                    .expand_quantized = limits_.expand_quantized},
-                   blas_, dequant_, stream);
+                   limits_.linear, blas_, dequant_, stream);
         break;
       case OpKind::Rope:
         kernels::rope(value<f16>(op.in0), rows, rope_table_.as<float>(), n_tokens,
@@ -240,6 +237,8 @@ void LlamaModel::run(const StepRow* rows, const std::int32_t* out_rows, int n_to
         kernels::argmax(value<float>(op.in0), value<std::int32_t>(op.out), n_out,
                         static_cast<int>(in0->cols), stream);
         break;
+      default:
+        throw Error("a Llama program has no " + std::string(op_name(op.kind)));
     }
     if (hooks == nullptr) continue;
     if (timed) {

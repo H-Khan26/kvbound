@@ -36,8 +36,12 @@ if(KVB_ENABLE_CUDA)
     model/linear.cpp
     model/llama/llama_model.cpp
     model/llama/weights.cpp
+    model/whisper/weights.cpp
+    model/whisper/whisper_model.cpp
+    runtime/asr_engine.cpp
     runtime/engine.cpp
     runtime/generate.cpp
+    runtime/run_hooks.cpp
     runtime/serve.cpp
   )
   add_library(kvbound::cuda ALIAS kvbound_cuda)
