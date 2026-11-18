@@ -12,6 +12,16 @@ optimization. Phase 6 is summarized next for both cards; its log, which also com
 [`docs/optimization-log.md`](docs/optimization-log.md). The sections after it describe the engine on the RTX 3060 Ti
 as Phase 6 left it.
 
+Track W runs a speech model, Whisper, on the same engine: an encoder and a decoder program over one weight table, a
+second cache for the encoder's output, greedy decoding and beam search. It is measured on Quran recitation against
+Hugging Face Transformers and faster-whisper ([Track W](#track-w-whisper-on-the-same-engine)).
+
+Open items: beam search ranks each step's candidates on the host, the likely main reason it is slow, and ranking them
+on the GPU is in progress; timestamps, word alignment and decoding of audio longer than one 30-second window are not
+built, and the Sawt Sakinah app, which transcribes with faster-whisper today, needs all three before it could switch;
+on the RTX 3060 Ti
+the DRAM writes of `gemm_quantized` are not explained; the step-counter profiles do not record the SM clock.
+
 ## Phase 6: profile and optimize
 
 Six changes, each an engine option so that its before and after ran back to back at one commit (the Phase 5 paths are
@@ -39,27 +49,30 @@ Six changes, each an engine option so that its before and after ran back to back
 
 | RTX 3060 Ti | Phase 5 paths | Phase 6 |
 | --- | --- | --- |
-| TinyLlama decode, batch 1, FP16 / INT8 / INT4 | 162 / 293 / 449 tok/s | **178 / 314 / 494 tok/s** (89% / 79% / 64% of the ceiling) |
-| Llama 3.2 decode, batch 1, FP16 / INT8 / INT4 | 142 / 269 / 437 tok/s | **152 / 281 / 469 tok/s** (91% / 84% / 73%) |
-| TinyLlama / Llama 3.2 time to first token, 1,024-token prompt | 205.4 / 167.0 ms | **76.4 / 72.4 ms** |
-| TinyLlama serving 96 requests, FP16 / INT8 / INT4 | 1,463 / 979 / 1,013 tok/s | **1,740 / 2,163 / 2,219 tok/s** |
-| Llama 3.2 serving 96 requests, FP16 / INT8 / INT4 | 1,554 / 937 / 1,002 tok/s | **1,827 / 2,217 / 2,342 tok/s** |
+| TinyLlama decode, batch 1, FP16 / INT8 / INT4 | 162 / 291 / 450 tok/s | **177 / 312 / 507 tok/s** (89% / 78% / 66% of the ceiling) |
+| Llama 3.2 decode, batch 1, FP16 / INT8 / INT4 | 145 / 270 / 437 tok/s | **154 / 281 / 475 tok/s** (92% / 84% / 74%) |
+| TinyLlama / Llama 3.2 time to first token, 1,024-token prompt | 201.6 / 163.4 ms | **73.3 / 70.6 ms** |
+| TinyLlama serving 96 requests, FP16 / INT8 / INT4 | 1,517 / 1,013 / 1,060 tok/s | **1,804 / 2,214 / 2,290 tok/s** |
+| Llama 3.2 serving 96 requests, FP16 / INT8 / INT4 | 1,623 / 980 / 1,039 tok/s | **1,901 / 2,279 / 2,403 tok/s** |
 
-Quantized weights went from 15% to 31% slower than FP16 under load to 28% to 54% faster on the RTX 4070, and from 31%
-to 40% slower to 21% to 28% faster on the RTX 3060 Ti. WikiText-2 perplexity is unchanged (8.8723 and 9.9563 for
+Quantized weights went from 15% to 31% slower than FP16 under load to 28% to 54% faster on the RTX 4070, and from 30%
+to 40% slower to 20% to 27% faster on the RTX 3060 Ti. WikiText-2 perplexity is unchanged (8.8723 and 9.9563 for
 TinyLlama FP16 and INT4, 10.9867 and 14.7617 for Llama 3.2; the RTX 3060 Ti reads the same to within 0.0001), and both
 models still match the reference token for token. On the RTX 4070 the 1,024-token prompt is now 95% matrix products,
 at the 59 TFLOPS FP16 peak with FP32 accumulation. On the RTX 3060 Ti that peak is 32.7 TFLOPS, which accounts for
-60.7 of TinyLlama's 76.4 ms. Per-kernel Nsight Compute counters of one step (`make step-counters`) are in
+60.7 of TinyLlama's 73.3 ms. Per-kernel Nsight Compute counters of one step (`make step-counters`) are in
 `results/profiles/*-counters-*`.
 
-Each table is one set of back-to-back runs. The RTX 3060 Ti shares its desktop, and other programs take the GPU
-during some steps of a run, so its decode rows, here and in the sections below, are read by the median step of a run
-and not by the mean step. On the RTX 4070 the two readings agree within 0.5%, and its table is as recorded. On the
-RTX 3060 Ti they differ by 3.1% to 6.3% in 14 of the 34 Phase 6 decode runs. In the pair those are the TinyLlama INT4
-"after" run, which reads 477 tok/s as recorded and 494 by the median step, and all six Llama 3.2 runs, which read
-138 / 253 / 414 and 146 / 266 / 441 tok/s as recorded. Time to first token and serving have no second reading and
-are as recorded; the Llama 3.2 pair's 72.4 ms is 70.3 ms in a later undisturbed run.
+Each table is one set of back-to-back runs at one commit. The RTX 3060 Ti shares its desktop. In its first Phase 6
+session (2026-11-17, `c442759`) other programs took the GPU during some steps of a run, and in 14 of the 34 decode
+runs the mean step was 3.1% to 6.3% longer than the median step. Its pairs were recorded again on 2026-11-18 at
+`4089b55` with the desktop kept quiet, and the table above is that session: in its 22 decode runs the two readings
+differ by at most 0.87%, the three passes of each serving run are within 0.8% of each other, and no decode run is
+tagged `clock_varied`. Decode on this card is read by the median step, in this table and in the sections below,
+which also use the first session's `make precision`, `make serve` and `make serve-load` records. In this table the
+reading moves no cell by more than one unit except the INT4 "after" runs, which read 503 (TinyLlama) and 471 tok/s
+(Llama 3.2) as recorded. On the RTX 4070 the two readings agree within 0.5%, and its table is as recorded. Time to
+first token and serving have no second reading.
 
 **The two cards.** The RTX 4070 has 1.14 times the memory bandwidth of the RTX 3060 Ti (475 against 415 GB/s), 1.81
 times its tensor-core peak for FP16 products with FP32 accumulation (59.1 against 32.7 TFLOPS), and a 36 MiB L2
@@ -67,11 +80,11 @@ against 3 MiB.
 
 - **Memory bandwidth** sets the floor of a decode step, the weights read once: 5.00 ms on the 3060 Ti and 4.37 ms on
   the 4070 for TinyLlama in FP16, where the FP16 GEMV reads at 95% and 97% of the two ceilings. The rest of the step
-  is 0.56 to 0.73 ms on the 3060 Ti and 0.24 to 0.36 ms on the 4070 at every weight precision, so the 4070 is 1.19
-  to 1.21 times faster in FP16 and 1.32 to 1.37 times in INT4. Why the rest is twice as long is not established: the
-  SM clock (1.41 times higher on the 4070) is a candidate.
-- **Tensor-core throughput** sets the 1,024-token prompt (1.77 to 1.98 times faster on the 4070) and most of serving
-  (1.36 to 1.78 times).
+  is 0.51 to 0.70 ms on the 3060 Ti and 0.24 to 0.36 ms on the 4070 at every weight precision, so the 4070 is 1.19
+  to 1.20 times faster in FP16 and 1.32 to 1.33 times in INT4. Why the rest is twice as long is not established: the
+  SM clock (1.42 times higher on the 4070) is a candidate.
+- **Tensor-core throughput** sets the 1,024-token prompt (1.78 to 1.90 times faster on the 4070) and most of serving
+  (1.37 to 1.72 times).
 - **L2 size** does not show in decode. In a 1,024-row step the two cards' counters differ in DRAM traffic: the INT4
   tensor-core products read 6.9 times and write 15.7 times the bytes on the 3060 Ti that they do on the 4070. The
   writes are 5.1 times the products' output, which points at kvbound's own kernel and not only at cache size. The
@@ -89,8 +102,8 @@ The evidence for each line is in the [log](docs/optimization-log.md#the-two-card
 | Dependent-load latency, L1 / L2 / DRAM | about 21 / 135 / 312 ns | `kvb-pointer_chase` |
 | GEMM peak, FP16 with FP16 / FP32 accumulate; INT8 | about 58 / 33 TFLOPS; 115 TOPS | `kvb-gemm_peak` (cuBLASLt) |
 | Decode ceiling, batch 1, FP16 | about 200 tokens/s (weights 2.07 GB read once per token) | `python -m kvbound.perfmodel` |
-| **kvbound decode, batch 1, FP16** | **175 tokens/s, 88% of the ceiling** (5.70 ms per token; 167 tokens/s without CUDA graphs) | `python -m kvbound.bench` (`make bench`) |
-| kvbound time to first token | 11 ms for a 128-token prompt, 76 ms for 1,024 tokens | `python -m kvbound.bench` (`make bench`) |
+| **kvbound decode, batch 1, FP16** | **177 tokens/s, 88% of the ceiling** (5.66 ms per token; 170 tokens/s without CUDA graphs) | `python -m kvbound.bench` (`make bench`) |
+| kvbound time to first token | 11 ms for a 128-token prompt, 74 ms for 1,024 tokens | `python -m kvbound.bench` (`make bench`) |
 | **kvbound decode, batch 1, INT8 / INT4 weights** | **314 / 507 tokens/s**, 79% / 66% of their ceilings | `python -m kvbound.bench --weights ...` (`make precision`) |
 | kvbound static batching, 8 slots | 955 tokens/s on equal-length requests, 451 on long-tailed lengths (173 to 175 one at a time) | `python -m kvbound.serve` |
 | **kvbound paged KV, continuous batching, same pool** | **1776 tokens/s on equal-length requests, 1469 on long-tailed lengths** | `python -m kvbound.serve --policy continuous` |
@@ -101,16 +114,16 @@ stays within the FP16 limits in the golden manifest (`make test-real`).
 
 Where an FP16 decode step's kernel time goes (Nsight Compute counters of one step, `results/profiles/*-counters-*`):
 90% in kvbound's GEMV streaming the weights, 5% in attention, 5% in the small kernels (norms, RoPE with the cache
-write, SwiGLU). The step is 204 kernel launches. Replayed from a CUDA graph it takes 5.70 ms; launched one by one,
-6.00 ms.
+write, SwiGLU). The step is 204 kernel launches. Replayed from a CUDA graph it takes 5.66 ms; launched one by one,
+5.88 ms.
 
 These runs come from a shared Windows desktop with unlocked GPU clocks. The engine's decode, time-to-first-token and
-serving numbers in this section and the ones below are from the Phase 6 records of this card (`make bench`,
-`make precision`, `make serve` and `make serve-load` at one commit); the kernel microbenchmarks keep the records of
-the phase that made them. Decode is read by the median step of each run, as explained under the Phase 6 tables. By
-that reading FP16 decode is 175 tokens/s in `make bench`, 176 in `make precision` and 178 in the Phase 6 pair, 1.3%
-apart. By the mean step the same three runs read 168, 170 and 178 tokens/s, because the first two were disturbed.
-Through the Phase 5 paths the same request reads 162 tokens/s.
+serving numbers in this section and the ones below are from the Phase 6 records of this card: `make bench` from the
+second session (2026-11-18, `4089b55`), `make precision`, `make serve` and `make serve-load` from the first
+(2026-11-17, `c442759`). The kernel microbenchmarks keep the records of the phase that made them. Decode is read by
+the median step of each run, as explained under the Phase 6 tables. By that reading FP16 decode is 177 tokens/s in
+`make bench`, 176 in `make precision` and 177 in the second session's pair, 0.7% apart. Through the Phase 5 paths
+the same request reads 162 tokens/s.
 
 ### What the static memory design costs
 
@@ -202,8 +215,12 @@ The last two columns serve 96 `fixed` requests at once in a KV pool of the same 
 
 ![Precision](reports/rtx3060ti/precision.png)
 
-The decode columns are by the median step. The figure plots the same records by their mean step, which reads 170 for
-the first bar, whose run was disturbed, and 315, 314, 504 and 496 for the last four.
+The table is the first session's `make precision` (2026-11-17), with decode by the median step. The figure
+(`make report`) plots the newest record of each configuration, by the mean step. For the FP16-cache bars of decode
+and serving those are the second session's runs (2026-11-18): 177, 313 and 503 tokens/s, and 1804, 2214 and 2290
+tokens/s under load. The INT8-cache bars and the perplexities are the table's records, whose decode reads 177, 314
+and 496 tokens/s by the mean step. The figure therefore sets bars from two sessions side by side; the table keeps to
+one.
 
 Read against the roofline:
 
@@ -223,7 +240,8 @@ Read against the roofline:
 - **Under load, quantized weights are now faster than FP16**: 2270 and 2356 tokens/s with INT8 and INT4 weights
   against 1746, 30% and 35% more. Steps wider than 3 rows multiply the packed weights on tensor cores and read each
   matrix once at its packed size. Phase 5 found the opposite, because wide steps expanded each matrix to FP16 for
-  cuBLAS: through those paths the same workload still runs at 979 and 1,013 tokens/s against 1,463 in FP16.
+  cuBLAS: through those paths, in the pair of the same session, the same workload runs at 979 and 1,013 tokens/s
+  against 1,463 in FP16.
 - The engine and the dequantizing reference agree on every capture site within the FP16 limits (`make test-gpu`); the
   reference model scores 8.87 on the FP16 checkpoint where the engine scores 8.87.
 
@@ -260,11 +278,11 @@ and barely moves Llama 3.2: the clip has to be chosen by its effect on the outpu
 perplexity over FP16 on TinyLlama and 18% on Llama 3.2. Its decode and serving speed have not been recorded: the
 speed columns of the precision table are plain INT4.
 
-Known gaps after Phase 6: INT4 decode on this card stops at 64% to 66% of its ceiling; INT4 with AWQ scales still
+Known gaps after Phase 6: INT4 decode on this card stops at 66% of its ceiling; INT4 with AWQ scales still
 costs the perplexity above and has no speed record; FP16 steps of 5 to 64 rows still go through cuBLAS; decode
 attention still runs one block per head at long context; steps that mix prefill and decode run without CUDA graphs;
 prefix sharing is not built, and the FP8 KV cache is not built. The largest Phase 5 gap is closed: a 1,024-token
-prompt takes 76 ms where the Phase 5 paths take 205 ms.
+prompt takes 73 ms where the Phase 5 paths take 202 ms.
 
 ### The same engine on Llama 3.2 1B
 
@@ -276,9 +294,9 @@ Greedy output matches the reference token for token on every golden prompt, and 
 | --- | --- | --- |
 | Weights read per token, FP16 | 2.47 GB | 2.07 GB |
 | Decode ceiling, batch 1, FP16 | 168 tokens/s | 200 tokens/s |
-| kvbound decode, batch 1, FP16 (`make bench`) | 154 tokens/s, 92% of the ceiling | 175 tokens/s, 88% |
-| kvbound decode without CUDA graphs | 150 tokens/s | 167 tokens/s |
-| Time to first token, 128 / 1,024 prompt tokens | 11 ms / 70 ms | 11 ms / 76 ms |
+| kvbound decode, batch 1, FP16 (`make bench`) | 154 tokens/s, 92% of the ceiling | 177 tokens/s, 88% |
+| kvbound decode without CUDA graphs | 150 tokens/s | 170 tokens/s |
+| Time to first token, 128 / 1,024 prompt tokens | 11 ms / 70 ms | 11 ms / 74 ms |
 | Static batching, 8 slots: `fixed` / `uniform` / `longtail` | 883 / 658 / 397 tokens/s | 955 / 723 / 451 tokens/s |
 | Paged, continuous batching, same pool (256 / 176 MiB) | 1877 / 1628 / 1397 tokens/s | 1776 / 1593 / 1469 tokens/s |
 | Most sequences in a step, paged | 30 / 28 / 48 | 30 / 28 / 48 |
@@ -299,25 +317,133 @@ clocks. Exact values are in `results/raw/` and the figures in `reports/`.
 
 ![Roofline](reports/rtx3060ti/roofline.png)
 
+## Track W: Whisper on the same engine
+
+Whisper is a speech model in two parts. An encoder turns a 30-second window of audio, as log-mel features, into
+1,500 positions; a decoder then writes the transcript one token at a time, attending to its own tokens and to the
+encoder's output (cross attention). Track W runs `whisper-base-ar-quran`, Tarteel's fine-tune of Whisper base for
+Quran recitation (6 encoder and 6 decoder layers of width 512), on kvbound's engine.
+
+What the engine gained for it:
+
+- **Two programs over one weight table.** The encoder program runs the convolution stem as `Unfold` (each frame
+  with its two neighbours) and a matrix product, then GELU, the position table, pre-norm layers with LayerNorm, and
+  for each decoder layer the projection of the cross-attention keys and values into the second cache. The decoder
+  program runs the embedding and positions, self attention over a paged cache, cross attention over the encoder's
+  keys and values, the MLP, the tied vocabulary projection, the suppression of tokens the rules forbid, and argmax.
+  Both index one table of weights, loaded once. New ops: `LayerNorm`, `AddLayerNorm`, `Gelu`, `Unfold`,
+  `AddPositions`, `DenseAttention` (the encoder's attention, on the tiled tensor-core prefill kernel without the
+  causal mask) and `SuppressTokens`. Biases are an epilogue of kvbound's own product kernels, which Llama calls with
+  none, and a separate kernel after cuBLAS. Fusion folds each residual add into the LayerNorm after it.
+- **`AsrEngine`**, a sibling of `Engine` with two caches. The Self cache, of the decoder's own keys and values, is
+  the paged cache of Phase 4 in 16-token blocks. The Cross cache holds one block of 1,500 positions per sequence,
+  filled by the encoder step. The scheduler gives an admitted request an encoder step before its first decoder rows;
+  a preempted sequence loses both caches and is encoded again when it is readmitted. Decode-shaped steps replay
+  CUDA graphs from the graph cache that `Engine` also uses.
+- **Decoding rules from the checkpoint.** Fetching writes the prompt, the suppressed tokens, the tokens not allowed
+  first, the end token and the 448-token limit into `generation.json`, as Hugging Face `generate` applies them to
+  this checkpoint. Its prompt is the start token alone; the model writes the language and task tokens itself.
+- **Beam search** is Hugging Face's algorithm (`kvb::BeamSearch`). The live beams are the rows of one decoder step.
+  At a fork each child takes its parent's list of Self blocks, with reference counts, and a block that another beam
+  still holds is copied before a beam writes into it (copy on write). Every beam points at the clip's one Cross
+  block. Each step copies the logits to the host and ranks the candidates there.
+- **Quantization** covers the matrices only (INT8 per channel, INT4 in groups of 128); convolution weights, position
+  tables, biases and norm parameters stay FP16. Either cache can hold INT8.
+
+**Tests.** `fixtures/tiny-whisper/` is a 2+2-layer random Whisper with goldens of every encoder and decoder site.
+The engine matches each site within the FP16 limits, fused and unfused, at FP16, INT8 and INT4 against the
+dequantizing reference. Greedy output equals the reference's token for token under both scheduling policies, with
+and without graphs, and through preemptions. Beam search reproduces the reference search's committed traces, with
+blocks shared between beams or every block private. On 20 local recitation clips the slow tests require greedy
+output to equal Hugging Face FP16 `generate` token for token, or to part from it first where the FP32 reference
+scores the two tokens within FP16 noise of each other (`NEAR_TIE` and `FP16_GAP_NOISE` in
+`tests/py/test_asr_greedy.py`); beam 5 must equal Hugging Face's beam 5 or end on hypotheses the FP32 reference
+scores within `RESCORE_TOLERANCE` of each other.
+
+### Measured against Hugging Face and faster-whisper (RTX 3060 Ti)
+
+The clips are `everyayah-test-1000`: 1,000 clips of the test split of `tarteel-ai/everyayah`, 3.79 hours from 36
+reciters, drawn by reciter (`configs/evals/everyayah-test-1000.json`). Each clip is decoded as one window, without
+timestamps, one clip at a time. All 16 records come from one session at `4089b55`; faster-whisper's `int8` runs on
+this machine's CPU with 4 threads, the setting the Sawt Sakinah app uses.
+
+- **WER**, the word error rate, is the word-level edit distance from the reference (substitutions, insertions and
+  deletions) summed over the clips and divided by the reference words, 10,945 here. Both sides are first normalized
+  as the Sawt Sakinah app matches words: diacritics removed and one spelling kept for each letter Arabic writes
+  several ways (`kvbound.evals.text`).
+- **RTF**, the real-time factor, is processing time divided by audio time, summed over the clips; 0.0047 means 4.7
+  ms per second of audio. The *model* RTF runs from the log-mel features on the host to the token ids on the host:
+  the encoder, every decoder step and the copies. The *end-to-end* RTF runs from the waveform to the text, so it
+  adds the log-mel front end and detokenization.
+
+| Stack | WER, greedy / beam 5 | RTF, model, greedy / beam 5 | RTF, end to end, greedy / beam 5 |
+| --- | --- | --- | --- |
+| kvbound, FP16 | 0.58% / 0.48% | 0.0047 / 0.0313 | 0.0051 / 0.0317 |
+| kvbound, INT8 weights | 0.55% / 0.46% | 0.0040 / 0.0308 | 0.0045 / 0.0313 |
+| kvbound, INT4 weights | 1.42% / 1.28% | 0.0039 / 0.0300 | 0.0043 / 0.0304 |
+| kvbound, FP16 weights, INT8 caches | 0.58% / 0.48% | 0.0047 / 0.0312 | 0.0052 / 0.0316 |
+| Hugging Face, FP16 | 0.58% / 0.48% | 0.0568 / 0.0684 | 0.0572 / 0.0689 |
+| faster-whisper GPU, `float16` | 0.72% / 0.60% | 0.0164 / 0.0209 | 0.0189 / 0.0235 |
+| faster-whisper GPU, `int8_float16` | 0.67% / 0.57% | 0.0263 / 0.0308 | 0.0287 / 0.0334 |
+| faster-whisper CPU, `int8` | 0.66% / 0.65% | 0.0616 / 0.0839 | 0.0647 / 0.0870 |
+
+- **kvbound and Hugging Face agree clip by clip.** In FP16, greedy and at beam 5, the two have the same number of
+  word errors and the same number of decoder steps on each of the 1,000 clips. The records hold those counts, not
+  the token ids; the slow tests above compare the ids.
+- **Greedy, kvbound is the fastest stack here**: by model RTF 12.1 times faster than Hugging Face and 3.5 times
+  faster than faster-whisper `float16`, at 0.70 ms per generated token.
+- **INT8 weights cost no accuracy and INT4 weights do.** INT8 takes 14% less time than FP16 at 0.55% WER against
+  0.58%; INT4 takes 17% less and raises WER to 1.42%. FP16 weights with INT8 caches give the same word errors and
+  steps as FP16 on every clip, at the same speed.
+- **faster-whisper differs in more than numerics.** With the language set to Arabic it forces the prompt
+  `<|startoftranscript|><|ar|><|transcribe|><|notimestamps|>`, where Hugging Face and kvbound feed the start token
+  alone and the model writes the other three. It also computes the log-mel features of the clip before padding it
+  to 30 seconds, where the other two pad first. Its per-clip word errors equal Hugging Face's on 984 to 994 of the
+  1,000 clips, depending on the configuration (994 for `float16`, 984 for the CPU's `int8` greedy), so its higher WER
+  comes from a few clips, and the records cannot separate what the prompt and the front end contribute from what its
+  arithmetic does.
+- **Beam 5 on kvbound is slow for now.** A generated token takes 5.09 ms against 0.70 greedy, and faster-whisper
+  `float16` at beam 5 is faster (model RTF 0.0209 against 0.0313). Every step copies the logits to the host and ranks
+  the candidates there, the likely main cost, though no record times it apart from the rest of the step. Ranking on
+  the GPU is in progress, and the beam-5 rows will be recorded again. The beam runs' encoder step also reads longer
+  than the greedy runs' (10.0 against 5.9 ms for FP16); why is not established.
+- **What a WER this low means.** The model was fine-tuned on recitations of this text: the clips are the dataset's
+  test split, but every split reads the same Quran. A WER near zero shows that the stacks agree, not that the task is
+  hard. The subset leans toward the start of each audio page of the dataset, which keeps the download small; its
+  clips average 13.64 s against 12.61 s over the 20,914 test clips of at most 30 s. The other 2,559 of the 23,473
+  test clips are longer than one window and left out. The recordings carry no documented license, so the clips are
+  evaluated only, never committed or redistributed.
+
+What each stack's timings include, the encoder and per-token times, and the clocks of each run are in the
+[log](docs/optimization-log.md#track-w-whisper-measurements-rtx-3060-ti).
+
+```sh
+make fetch MODEL=whisper-base-ar-quran          # converts the checkpoint and writes generation.json
+uv run python -m kvbound.quantize whisper-base-ar-quran --scheme int8_pc   # and --scheme int4_g
+uv run python -m kvbound.evals.asr subset       # the 1,000 clips into data/datasets/, checked against the manifest
+uv run python -m kvbound.evals.asr eval --model whisper-base-ar-quran --backend kvbound --compute-type fp16:int8 --beams 5
+make bench-asr MODEL=whisper-base-ar-quran      # Hugging Face and faster-whisper, greedy and beam 5
+```
+
 ## Layout
 
 | Path | What lives there |
 | --- | --- |
-| `engine/` | the C++ side. `kvbound` (CPU only): safetensors and JSON loaders, the weight format, the op program, the activation memory planner, the scheduler (static and continuous), the sampler, cache bookkeeping. `kvbound_cuda`: kernels, device weights, KV pool, the engine |
-| `engine/kernels/` | CUDA kernels: embedding, RMSNorm (also fused with the residual add), RoPE (also fused with the cache write), SwiGLU gate, residual add, decode attention and tiled tensor-core prefill attention over an FP16 or INT8 KV cache, argmax, an FP16 GEMV, products and lookups on INT8 and INT4 weights in place and on tensor cores; cuBLAS for wide FP16 products |
-| `apps/` | `kvb-bench` runs a trace of requests through the scheduler and prints raw timings; `kvb-kv_layout` times attention on each KV layout, on 16-token blocks and on an INT8 cache |
+| `engine/` | the C++ side. `kvbound` (CPU only): safetensors and JSON loaders, the weight format, the Llama and Whisper op programs, the activation memory planner, the scheduler (static and continuous, with encoder steps), the sampler, the beam search, cache bookkeeping with reference-counted blocks. `kvbound_cuda`: kernels, device weights, KV pool, the engine and the speech engine (`AsrEngine`) |
+| `engine/kernels/` | CUDA kernels: embedding, RMSNorm (also fused with the residual add), LayerNorm (likewise), RoPE (also fused with the cache write), SwiGLU gate, GELU, position add, the convolution unfold, residual add, decode attention, tiled tensor-core prefill attention and its non-causal encoder form over an FP16 or INT8 KV cache, token suppression, argmax, an FP16 GEMV, products and lookups on INT8 and INT4 weights in place and on tensor cores, with an optional bias; cuBLAS for wide FP16 products |
+| `apps/` | `kvb-bench` runs a trace of requests through the scheduler and prints raw timings; `kvb-asr` transcribes log-mel features greedily or by beam search; `kvb-kv_layout` times attention on each KV layout, on 16-token blocks and on an INT8 cache |
 | `bindings/` | `_kvb`, the engine and each kernel as a Python extension, for tests and evals |
 | `microbench/` | standalone CUDA binaries that measure bandwidth, latency and GEMM peaks |
-| `python/kvbound/ref/` | from-scratch PyTorch reference models: Llama (RMSNorm, RoPE, grouped-query attention, SwiGLU), which loads quantized checkpoints by dequantizing them, and Whisper (conv stem, encoder, decoder with cross attention, greedy decoding) |
-| `python/kvbound/` | golden tensors, tolerance metrics, result records, fingerprint, baselines, perf model, workloads, the quantizer and its AWQ scale search, bench, serve and profile wrappers, plots |
-| `python/kvbound/evals/` | WikiText-2 perplexity, and per-site error against the goldens with sample text |
-| `fixtures/tiny-llama/`, `fixtures/tiny-whisper/` | committed 2-layer random models with goldens and thresholds; what CI tests against |
-| `tests/cpp/` | GoogleTest, CPU only: parser, loader, weight format, fixture contract, op program, memory plan, both scheduling policies, sampler, allocator |
-| `tests/py/` | pytest: reference vs Hugging Face, the quantizer, the perplexity arithmetic; under the `gpu` marker, each kernel vs torch and the engine vs the goldens, FP16 and quantized |
-| `configs/` | model, device and workload descriptions |
+| `python/kvbound/ref/` | from-scratch PyTorch reference models: Llama (RMSNorm, RoPE, grouped-query attention, SwiGLU), which loads quantized checkpoints by dequantizing them, and Whisper (conv stem, encoder, decoder with cross attention, greedy decoding and Hugging Face's beam search) |
+| `python/kvbound/` | golden tensors, tolerance metrics, result records, fingerprint, baselines (Hugging Face for both models, faster-whisper for Whisper), perf model, workloads, the quantizer and its AWQ scale search, the log-mel front end, speech recognition through the engine (`asr.py`), bench, serve and profile wrappers, plots |
+| `python/kvbound/evals/` | WikiText-2 perplexity, per-site error against the goldens with sample text, and the speech evaluation: the recitation subset, Arabic normalization, word and character error rates, real-time factors |
+| `fixtures/tiny-llama/`, `fixtures/tiny-whisper/` | committed 2-layer random models with goldens and thresholds (and reference beam-search traces for Whisper); what CI tests against |
+| `tests/cpp/` | GoogleTest, CPU only: parser, loader, weight format, fixture contracts, op programs, memory plan, both scheduling policies, sampler, allocator and block reference counts, beam search against the reference traces |
+| `tests/py/` | pytest: reference vs Hugging Face, the quantizer, the perplexity and error-rate arithmetic; under the `gpu` marker, each kernel vs torch and both engines vs the goldens, FP16 and quantized, and Whisper greedy and beam search vs the reference |
+| `configs/` | model, device, workload and evaluation-subset descriptions |
 | `results/raw/<device>/` | one JSON record per benchmark or evaluation run, written only by `kvbound.record` |
 | `results/profiles/` | Nsight Systems summaries (CSV) of decode runs; Nsight Compute counters of the attention kernel and of every kernel in one step |
-| `docs/` | `optimization-log.md`: each Phase 6 change with its hypothesis, before and after, and profiler evidence, and the comparison of the two cards |
+| `docs/` | `optimization-log.md`: each Phase 6 change with its hypothesis, before and after, and profiler evidence, the comparison of the two cards, and the Track W measurements in detail |
 | `reports/<device>/` | figures generated from the records |
 
 ## Build and test

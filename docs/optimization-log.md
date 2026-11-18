@@ -11,9 +11,11 @@ include them (entries 3 and 4). Measured against the Phase 5 records from `3c3d2
 every gain below is larger.
 
 The RTX 3060 Ti (`rtx3060ti-fd7b40d5`, same setup) then ran the same pairs and counters at
-`c442759`. Its tables follow the 4070 material, and
+`c442759` on 2026-11-17, and the pairs again at `4089b55` on 2026-11-18, because other programs
+had disturbed part of the first session. Its tables follow the 4070 material, and
 [The two cards compared](#the-two-cards-compared) explains the differences through memory
-bandwidth, tensor-core throughput, L2 size and FP8.
+bandwidth, tensor-core throughput, L2 size and FP8. The last section,
+[Track W](#track-w-whisper-measurements-rtx-3060-ti), gives the speech measurements in detail.
 
 Reproduce with the `make bench`, `make serve`, `make precision` and `make step-counters`
 targets. The counter tables come from `kvbound.step_counters` (Nsight Compute, one step, caches
@@ -231,67 +233,63 @@ resident: it is a memory stream, and the remaining gap to 475 GB/s is the smalle
 
 ## Summary (RTX 3060 Ti)
 
-The same pairs with the same options, workloads and pool sizes, back to back at `c442759`. Each
+The same pairs with the same options, workloads and pool sizes, back to back at one commit. Each
 share is of this card's own ceiling, set by the 415 GB/s measured here (475 GB/s on the 4070).
 
+This card ran the pairs twice. In the first session (2026-11-17, `c442759`) other programs on
+this desktop took the GPU during some of a run's steps, which lengthens the mean step and leaves
+the median where it was; every record keeps both. In 14 of that session's 34 Phase 6 decode
+records the mean step was 3.1% to 6.3% longer than the median. The pairs were therefore recorded
+again on 2026-11-18 at `4089b55`, with the desktop kept quiet, followed by `make bench` for both
+models, and the tables below are that session:
+
+- In all 22 of its decode records the two readings differ by at most 0.87%, and none is tagged
+  `clock_varied`.
+- The three passes of each serving run are within 0.8% of each other. Two serving runs are tagged
+  `clock_varied`, TinyLlama INT8 and INT4 "after": the SM clock moved between 1,785 and 1,935 MHz
+  during them.
+
 Decode on this card is read by the median step of a run (`decode_step_p50_s`), not by its mean
-step (`decode_tok_s`, which the 4070 summary above prints). Other programs on this desktop take
-the GPU during some of a run's steps. That lengthens the mean step and leaves the median where it
-was, which is why every record keeps both. On the 4070 the two readings agree within 0.5% in every
-pair record. Here they differ by more than 2% in 14 of the 34 Phase 6 decode records, by 3.1% to
-6.3%; those runs are called disturbed below. TTFT and serving throughput have no second reading
-and are as recorded.
+step (`decode_tok_s`, which the 4070 summary above prints), because the README's quantization
+section uses the first session's `make precision` records, which need it. In these tables the
+reading moves no cell by more than one unit except the INT4 "after" runs, which read 503
+(TinyLlama) and 471 tok/s (Llama 3.2) as recorded. As recorded the changes are +9.8% / +7.5% /
++11.6% (TinyLlama) and +6.3% / +4.2% / +7.9% (Llama 3.2). TTFT and serving throughput have no
+second reading and are as recorded.
 
 | TinyLlama 1.1B | Before | After | Change |
 | --- | --- | --- | --- |
-| FP16 decode | 162 tok/s (81% of the ceiling) | 178 tok/s (89%) | +9.5% |
-| INT8 decode | 293 tok/s (73%) | 314 tok/s (79%) | +7.1% |
-| INT4 decode | 449 tok/s (58%) | 494 tok/s (64%) | +10.0% |
-| TTFT, 128-token prompt (FP16 / INT4) | 14.3 / 20.3 ms | 10.5 / 11.4 ms | 1.4x / 1.8x |
-| TTFT, 1,024-token prompt (FP16) | 205.4 ms | 76.4 ms | 2.7x |
-| Serving FP16 / INT8 / INT4 | 1,463 / 979 / 1,013 tok/s | 1,740 / 2,163 / 2,219 tok/s | 1.2x / 2.2x / 2.2x |
+| FP16 decode | 162 tok/s (81% of the ceiling) | 177 tok/s (89%) | +9.3% |
+| INT8 decode | 291 tok/s (73%) | 312 tok/s (78%) | +7.3% |
+| INT4 decode | 450 tok/s (58%) | 507 tok/s (66%) | +12.9% |
+| TTFT, 128-token prompt (FP16 / INT4) | 14.3 / 20.4 ms | 10.6 / 11.3 ms | 1.4x / 1.8x |
+| TTFT, 1,024-token prompt (FP16) | 201.6 ms | 73.3 ms | 2.7x |
+| Serving FP16 / INT8 / INT4 | 1,517 / 1,013 / 1,060 tok/s | 1,804 / 2,214 / 2,290 tok/s | 1.2x / 2.2x / 2.2x |
 
 | Llama 3.2 1B | Before | After | Change |
 | --- | --- | --- | --- |
-| FP16 decode | 142 tok/s (85%) | 152 tok/s (91%) | +7.1% |
-| INT8 decode | 269 tok/s (81%) | 281 tok/s (84%) | +4.5% |
-| INT4 decode | 437 tok/s (68%) | 469 tok/s (73%) | +7.3% |
-| TTFT, 1,024-token prompt (FP16) | 167.0 ms | 72.4 ms | 2.3x |
-| Serving FP16 / INT8 / INT4 | 1,554 / 937 / 1,002 tok/s | 1,827 / 2,217 / 2,342 tok/s | 1.2x / 2.4x / 2.3x |
+| FP16 decode | 145 tok/s (87%) | 154 tok/s (92%) | +6.3% |
+| INT8 decode | 270 tok/s (81%) | 281 tok/s (84%) | +4.2% |
+| INT4 decode | 437 tok/s (68%) | 475 tok/s (74%) | +8.7% |
+| TTFT, 1,024-token prompt (FP16) | 163.4 ms | 70.6 ms | 2.3x |
+| Serving FP16 / INT8 / INT4 | 1,623 / 980 / 1,039 tok/s | 1,901 / 2,279 / 2,403 tok/s | 1.2x / 2.3x / 2.3x |
 
-Under load, quantized weights were 31% to 40% slower than FP16 through the Phase 5 paths on this
-card. They are now 21% to 28% faster. The median time per output token while serving INT4 falls
-from 22.4 to 10.0 ms on TinyLlama and from 22.7 to 9.5 ms on Llama 3.2. Perplexity matches the
-4070's to within 0.0001: 8.8723, 9.9563, 10.9866 and 14.7617.
+Under load, quantized weights were 30% to 40% slower than FP16 through the Phase 5 paths on this
+card. They are now 20% to 27% faster. The median time per output token while serving INT4 falls
+from 21.3 to 9.7 ms on TinyLlama and from 21.9 to 9.2 ms on Llama 3.2. Perplexity, from the first
+session, matches the 4070's to within 0.0001: 8.8723, 9.9563, 10.9866 and 14.7617.
 
-Which runs were disturbed, and what each reading gives:
-
-- **TinyLlama INT4 "after".** Its ten iterations read 414 to 509 tok/s by the mean step, with a
-  standard deviation of 34.8 tok/s against 8.5 before. As recorded the run is 477 tok/s and the
-  pair +5.8%. By the median step it is 494 tok/s and the pair +10.0%.
-- **All six Llama 3.2 decode runs of the pair.** Their mean steps are 3.1% to 6.3% longer than
-  their medians. As recorded they read 138 to 146, 253 to 266 and 414 to 441 tok/s (+5.5%, +5.3%,
-  +6.8%). The table has the median reading.
-- **The 1,024-token runs: TinyLlama "after" and both Llama 3.2 runs** (3.2% to 4.5% in their
-  decode phase). Their TTFT is as recorded and may be a few percent long. The later Llama 3.2
-  `make bench` run is clean and reads 70.3 ms where the pair reads 72.4 ms. TinyLlama has no clean
-  1,024-token run; its `make bench` run reads 76.3 ms and is disturbed as well.
-- **After the pairs: the TinyLlama `make bench` runs with and without CUDA graphs and the FP16
-  `make precision` decode run.** As recorded they read 168, 158 and 170 tok/s. By the median step
-  they read 175, 167 and 176.
-
-By the median step, the final-state runs of one configuration (pair, `make bench`,
-`make precision`) agree within 1.4% in FP16 and INT8 on both models, and within 2.6% in INT4. By
-the mean step the same runs are up to 6.8% apart, which is the disturbance, not the engine.
-
-The three passes of every serving run in the tables are within 1.6% of each other. Of those runs,
-the "after" runs with quantized weights are tagged `clock_varied` (TinyLlama INT8 and INT4,
-Llama 3.2 INT8): the SM clock moved between 1,815 and 1,950 MHz during them.
+The final-state runs of one configuration agree across the two sessions by the median step: the
+FP16 pair, `make bench` (2026-11-18) and `make precision` (2026-11-17) runs are within 0.7% on
+each model, and the INT8 and INT4 pair and `make precision` runs within 0.7%. The `make bench`
+runs read the 1,024-token TTFT as 73.6 ms (TinyLlama) and 70.5 ms (Llama 3.2), against 73.3 and
+70.6 ms in the pair.
 
 ## Per-kernel counters, one TinyLlama step (RTX 3060 Ti)
 
 The same method as the 4070 tables: microseconds of kernel time under Nsight Compute, launches in
-parentheses. Profiles: `results/profiles/20261117T2123*` to `20261117T2125*`.
+parentheses. Profiles: `results/profiles/20261117T2123*` to `20261117T2125*`, from the first
+session at `c442759`.
 
 | Decode step (128-token prompt) | FP16 before | FP16 after | INT4 before | INT4 after |
 | --- | --- | --- | --- | --- |
@@ -340,8 +338,10 @@ What the counters show on this card:
   variants). Under the profiler `gemm_quantized` is the faster of the two on this card: 83,330 µs
   for the 88 INT4 products against 88,169 µs for the same 88 in FP16 through cuBLAS. On the 4070
   cuBLAS was the faster one.
-- **Profiled time is not recorded time, and the gap differs between the cards.** The profiled
-  FP16 decode step is 5.87 ms against 5.63 ms recorded (+4%, and +4% on the 4070). The profiled
+- **Profiled time is not recorded time, and the gap differs between the cards.** The profiles
+  belong to the first session, so they are set against its pair (2026-11-17, by the median
+  step). The profiled FP16 decode step is 5.87 ms against 5.63 ms recorded (+4%, and +4% on the
+  4070). The profiled
   INT4 decode step is 2.57 ms against 2.03 ms (+27%; +16% on the 4070). The profiled 1,024-token
   prefill is 99.4 ms against a recorded TTFT of 76.4 ms (+30%; +15% on the 4070, 44.2 against
   38.6 ms). So a time in a profile is compared below only with other times in the same profile.
@@ -365,31 +365,29 @@ What Phase 1 measured on each card (`microbench` records under `results/raw/`):
 | L2 cache, as the driver reports it | 3 MiB | 36 MiB | 12 |
 | Dependent-load latency at a 4 MiB working set | 308 ns | 141 ns | |
 | SMs | 38 | 46 | 1.21 |
-| SM clock under load, NVML samples of the decode pair runs | about 1,980 MHz | about 2,790 MHz | 1.41 |
+| SM clock under load, NVML samples of the decode pair runs | about 1,965 MHz | about 2,790 MHz | 1.42 |
 
 The 3 MiB is what the device query in the bandwidth sweep returns; `configs/devices/rtx3060ti.toml`
 lists the spec sheet's 4 MB.
 
-What Phase 6 measured, final state, from each card's back-to-back pair. Decode is by the median
-step on both cards, so a 4070 figure here can differ by a unit from its summary above, which
-prints the mean step. TTFT and serving are as recorded.
+What Phase 6 measured, final state, from each card's back-to-back pair (the 3060 Ti's second
+session). Decode is by the median step on both cards, so a 4070 figure here can differ by a unit
+from its summary above, which prints the mean step. TTFT and serving are as recorded.
 
 | Phase 6 paths | RTX 3060 Ti | RTX 4070 | 4070 / 3060 Ti |
 | --- | --- | --- | --- |
-| TinyLlama decode, FP16 / INT8 / INT4 | 178 / 314 / 494 tok/s | 212 / 392 / 674 tok/s | 1.19 / 1.25 / 1.37 |
-| Llama 3.2 decode, FP16 / INT8 / INT4 | 152 / 281 / 469 tok/s | 183 / 349 / 625 tok/s | 1.20 / 1.24 / 1.33 |
-| TinyLlama share of the ceiling | 89% / 79% / 64% | 93% / 86% / 77% | |
-| Llama 3.2 share of the ceiling | 91% / 84% / 73% | 96% / 91% / 85% | |
-| TinyLlama decode step above its memory floor | 0.63 / 0.68 / 0.73 ms | 0.34 / 0.36 / 0.35 ms | |
-| Llama 3.2 decode step above its memory floor | 0.59 / 0.56 / 0.58 ms | 0.24 / 0.25 / 0.24 ms | |
-| TTFT, 1,024-token prompt, TinyLlama / Llama 3.2 | 76.4 / 72.4 ms | 38.6 / 39.6 ms | 1.98 / 1.83 |
-| TinyLlama serving, FP16 / INT8 / INT4 | 1,740 / 2,163 / 2,219 tok/s | 2,824 / 3,623 / 3,943 tok/s | 1.62 / 1.67 / 1.78 |
-| Llama 3.2 serving, FP16 / INT8 / INT4 | 1,827 / 2,217 / 2,342 tok/s | 2,608 / 3,562 / 4,017 tok/s | 1.43 / 1.61 / 1.72 |
+| TinyLlama decode, FP16 / INT8 / INT4 | 177 / 312 / 507 tok/s | 212 / 392 / 674 tok/s | 1.20 / 1.26 / 1.33 |
+| Llama 3.2 decode, FP16 / INT8 / INT4 | 154 / 281 / 475 tok/s | 183 / 349 / 625 tok/s | 1.19 / 1.24 / 1.32 |
+| TinyLlama share of the ceiling | 89% / 78% / 66% | 93% / 86% / 77% | |
+| Llama 3.2 share of the ceiling | 92% / 84% / 74% | 96% / 91% / 85% | |
+| TinyLlama decode step above its memory floor | 0.64 / 0.70 / 0.67 ms | 0.34 / 0.36 / 0.35 ms | |
+| Llama 3.2 decode step above its memory floor | 0.51 / 0.56 / 0.55 ms | 0.24 / 0.25 / 0.24 ms | |
+| TTFT, 1,024-token prompt, TinyLlama / Llama 3.2 | 73.3 / 70.6 ms | 38.6 / 39.6 ms | 1.90 / 1.78 |
+| TinyLlama serving, FP16 / INT8 / INT4 | 1,804 / 2,214 / 2,290 tok/s | 2,824 / 3,623 / 3,943 tok/s | 1.57 / 1.64 / 1.72 |
+| Llama 3.2 serving, FP16 / INT8 / INT4 | 1,901 / 2,279 / 2,403 tok/s | 2,608 / 3,562 / 4,017 tok/s | 1.37 / 1.56 / 1.67 |
 
-Over all of the 3060 Ti's final-state records (the pair, `make bench`, `make precision`) the
-decode ratios span 1.19 to 1.21 in FP16, 1.23 to 1.25 in INT8 and 1.32 to 1.37 in INT4. The
-Llama 3.2 TTFT ratio is 1.77 with that card's clean `make bench` run. The serving ratios span
-1.36 to 1.78 with its `make precision` runs included.
+With the 3060 Ti's `make bench` runs of the same session, the FP16 decode ratios stay at 1.19 to
+1.20 and the 1,024-token TTFT ratios at 1.78 to 1.91.
 
 ### Memory bandwidth: the floor of a decode step, not the part above it
 
@@ -397,42 +395,40 @@ Llama 3.2 TTFT ratio is 1.77 with that card's clean `make bench` run. The servin
   and 460 GB/s on the 4070, 95% and 97% of each card's ceiling in its own profile.
 - **The records split a step into a floor and a remainder.** The floor is the weights read once
   at the measured bandwidth: 5.00 ms here and 4.37 ms on the 4070 for TinyLlama in FP16, the
-  ratio of the bandwidths. The remainder is 0.56 to 0.73 ms here and 0.24 to 0.36 ms on the 4070
+  ratio of the bandwidths. The remainder is 0.51 to 0.70 ms here and 0.24 to 0.36 ms on the 4070
   over both models and all three precisions. It is about twice as long on this card, and it does
   not shrink with the weights.
-- **So the cards move apart as the weights shrink.** The 4070 is 1.19x to 1.21x faster in FP16,
-  where the bandwidths differ by 1.14x, then 1.23x to 1.25x in INT8 and 1.32x to 1.37x in INT4.
+- **So the cards move apart as the weights shrink.** The 4070 is 1.19x to 1.20x faster in FP16,
+  where the bandwidths differ by 1.14x, then 1.24x to 1.26x in INT8 and 1.32x to 1.33x in INT4.
   For the same reason the 3060 Ti is further from its own ceiling at every precision, and
-  furthest in INT4, where TinyLlama's step is 1.97 to 2.03 ms against a floor of 1.30 ms.
+  furthest in INT4, where TinyLlama's step is 1.97 ms against a floor of 1.30 ms.
 - **What the remainder consists of rests on the profiles, and is less certain.**
   - The 115 launches of a step that are not products take 593 µs in this card's profile and
     388 µs in the 4070's, and each small kernel is 1.42 to 1.58 times as long here. They read
     0.03 to 0.19 MB per launch, far too little for bandwidth to matter. The SM clock is a
-    candidate: NVML shows about 1,980 MHz here and 2,790 MHz on the 4070 during the recorded
-    decode runs, a ratio of 1.41. It is not established, because the clock during profiling is
+    candidate: NVML shows about 1,965 MHz here and 2,790 MHz on the 4070 during the recorded
+    decode runs, a ratio of 1.42. It is not established, because the clock during profiling is
     not recorded and the profiler lengthens small kernels on both cards.
   - In its profile the INT4 product kernel reads at 273 of 415 GB/s here (66%), and at 401 of
     475 GB/s (85%) in the 4070's, with about the same resident warps (81% and 84%). That points
     at a kernel further from the memory bound on this card. The profiled INT4 steps are 27% and
-    16% longer than the recorded ones, so the records neither confirm the size of that gap nor
-    say what limits the kernel.
+    16% longer than the recorded ones of the same sessions, so the records neither confirm the
+    size of that gap nor say what limits the kernel.
 
 ### Tensor-core throughput: prefill and most of serving
 
-- The 1,024-token prompt takes 1.98x (TinyLlama) and 1.83x (Llama 3.2) as long here, and 1.77x
-  for Llama 3.2 with this card's clean run. The FP16 GEMM peak with FP32 accumulation, which the
-  engine's products use, differs by 1.81x. TinyLlama's 76.4 ms comes from a disturbed run, so its
-  ratio may be a few percent high.
+- The 1,024-token prompt takes 1.90x (TinyLlama) and 1.78x (Llama 3.2) as long here. The FP16
+  GEMM peak with FP32 accumulation, which the engine's products use, differs by 1.81x.
 - TinyLlama's prompt is 1.98 TFLOP of matrix products. At each card's Phase 1 peak that is
-  60.7 ms of the 76.4 ms here and 33.6 ms of the 38.6 ms on the 4070. For Llama 3.2 it is 61.0 of
-  72.4 ms and 33.7 of 39.6 ms. For TinyLlama that leaves 15.6 ms here and 5.1 ms on the 4070 for
+  60.7 ms of the 73.3 ms here and 33.6 ms of the 38.6 ms on the 4070. For Llama 3.2 it is 61.0 of
+  70.6 ms and 33.7 of 39.6 ms. For TinyLlama that leaves 12.6 ms here and 5.1 ms on the 4070 for
   everything else, including any shortfall of the products from their peak.
 - Within each card's own profile the tensor pipe is about as busy, against that card's peak: 47
   to 48% here and 48 to 49% on the 4070 in cuBLAS, 46% and 45% in `gemm_quantized`, 42% and 41%
   in prefill attention.
-- Serving steps carry up to 30 rows and sit between the two bounds: 1.43x to 1.78x in the pairs.
-  The ratio is highest with INT4 weights (1.72x and 1.78x), where the least memory traffic is
-  left in a step.
+- Serving steps carry up to 30 rows and sit between the two bounds: 1.37x to 1.72x in the pairs.
+  On each model the ratio is highest with INT4 weights (1.72x and 1.67x), where the least memory
+  traffic is left in a step.
 
 ### L2 size: what the counters show, and what they do not
 
@@ -484,13 +480,13 @@ FP8 KV cache is not built, so no number in this log depends on it.
 Each pair switches all six changes at once, so a pair gives the gain of Phase 6 as a whole. Only
 the counters can be tied to one change.
 
-- **Decode.** By the median step, Phase 6 as a whole gains +9.5% / +7.1% / +10.0% here and
-  +4.7% / +5.5% / +10.1% on the 4070 for TinyLlama in FP16 / INT8 / INT4, and +7.1% / +4.5% /
-  +7.3% against +3.1% / +3.7% / +6.8% for Llama 3.2. Within each card's profiles the FP16 product
+- **Decode.** By the median step, Phase 6 as a whole gains +9.3% / +7.3% / +12.9% here and
+  +4.7% / +5.5% / +10.1% on the 4070 for TinyLlama in FP16 / INT8 / INT4, and +6.3% / +4.2% /
+  +8.7% against +3.1% / +3.7% / +6.8% for Llama 3.2. Within each card's profiles the FP16 product
   time falls 10.7% here and 5.6% on the 4070, from the GEMV and the stacking together; cuBLAS was
   at 85% of the ceiling in this card's profile and 92% in the 4070's.
-- **Serving with quantized weights.** Phase 6 as a whole is 2.2x to 2.4x here and 1.8x to 2.4x on
-  the 4070. Before, quantized weights were 31% to 40% slower than FP16 under load here and 15% to
+- **Serving with quantized weights.** Phase 6 as a whole is 2.2x to 2.3x here and 1.8x to 2.4x on
+  the 4070. Before, quantized weights were 30% to 40% slower than FP16 under load here and 15% to
   31% there.
 - **The 1,024-token prompt.** Phase 6 as a whole is 2.7x and 2.3x here, 3.0x and 2.4x on the
   4070. Within each card's profiles tiled attention takes a layer from 7,888 to 226 µs here (35x)
@@ -506,7 +502,7 @@ the counters can be tied to one change.
   rows outside the profiler would say whether it costs time.
 - **Record the SM clock in the step-counter summaries**, or pin it, so that kernel times can be
   compared between cards and with the recorded runs.
-- **INT4 decode on the 3060 Ti.** The step is at 64% to 66% of its ceiling there. The entries
+- **INT4 decode on the 3060 Ti.** The step is at 66% of its ceiling there. The entries
   above were developed and their crossovers (`f16_gemv_rows`, `quantized_gemm_rows`) chosen on
   the 4070.
 - **Decode attention at long context.** At batch 1 a 1,100-token context costs about 0.3 ms
@@ -521,3 +517,143 @@ the counters can be tied to one change.
   Phase 5, were built after this log's measurements: WikiText-2 perplexity goes from 9.96 to 9.40
   on TinyLlama and from 14.76 to 12.91 on Llama 3.2 (README, Quantization). The decode speed of
   those checkpoints has not been recorded.
+
+## Track W: Whisper measurements (RTX 3060 Ti)
+
+The 16 records of kind `asr`, all from one session on 2026-11-18 at `4089b55`
+(`results/raw/rtx3060ti-fd7b40d5/20261118T0753*` to `20261118T0954*`). The model is
+`whisper-base-ar-quran`; the clips are the 1,000 of `everyayah-test-1000` (3.79 hours, 36
+reciters), each decoded as one 30-second window without timestamps, one clip at a time. The
+README's [Track W](../README.md#track-w-whisper-on-the-same-engine) section describes the engine
+side and defines WER and RTF. Every table here takes the newest record of each stack, precision
+and beam width.
+
+### Accuracy
+
+WER and CER are over normalized text (`kvbound.evals.text`); "as written" compares the dataset's
+text, diacritics included, with the stack's output.
+
+| Stack | Beams | WER | CER | WER, text as written | Clips with a word error |
+| --- | --- | --- | --- | --- | --- |
+| kvbound, FP16 | 1 | 0.58% | 0.17% | 0.60% | 50 |
+| kvbound, INT8 weights | 1 | 0.55% | 0.16% | 0.57% | 47 |
+| kvbound, INT4 weights | 1 | 1.42% | 0.40% | 1.50% | 102 |
+| kvbound, FP16 weights, INT8 caches | 1 | 0.58% | 0.17% | 0.60% | 50 |
+| Hugging Face, FP16 | 1 | 0.58% | 0.17% | 0.60% | 50 |
+| faster-whisper GPU, `float16` | 1 | 0.72% | 0.29% | 0.74% | 53 |
+| faster-whisper GPU, `int8_float16` | 1 | 0.67% | 0.28% | 0.69% | 50 |
+| faster-whisper CPU, `int8` | 1 | 0.66% | 0.27% | 0.70% | 49 |
+| kvbound, FP16 | 5 | 0.48% | 0.13% | 0.49% | 44 |
+| kvbound, INT8 weights | 5 | 0.46% | 0.12% | 0.48% | 42 |
+| kvbound, INT4 weights | 5 | 1.28% | 0.34% | 1.36% | 97 |
+| kvbound, FP16 weights, INT8 caches | 5 | 0.48% | 0.13% | 0.49% | 44 |
+| Hugging Face, FP16 | 5 | 0.48% | 0.13% | 0.49% | 44 |
+| faster-whisper GPU, `float16` | 5 | 0.60% | 0.25% | 0.62% | 48 |
+| faster-whisper GPU, `int8_float16` | 5 | 0.57% | 0.24% | 0.59% | 43 |
+| faster-whisper CPU, `int8` | 5 | 0.65% | 0.26% | 0.69% | 47 |
+
+- **kvbound and Hugging Face.** In FP16, greedy and at beam 5, each clip has the same number of
+  word errors and the same number of decoder steps in both. The records keep those counts per
+  clip, not the token ids.
+- **INT8 caches.** FP16 weights with both caches in INT8 give the same per-clip word errors and
+  steps as FP16, greedy and at beam 5.
+- **INT8 and INT4 weights.** Greedy, INT8 weights change the word errors of 3 clips and remove 4
+  errors in all (60 against 64); at beam 5, 2 clips (50 against 52). INT4 weights change 75 clips
+  greedy and more than double the errors (155 against 64), mostly substitutions (137 against 58);
+  at beam 5, 69 clips (140 against 52).
+- **faster-whisper.** Its per-clip word errors equal Hugging Face's on 994 of the 1,000 clips
+  with `float16` (greedy and at beam 5), 992 and 991 with `int8_float16`, and 984 and 986 with
+  `int8` on the CPU. Its extra errors are mostly deletions: 15 against 4 greedy (`float16`). It
+  is fed a different prompt, `[50258, 50272, 50359, 50363]` (start, Arabic, transcribe, no
+  timestamps), where Hugging Face and kvbound feed `[50258]` and the model writes the other
+  three; and its front end takes the log-mel features of the clip before padding them to 30
+  seconds, where the other two pad the samples first. The records cannot say how much of the
+  difference comes from the prompt, the front end or the arithmetic.
+
+### Speed, and what each timing covers
+
+Latencies are medians over the 1,000 clips.
+
+| Stack | Beams | RTF, model | RTF, end to end | Encoder pass | First token | Between tokens, ms | Decoder, ms per step | SM clock, mean of samples |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| kvbound, FP16 | 1 | 0.0047 | 0.0051 | 5.9 ms | 6.7 ms | 0.70 | 0.70 | 1,963 MHz |
+| kvbound, INT8 weights | 1 | 0.0040 | 0.0045 | 5.6 ms | 6.3 ms | 0.59 | 0.60 | 1,970 MHz |
+| kvbound, INT4 weights | 1 | 0.0039 | 0.0043 | 5.7 ms | 6.3 ms | 0.57 | 0.57 | 1,967 MHz |
+| kvbound, FP16 weights, INT8 caches | 1 | 0.0047 | 0.0052 | 5.9 ms | 6.7 ms | 0.71 | 0.71 | 1,965 MHz |
+| Hugging Face, FP16 | 1 | 0.0568 | 0.0572 | 9.2 ms | 20.2 ms | 9.19 | 9.22 | 1,163 MHz |
+| faster-whisper GPU, `float16` | 1 | 0.0164 | 0.0189 | 14.3 ms | n/a | n/a | 2.62 | 1,971 MHz |
+| faster-whisper GPU, `int8_float16` | 1 | 0.0263 | 0.0287 | 18.0 ms | n/a | n/a | 4.29 | 1,483 MHz |
+| faster-whisper CPU, `int8` | 1 | 0.0616 | 0.0647 | 469 ms | n/a | n/a | 4.71 | n/a |
+| kvbound, FP16 | 5 | 0.0313 | 0.0317 | 10.0 ms | 11.9 ms | 5.09 | 5.04 | 1,076 MHz |
+| kvbound, INT8 weights | 5 | 0.0308 | 0.0313 | 8.8 ms | 10.6 ms | 5.06 | 5.01 | 1,155 MHz |
+| kvbound, INT4 weights | 5 | 0.0300 | 0.0304 | 8.7 ms | 10.4 ms | 4.93 | 4.88 | 1,202 MHz |
+| kvbound, FP16 weights, INT8 caches | 5 | 0.0312 | 0.0316 | 10.1 ms | 12.0 ms | 5.07 | 5.03 | 1,067 MHz |
+| Hugging Face, FP16 | 5 | 0.0684 | 0.0689 | 6.1 ms | 17.7 ms | 11.02 | 11.03 | 1,963 MHz |
+| faster-whisper GPU, `float16` | 5 | 0.0209 | 0.0235 | 14.3 ms | n/a | n/a | 3.38 | 1,974 MHz |
+| faster-whisper GPU, `int8_float16` | 5 | 0.0308 | 0.0334 | 17.1 ms | n/a | n/a | 5.06 | 1,598 MHz |
+| faster-whisper CPU, `int8` | 5 | 0.0839 | 0.0870 | 469 ms | n/a | n/a | 8.32 | n/a |
+
+- **RTF, model** runs from the log-mel features on the host to the token ids on the host in every
+  stack. kvbound: one `transcribe` call of the engine, which copies the features to the device,
+  runs the encoder step and every decoder step, each waited for; at beam 5 it also picks the
+  beams' candidates on the host. Hugging Face: the features moved to the device and `generate`.
+  faster-whisper: its `encode` and `generate` calls.
+- **RTF, end to end** adds the front end and detokenization. kvbound and Hugging Face share a
+  front end (`kvbound.audio`, Hugging Face's feature extractor); faster-whisper has its own. Per
+  clip they add 5.90 ms (kvbound FP16), 5.37 ms (Hugging Face) and 33.81 ms (faster-whisper
+  `float16`) on average.
+- **Encoder pass** is not alike across stacks. kvbound's covers the features copied to the device
+  and rounded to FP16, the convolutions, the encoder layers and the cross-attention keys and
+  values of all 6 decoder layers. Hugging Face's is the encoder module alone, with the features
+  already on the device; it projects the cross-attention keys and values in the first decoder
+  step. faster-whisper's is `encode()`, from the features on the host to the encoder output; it
+  projects them inside `generate()`.
+- **First token** and **between tokens** exist for kvbound and Hugging Face only: faster-whisper
+  returns all tokens at once. First token runs from the features on the host to the first
+  generated token on the host; between tokens is the mean interval from the first generated
+  token to the end token.
+- **Decoder, ms per step** is, per clip, the model time minus the encoder pass, over the decoder
+  steps (the generated tokens and the end token), so it holds the step over the prompt. It is
+  the one per-token time every stack has, but it is not alike either. Hugging Face and
+  faster-whisper project the cross-attention keys and values inside it, kvbound does not. kvbound
+  and Hugging Face take 82.93 steps per clip on average and faster-whisper 79.84, because the
+  language, task and no-timestamps tokens are generated in the first two and part of the prompt
+  in the third.
+- **Clocks.** The GPU clock is not locked, and NVML samples it once a second over a whole run. The
+  mean SM clock of the samples differs between runs: 1,963 to 1,970 MHz in the greedy kvbound runs,
+  1,067 to 1,202 MHz in the beam kvbound runs, 1,163 MHz in Hugging Face greedy against 1,963 at
+  beam 5, and 1,483 and 1,598 MHz in faster-whisper `int8_float16`. Each stack is compared at the
+  clocks its own run had. The INT4 beam-5 run is tagged `clock_varied`.
+
+What the speed records show:
+
+- **Greedy.** kvbound FP16 takes 0.70 ms between tokens and 5.9 ms for the encoder pass; by model
+  RTF it is 12.1 times faster than Hugging Face, 3.5 times faster than faster-whisper `float16`
+  and 13.1 times faster than faster-whisper `int8` on the CPU. INT8 weights take 14% less model
+  time than FP16 and INT4 weights 17% less; INT8 caches leave it within 1%.
+- **Beam 5 is slow on kvbound for now.** A token takes 5.09 ms against 0.70 greedy (FP16), and the
+  model RTF is 0.0313 against 0.0209 for faster-whisper `float16` at beam 5. Each step copies the
+  logits of the live beams to the host and ranks the candidates there
+  (`AsrEngine::beam_candidates_on_host`), the likely main cost. No record times the ranking apart
+  from the rest of the step, and other things change with the beams too: a 5-row FP16 step is
+  wider than `f16_gemv_rows` (4) and goes to cuBLAS, forks copy blocks, and the beam runs' clock
+  samples are lower. Ranking on the GPU is in progress, and these rows will be recorded again.
+- **The encoder pass reads longer in the beam runs**: 10.0 against 5.9 ms for FP16, the same
+  encoder step. The cause is not established. Hugging Face shows the reverse, 9.2 ms greedy and
+  6.1 ms at beam 5, and in both stacks the longer encoder pass is in the run whose NVML samples
+  have the lower mean SM clock. The samples are not tied to the encoder steps, so that is a
+  candidate, not an explanation.
+
+### Not done in Track W
+
+- **Beam candidates on the GPU**, in progress: a top-k over each beam's logits on the device in
+  place of the copy to the host.
+- **Timestamps, word alignment and long-form decoding**, which carries text from one 30-second
+  window into the next. The Sawt Sakinah app transcribes with all three (faster-whisper, CPU,
+  `int8`, beam 5), so it cannot switch to kvbound until they are built.
+- **The rest of the test split.** The subset leans toward the start of each audio page of the
+  dataset, which keeps the download to a fraction of the split: its clips average 13.64 s against
+  12.61 s over the 20,914 test clips of at most 30 s. The other 2,559 of the 23,473 test clips
+  are longer than one window.
+- **Several clips per step.** The engine can encode several clips in one encoder step and decode
+  them as rows of one step; every record here runs one clip at a time.
