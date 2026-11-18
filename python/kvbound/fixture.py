@@ -5,17 +5,19 @@ attention, tied embeddings and Llama 3 RoPE scaling.
 
 fixtures/tiny-whisper is a Whisper with 2 encoder and 2 decoder layers, in the layout of a
 converted checkpoint (kvbound.models.convert_whisper): a zero bias for every k_proj, no proj_out
-tensor, and the decoding rules in generation.json.
+tensor, and the decoding rules in generation.json. beam_traces.safetensors holds reference beam
+searches over its golden prompts, step by step (see beam_trace).
 
 CI has no GPU and no real weights, so every CPU test (Python and C++) runs against these
 fixtures. They have the same file layout as real checkpoints (config.json + model.safetensors
 with Hugging Face tensor names), so the same loaders are exercised.
 
-Usage: python -m kvbound.fixture
+Usage: python -m kvbound.fixture [--beam-traces]  (--beam-traces rewrites the traces alone)
 """
 
 import json
-from dataclasses import replace
+import sys
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +36,7 @@ from kvbound.ref import (
     load_llama,
     load_whisper,
 )
+from kvbound.ref import beam as ref_beam
 from kvbound.ref import whisper as ref_whisper
 from kvbound.ref.model import hf_weight_names
 
@@ -258,6 +261,124 @@ def whisper_prompts(model: Whisper, gen: torch.Generator) -> list[golden.AudioPr
     raise RuntimeError(f"no audio window fits prompt p{len(prompts)}; change WHISPER_SEED")
 
 
+BEAM_TRACE_FILE = "beam_traces.safetensors"
+
+
+@dataclass(frozen=True)
+class BeamCase:
+    """One traced beam search: a golden prompt's audio under the fixture's rules, with another
+    end-of-sequence token or length penalty where given."""
+
+    prompt: str
+    name: str
+    num_beams: int
+    eos_token_id: int = WHISPER_EOS
+    length_penalty: float = 1.0
+
+    def rules(self) -> WhisperRules:
+        return replace(WHISPER_RULES, eos_token_id=self.eos_token_id)
+
+
+# Beam 5 under the fixture's rules runs every prompt to max_length. The other cases make a
+# frequent text token the end of the sequence, so that between them hypotheses finish early,
+# crowd each other out of the kept set, and end the search before max_length; and they vary the
+# beam count and the length penalty.
+BEAM_CASES = (
+    *(BeamCase(prompt, "beam5", 5) for prompt in ("p0", "p1", "p2")),
+    BeamCase("p0", "beam1", 1),
+    BeamCase("p1", "beam1", 1),
+    BeamCase("p1", "beam2", 2),
+    BeamCase("p2", "beam3", 3),
+    BeamCase("p1", "beam5.eos38", 5, eos_token_id=38),
+    BeamCase("p0", "beam5.eos5", 5, eos_token_id=5),
+    BeamCase("p2", "beam5.penalty0", 5, length_penalty=0.0),
+    BeamCase("p0", "beam5.eos72.penalty0.6", 5, eos_token_id=72, length_penalty=0.6),
+    BeamCase("p2", "beam5.eos91.penalty2", 5, eos_token_id=91, length_penalty=2.0),
+)
+
+
+def beam_trace(result: ref_beam.BeamResult) -> dict[str, torch.Tensor]:
+    """A beam search as tensors, for kvb::BeamSearch to replay (tests/cpp/beam_test.cpp).
+
+    Rows of a step-major tensor that a step does not use hold -1 ids and -inf scores. The
+    search's BeamConfig is file metadata (see whisper_beam_traces).
+      ids                  the best hypothesis as a whole sequence, prompt included
+      candidate_ids        [steps, num_beams, n_candidates]: what each live beam offered
+      candidate_log_probs  the same shape
+      beams                [steps, num_beams, 2]: (parent, token) of the next live beams
+      beam_scores          [steps, num_beams]
+      finished             [n, 3]: (step, parent, token) of every continuation that ended
+      finished_scores      [n]
+      hypotheses           [kept, max_new_tokens]: the kept hypotheses' tokens, best first
+      hypothesis_scores    [kept]
+    The search is done after the last step and not before.
+    """
+    config = result.config
+    n_steps, n_beams, k = len(result.steps), config.num_beams, ref_beam.n_candidates(config)
+    candidate_ids = torch.full((n_steps, n_beams, k), -1, dtype=torch.int32)
+    candidate_log_probs = torch.full((n_steps, n_beams, k), float("-inf"))
+    beams = torch.full((n_steps, n_beams, 2), -1, dtype=torch.int32)
+    beam_scores = torch.full((n_steps, n_beams), float("-inf"))
+    finished, finished_scores = [], []
+    for s, step in enumerate(result.steps):
+        for b, candidates in enumerate(step.candidates):
+            for j, (token, log_prob) in enumerate(candidates):
+                candidate_ids[s, b, j] = token
+                candidate_log_probs[s, b, j] = log_prob
+        for b, beam in enumerate(step.beams):
+            beams[s, b] = torch.tensor([beam.parent, beam.token])
+            beam_scores[s, b] = beam.score
+        finished += [[s, beam.parent, beam.token] for beam in step.finished]
+        finished_scores += [beam.score for beam in step.finished]
+    hypotheses = torch.full((len(result.hypotheses), config.max_new_tokens), -1, dtype=torch.int32)
+    for i, hypothesis in enumerate(result.hypotheses):
+        hypotheses[i, : len(hypothesis.tokens)] = torch.tensor(hypothesis.tokens)
+    return {
+        "ids": torch.tensor(result.ids, dtype=torch.int32),
+        "candidate_ids": candidate_ids,
+        "candidate_log_probs": candidate_log_probs,
+        "beams": beams,
+        "beam_scores": beam_scores,
+        "finished": torch.tensor(finished, dtype=torch.int32),
+        "finished_scores": torch.tensor(finished_scores, dtype=torch.float32),
+        "hypotheses": hypotheses,
+        "hypothesis_scores": torch.tensor([h.score for h in result.hypotheses]),
+    }
+
+
+def whisper_beam_traces(
+    model: Whisper, features: dict[str, torch.Tensor]
+) -> tuple[dict[str, torch.Tensor], dict[str, str]]:
+    """The traces of BEAM_CASES, named "<prompt>/<case>/<tensor>"; features by prompt id.
+
+    Returns the tensors and the file metadata: one entry, "configs", a JSON object of every
+    case's BeamConfig by "<prompt>/<case>". One entry with sorted keys keeps the file's bytes
+    the same from run to run, and JSON numbers read back as the same doubles.
+    """
+    traces, configs = {}, {}
+    for case in BEAM_CASES:
+        result = ref_beam.beam_search(
+            model, features[case.prompt], case.rules(), case.num_beams, case.length_penalty
+        )
+        name = f"{case.prompt}/{case.name}"
+        for tensor_name, tensor in beam_trace(result).items():
+            traces[f"{name}/{tensor_name}"] = tensor
+        configs[name] = asdict(result.config)
+    return traces, {"configs": json.dumps(configs, sort_keys=True)}
+
+
+def build_beam_traces(directory: Path = WHISPER_FIXTURE_DIR) -> None:
+    """Writes beam_traces.safetensors from the fixture's stored weights and golden features.
+
+    It reads the other files and writes no other, so it runs alone after a change to the beam
+    search or BEAM_CASES.
+    """
+    _, tensors = golden.load(directory)
+    features = {case.prompt: tensors[f"{case.prompt}/input_features"] for case in BEAM_CASES}
+    traces, metadata = whisper_beam_traces(load_whisper(directory), features)
+    save_file(traces, str(directory / BEAM_TRACE_FILE), metadata=metadata)
+
+
 def build_whisper(directory: Path = WHISPER_FIXTURE_DIR, seed: int = WHISPER_SEED) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     gen = torch.Generator().manual_seed(seed)
@@ -278,10 +399,14 @@ def build_whisper(directory: Path = WHISPER_FIXTURE_DIR, seed: int = WHISPER_SEE
         "seed": seed,
     }
     golden.dump_whisper(model, whisper_prompts(model, gen), directory, meta)
+    build_beam_traces(directory)
 
 
 if __name__ == "__main__":
-    build()
-    build_whisper()
-    print(FIXTURE_DIR)
+    if sys.argv[1:] == ["--beam-traces"]:
+        build_beam_traces()
+    else:
+        build()
+        build_whisper()
+        print(FIXTURE_DIR)
     print(WHISPER_FIXTURE_DIR)
