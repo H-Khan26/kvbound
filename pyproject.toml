@@ -29,6 +29,9 @@ dev = [
     "pre-commit>=3",
     "clang-format>=19",
 ]
+# The CTranslate2 speech baseline (kvbound.baselines.faster_whisper); not installed by default:
+# `uv sync --locked --extra cu128 --group faster-whisper`.
+faster-whisper = ["faster-whisper>=1.1"]
 
 [build-system]
 requires = ["hatchling"]
