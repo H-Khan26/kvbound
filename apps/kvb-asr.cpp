@@ -13,7 +13,8 @@
 //              preemptions.
 // --mode beam  The clips are transcribed one after the other by beam search with --beams
 //              beams (at most --slots) and --length-penalty, forks sharing Self blocks unless
-//              --beam-share-blocks 0. Prints each clip's best ids, its score and the Self blocks
+//              --beam-share-blocks 0, each beam's candidates ranked on the device unless
+//              --beam-topk-device 0. Prints each clip's best ids, its score and the Self blocks
 //              copied at forks.
 
 #include <algorithm>
@@ -182,6 +183,7 @@ int run(int argc, char** argv) {
   config.f16_gemv_rows = args.integer("f16-gemv-rows", config.f16_gemv_rows);
   options.max_encode_batch = args.integer("encode-batch", 1);
   options.beam_share_blocks = args.integer("beam-share-blocks", 1) != 0;
+  options.beam_topk_device = args.integer("beam-topk-device", 1) != 0;
   const kvb::cuda::BeamOptions beam_options{
       .num_beams = args.integer("beams", 5),
       .length_penalty = std::stod(args.str("length-penalty", "1"))};

@@ -305,6 +305,62 @@ Out<std::int32_t> argmax(In<float> logits) {
   return download<std::int32_t>(out.as(), {logits.shape(0)});
 }
 
+// Candidates [rows * k] as (tokens [rows, k], log_probs [rows, k]).
+nb::tuple candidate_arrays(std::span<const kvb::BeamCandidate> candidates, std::size_t rows,
+                           int k) {
+  std::vector<std::int32_t> tokens;
+  std::vector<float> log_probs;
+  for (const kvb::BeamCandidate& c : candidates) {
+    tokens.push_back(c.token);
+    log_probs.push_back(c.log_prob);
+  }
+  const std::size_t cols = static_cast<std::size_t>(k);
+  return nb::make_tuple(to_numpy(tokens, {rows, cols}), to_numpy(log_probs, {rows, cols}));
+}
+
+// Each row's k beam candidates of logits [n, vocab], rows at `positions`: the tokens of `always`
+// left out, and in rows at begin_pos those of `begin`. On the device (kernels::beam_candidates)
+// unless on_host, which runs append_beam_candidates() per row. Returns (tokens, log_probs), each
+// [n, k].
+nb::tuple beam_candidates(In<float> logits, In<std::int32_t> positions,
+                          const std::vector<std::int32_t>& always,
+                          const std::vector<std::int32_t>& begin, int begin_pos, int k,
+                          bool on_host) {
+  const std::size_t n = logits.shape(0);
+  const int vocab = static_cast<int>(logits.shape(1));
+  if (positions.shape(0) != n) throw kvb::Error("one position per logits row");
+  std::vector<kvb::BeamCandidate> out;
+  if (on_host) {
+    for (std::size_t r = 0; r < n; ++r) {
+      std::vector<std::int32_t> suppressed = always;
+      if (positions.data()[r] == begin_pos) {
+        suppressed.insert(suppressed.end(), begin.begin(), begin.end());
+      }
+      kvb::append_beam_candidates({logits.data() + r * vocab, static_cast<std::size_t>(vocab)},
+                                  suppressed, k, out);
+    }
+    return candidate_arrays(out, n, k);
+  }
+  std::vector<std::uint8_t> flags(static_cast<std::size_t>(vocab), 0);
+  for (const std::int32_t token : always) flags.at(token) |= kvb::kernels::kSuppressAlways;
+  for (const std::int32_t token : begin) flags.at(token) |= kvb::kernels::kSuppressBegin;
+  std::vector<std::int32_t> out_rows(n);
+  std::iota(out_rows.begin(), out_rows.end(), 0);
+  const DeviceBuffer dl = upload(logits), dr = upload_positions(positions),
+                     dout_rows(n * sizeof(std::int32_t)), dflags(flags.size()),
+                     scratch(kvb::kernels::beam_candidates_scratch_bytes(static_cast<int>(n), vocab,
+                                                                         k)),
+                     dout(n * k * sizeof(kvb::BeamCandidate));
+  KVB_CUDA(cudaMemcpy(dout_rows.as(), out_rows.data(), dout_rows.bytes(), cudaMemcpyHostToDevice));
+  KVB_CUDA(cudaMemcpy(dflags.as(), flags.data(), flags.size(), cudaMemcpyHostToDevice));
+  kvb::kernels::beam_candidates(dl.as<float>(), dr.as<StepRow>(), dout_rows.as<std::int32_t>(),
+                                static_cast<int>(n), vocab, dflags.as<std::uint8_t>(), begin_pos, k,
+                                scratch.as(), dout.as<kvb::BeamCandidate>(), nullptr);
+  out.resize(n * k);
+  KVB_CUDA(cudaMemcpy(out.data(), dout.as(), dout.bytes(), cudaMemcpyDeviceToHost));
+  return candidate_arrays(out, n, k);
+}
+
 // weight [n_out, n_in], x [rows, n_in]. Returns float16 bits, or float32 when f32_out.
 nb::object linear(In<f16> weight, In<f16> x, const std::string& accumulate, bool f32_out) {
   const int n_out = static_cast<int>(weight.shape(0)), n_in = static_cast<int>(weight.shape(1));
@@ -716,7 +772,7 @@ class PyAsrEngine {
               const std::string& gemm, bool graph, int max_graphs, const std::string& plan,
               bool wide_key_loads, int quantized_gemm_rows, std::size_t dequant_slice_bytes,
               bool fuse, int f16_gemv_rows, bool expand_quantized, bool prefill_attention,
-              bool beam_share_blocks)
+              bool beam_share_blocks, bool beam_topk_device)
       : engine_(model_dir,
                 kvb::cuda::EngineConfig{
                     .max_ctx = max_ctx,
@@ -743,7 +799,8 @@ class PyAsrEngine {
                 },
                 kvb::cuda::AsrOptions{.max_encode_batch = max_encode_batch,
                                       .cross_kv_dtype = kv_dtype_from(cross_kv_dtype),
-                                      .beam_share_blocks = beam_share_blocks}),
+                                      .beam_share_blocks = beam_share_blocks,
+                                      .beam_topk_device = beam_topk_device}),
         plan_(plan) {}
 
   // Encodes clips in one encoder step: features [n_mels, n_frames] or [clips, n_mels,
@@ -942,6 +999,7 @@ class PyAsrEngine {
     d["expand_quantized"] = c.expand_quantized;
     d["prefill_attention"] = c.prefill_attention;
     d["beam_share_blocks"] = o.beam_share_blocks;
+    d["beam_topk_device"] = o.beam_topk_device;
     d["weights"] = weights();
     d["weight_group_size"] = engine_.weight_format().group_size;
     return d;
@@ -1013,6 +1071,8 @@ NB_MODULE(_kvb, m) {
   m.def("add", &add, "x"_a, "y"_a);
   m.def("gather_rows", &gather_rows, "x"_a, "out_rows"_a);
   m.def("argmax", &argmax, "logits"_a);
+  m.def("beam_candidates", &beam_candidates, "logits"_a, "positions"_a, "always"_a, "begin"_a,
+        "begin_pos"_a, "k"_a, "on_host"_a = false);
   m.def("linear", &linear, "weight"_a, "x"_a, "accumulate"_a = "fp32", "f32_out"_a = false);
   m.def("linear_f16", &linear_f16, "weight"_a, "x"_a, "f32_out"_a = false, "bias"_a = nb::none());
   m.def("kv_attention", &kv_attention, "q"_a, "k"_a, "v"_a, "positions"_a, "seqs"_a, "kv_slots"_a,
@@ -1054,16 +1114,18 @@ NB_MODULE(_kvb, m) {
       .def("graph_stats", &PyEngine::graph_stats);
 
   nb::class_<PyAsrEngine>(m, "AsrEngine")
-      .def(nb::init<const std::string&, int, int, int, int, int, const std::string&,
-                    const std::string&, const std::string&, int, const std::string&, bool, int,
-                    const std::string&, bool, int, std::size_t, bool, int, bool, bool, bool>(),
-           "model_dir"_a, "max_seqs"_a = 1, "max_ctx"_a = 0, "max_step_tokens"_a = 0,
-           "kv_block_size"_a = 16, "kv_blocks"_a = 0, "kv_layout"_a = "head_major",
-           "kv_dtype"_a = "fp16", "cross_kv_dtype"_a = "fp16", "max_encode_batch"_a = 1,
-           "gemm"_a = "fp32", "graph"_a = true, "max_graphs"_a = 16, "plan"_a = "greedy",
-           "wide_key_loads"_a = true, "quantized_gemm_rows"_a = 3,
-           "dequant_slice_bytes"_a = std::size_t{32} << 20, "fuse"_a = true, "f16_gemv_rows"_a = 4,
-           "expand_quantized"_a = false, "prefill_attention"_a = true, "beam_share_blocks"_a = true)
+      .def(
+          nb::init<const std::string&, int, int, int, int, int, const std::string&,
+                   const std::string&, const std::string&, int, const std::string&, bool, int,
+                   const std::string&, bool, int, std::size_t, bool, int, bool, bool, bool, bool>(),
+          "model_dir"_a, "max_seqs"_a = 1, "max_ctx"_a = 0, "max_step_tokens"_a = 0,
+          "kv_block_size"_a = 16, "kv_blocks"_a = 0, "kv_layout"_a = "head_major",
+          "kv_dtype"_a = "fp16", "cross_kv_dtype"_a = "fp16", "max_encode_batch"_a = 1,
+          "gemm"_a = "fp32", "graph"_a = true, "max_graphs"_a = 16, "plan"_a = "greedy",
+          "wide_key_loads"_a = true, "quantized_gemm_rows"_a = 3,
+          "dequant_slice_bytes"_a = std::size_t{32} << 20, "fuse"_a = true, "f16_gemv_rows"_a = 4,
+          "expand_quantized"_a = false, "prefill_attention"_a = true, "beam_share_blocks"_a = true,
+          "beam_topk_device"_a = true)
       .def("encode", &PyAsrEngine::encode, "features"_a, "seqs"_a = nb::none(), "capture"_a = false)
       .def("feed", &PyAsrEngine::feed, "ids"_a, "start"_a = 0, "seq"_a = 0, "capture"_a = false)
       .def("transcribe", &PyAsrEngine::transcribe, "features"_a, "policy"_a = "static")

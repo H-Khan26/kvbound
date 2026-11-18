@@ -165,6 +165,11 @@ class KvboundWhisper:
             max_seqs=beams,
         )
         config = self.recognizer.engine.config()
+        candidates = (
+            ", with each beam's candidates ranked on the device and copied to the host"
+            if config["beam_topk_device"]
+            else ", with the beams' logits copied to the host and their candidates picked there"
+        )
         self.engine = {"name": "kvbound", "preset": "cuda"}
         self.params = {
             "backend": "kvbound",
@@ -177,7 +182,7 @@ class KvboundWhisper:
             "model_s_covers": (
                 "features on the host to token ids on the host: the features copied to the "
                 "device, the encoder step and every decoder step, each waited for"
-                + ("" if beams == 1 else ", with the beams' candidates picked on the host")
+                + ("" if beams == 1 else candidates)
             ),
             "encoder_ms_covers": (
                 "the engine's encoder step, waited for: features copied to the device and "
@@ -193,6 +198,7 @@ class KvboundWhisper:
         if beams > 1:
             self.params["length_penalty"] = LENGTH_PENALTY
             self.params["beam_share_blocks"] = config["beam_share_blocks"]
+            self.params["beam_topk_device"] = config["beam_topk_device"]
 
     def __call__(self, samples: np.ndarray) -> Transcript:
         started = time.perf_counter()
