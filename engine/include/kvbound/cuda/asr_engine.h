@@ -12,8 +12,11 @@
 #include "kvbound/block_allocator.h"
 #include "kvbound/cuda/device.h"
 #include "kvbound/cuda/engine.h"
+#include "kvbound/cuda/graph_cache.h"
 #include "kvbound/cuda/kv_pool.h"
+#include "kvbound/cuda/step_buffers.h"
 #include "kvbound/cuda/whisper_model.h"
+#include "kvbound/sequence.h"
 #include "kvbound/step.h"
 
 namespace kvb::cuda {
@@ -61,6 +64,7 @@ class AsrEngine {
   AsrMemory memory() const;
   int kv_block_size() const noexcept { return static_cast<int>(self_->dims().block_size); }
   int kv_free_blocks() const noexcept { return blocks_.n_free(); }
+  const GraphStats& graph_stats() const noexcept { return graphs_.stats(); }
   // Elements of one clip's features: n_mels * n_frames.
   std::size_t feature_size() const noexcept;
 
@@ -73,14 +77,14 @@ class AsrEngine {
   void encode(std::span<const float> features, std::span<const int> seqs,
               const ForwardOptions& options = {});
   // Runs one decoder step over `rows` and waits for it. out_rows lists the rows whose logits
-  // are produced. The caller is responsible for block-table rows (set_blocks), kv_slot values,
-  // and for having encoded a clip into the Cross block of every row's seq.
+  // are produced. A decode-shaped step (every row an output, at most max_seqs rows, no tiles)
+  // replays a CUDA graph when use_graph is set. The caller is responsible for block-table rows
+  // (set_blocks), kv_slot values, and for having encoded a clip into the Cross block of every row's
+  // seq.
   void forward(std::span<const StepRow> rows, std::span<const std::int32_t> out_rows,
                const ForwardOptions& options = {});
   // Greedy token of each output row of the last decoder step, after the suppress rules.
-  std::span<const std::int32_t> next_ids() const noexcept {
-    return {next_ids_.as<std::int32_t>(), last_n_out_};
-  }
+  std::span<const std::int32_t> next_ids() const noexcept { return buffers_.next_ids(); }
   // Copies the last decoder step's logits [n_out, vocab] to the host: suppressed tokens are
   // -inf. Valid until the next step of either kind.
   std::vector<float> logits();
@@ -111,11 +115,8 @@ class AsrEngine {
   }
 
  private:
-  struct Sequence {
-    int row = -1;             // block-table row, -1 until blocks are allocated
-    std::vector<int> blocks;  // physical Self blocks, in logical order
-    std::vector<std::int32_t> tokens;
-    int n_cached = 0;             // tokens whose keys and values are in the Self cache
+  // CachedSequence::blocks are Self blocks; the Cross block is the row's own.
+  struct Sequence : CachedSequence {
     bool encoded = false;         // its clip is in the Cross block of its row
     std::vector<float> features;  // [n_mels, n_frames]
   };
@@ -135,12 +136,12 @@ class AsrEngine {
   BlockAllocator rows_;
   std::unordered_map<int, Sequence> sequences_;
 
-  // Step inputs and outputs: pinned host copies and their persistent device buffers. Rows and
-  // tiles hold the larger of a decoder step and an encoder step. The features of an encoder
-  // step cross as FP32, one row per frame, and are rounded to FP16 on the device.
-  PinnedBuffer rows_host_, out_rows_host_, tiles_host_, next_ids_, mel_host_;
-  DeviceBuffer rows_dev_, out_rows_dev_, tiles_dev_, mel_dev_;
-  std::size_t last_n_out_ = 0;
+  // Rows and tiles hold the larger of a decoder step and an encoder step. The features of an
+  // encoder step cross as FP32, one row per frame, and are rounded to FP16 on the device.
+  StepBuffers buffers_;
+  PinnedBuffer mel_host_;
+  DeviceBuffer mel_dev_;
+  GraphCache graphs_;  // decoder steps, keyed by (n_tokens, n_out)
   double encode_seconds_ = 0.0;
   OpTimes* encoder_times_ = nullptr;
   OpTimes* decoder_times_ = nullptr;

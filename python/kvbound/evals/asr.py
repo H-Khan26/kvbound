@@ -94,7 +94,7 @@ SUBSET_MANIFEST = CONFIGS / "evals" / f"{SUBSET}.json"
 
 AUDIO_COLUMN = "audio.bytes"
 METADATA_COLUMNS = ["duration", "text", "reciter"]
-BACKENDS = ("hf", "faster-whisper")
+BACKENDS = ("hf", "faster-whisper", "kvbound")
 DEVICES = ("cuda", "cpu")
 
 
@@ -624,6 +624,10 @@ def load_transcriber(
         from kvbound.baselines import faster_whisper  # noqa: PLC0415
 
         return faster_whisper.load(spec, device, compute_type, beams)
+    if backend == "kvbound":
+        from kvbound import asr  # noqa: PLC0415
+
+        return asr.load(spec, device, compute_type, beams)
     raise ValueError(f"unknown backend {backend!r}; known: {BACKENDS}")
 
 

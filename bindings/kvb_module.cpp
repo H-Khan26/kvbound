@@ -27,6 +27,7 @@
 #include "kvbound/cuda/kernels.h"
 #include "kvbound/cuda/linear.h"
 #include "kvbound/cuda/serve.h"
+#include "kvbound/cuda/transcribe.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -749,18 +750,7 @@ class PyAsrEngine {
   std::map<std::string, Out<float>> encode(In<float> features,
                                            const std::optional<std::vector<int>>& seqs,
                                            bool capture) {
-    if (features.ndim() != 2 && features.ndim() != 3) {
-      throw kvb::Error("features must be [n_mels, n_frames] or [clips, n_mels, n_frames]");
-    }
-    const kvb::WhisperConfig& cfg = engine_.model_config();
-    const std::size_t n_clips = features.ndim() == 3 ? features.shape(0) : 1;
-    const std::size_t first = features.ndim() - 2;
-    if (static_cast<std::int64_t>(features.shape(first)) != cfg.n_mels ||
-        static_cast<std::int64_t>(features.shape(first + 1)) != cfg.n_frames()) {
-      throw kvb::Error("each clip needs features [" + std::to_string(cfg.n_mels) + ", " +
-                       std::to_string(cfg.n_frames()) + "]");
-    }
-    std::vector<int> rows(n_clips);
+    std::vector<int> rows(n_clips(features));
     std::iota(rows.begin(), rows.end(), 0);
     kvb::cuda::Capture sites;
     engine_.encode({features.data(), features.size()}, seqs ? *seqs : rows,
@@ -796,6 +786,68 @@ class PyAsrEngine {
     engine_.forward(rows, out_rows, {.capture = capture ? &sites : nullptr});
     if (!capture) sites["logits"] = engine_.logits();
     return site_arrays(sites, engine_.programs().decoder);
+  }
+
+  // Transcribes clips, features [n_mels, n_frames] or [clips, n_mels, n_frames], greedily in one
+  // run of the scheduler under `policy` ("static" or "continuous"). Per clip, in order: "ids",
+  // the generated ids after the prompt with the end-of-sequence token if it was reached;
+  // "token_s", when each was on the host; "encode_s", the time of the encoder steps that encoded
+  // the clip, shared with the clips encoded alongside; "seconds", the whole run. Times are in
+  // seconds after the run started.
+  std::vector<nb::dict> transcribe(In<float> features, const std::string& policy) {
+    const std::size_t n = n_clips(features);
+    const auto parsed = kvb::schedule_policy_from_name(policy);
+    if (!parsed) throw kvb::Error("unknown scheduling policy " + policy);
+    const std::size_t size = engine_.feature_size();
+    std::vector<kvb::cuda::TranscribeRequest> requests;
+    for (std::size_t i = 0; i < n; ++i) {
+      requests.push_back(
+          {.id = static_cast<int>(i), .features = {features.data() + i * size, size}});
+    }
+    std::vector<std::vector<std::int32_t>> ids(n);
+    std::vector<std::vector<double>> times(n);
+    std::vector<double> encode_s(n, 0.0);
+    double seconds = 0.0;
+    transcribe_stats_ = {};
+    kvb::cuda::transcribe(
+        engine_, requests, {.policy = *parsed}, [&](const kvb::cuda::TranscribeStep& step) {
+          transcribe_stats_["steps"] += 1;
+          transcribe_stats_["preemptions"] += static_cast<int>(step.plan.preempt.size());
+          transcribe_stats_["encodes"] += static_cast<int>(step.plan.encode.size());
+          const int batch = engine_.options().max_encode_batch;
+          transcribe_stats_["encoder_steps"] +=
+              (static_cast<int>(step.plan.encode.size()) + batch - 1) / batch;
+          transcribe_stats_["max_running"] =
+              std::max(transcribe_stats_["max_running"], step.usage.running);
+          for (const int seq : step.plan.encode) encode_s[seq] += step.encode_s;
+          for (const kvb::StepResult::Token& token : step.result.tokens) {
+            ids[token.seq].push_back(token.token);
+            times[token.seq].push_back(step.time_s);
+          }
+          seconds = step.time_s;
+        });
+    std::vector<nb::dict> results;
+    for (std::size_t i = 0; i < n; ++i) {
+      nb::dict d;
+      d["ids"] = ids[i];
+      d["token_s"] = times[i];
+      d["encode_s"] = encode_s[i];
+      d["seconds"] = seconds;
+      results.push_back(std::move(d));
+    }
+    return results;
+  }
+
+  // Counters of the latest transcribe(): steps, preemptions, encodes (clips through the
+  // encoder, counting each re-encoding), encoder_steps, max_running.
+  std::map<std::string, int> transcribe_stats() const { return transcribe_stats_; }
+  // Launch counters of decoder steps: replayed, eager, captured, evicted.
+  std::map<std::string, std::int64_t> graph_stats() const {
+    const kvb::cuda::GraphStats& stats = engine_.graph_stats();
+    return {{"replayed", stats.replayed},
+            {"eager", stats.eager},
+            {"captured", stats.captured},
+            {"evicted", stats.evicted}};
   }
 
   // Greedy token of each row of the last feed(), after the suppress rules.
@@ -865,8 +917,24 @@ class PyAsrEngine {
   }
 
  private:
+  // Clips in features [n_mels, n_frames] or [clips, n_mels, n_frames], after checking the shape.
+  std::size_t n_clips(const In<float>& features) const {
+    if (features.ndim() != 2 && features.ndim() != 3) {
+      throw kvb::Error("features must be [n_mels, n_frames] or [clips, n_mels, n_frames]");
+    }
+    const kvb::WhisperConfig& cfg = engine_.model_config();
+    const std::size_t first = features.ndim() - 2;
+    if (static_cast<std::int64_t>(features.shape(first)) != cfg.n_mels ||
+        static_cast<std::int64_t>(features.shape(first + 1)) != cfg.n_frames()) {
+      throw kvb::Error("each clip needs features [" + std::to_string(cfg.n_mels) + ", " +
+                       std::to_string(cfg.n_frames()) + "]");
+    }
+    return features.ndim() == 3 ? features.shape(0) : 1;
+  }
+
   kvb::cuda::AsrEngine engine_;
   std::string plan_;
+  std::map<std::string, int> transcribe_stats_;
 };
 
 }  // namespace
@@ -943,6 +1011,9 @@ NB_MODULE(_kvb, m) {
            "expand_quantized"_a = false, "prefill_attention"_a = true)
       .def("encode", &PyAsrEngine::encode, "features"_a, "seqs"_a = nb::none(), "capture"_a = false)
       .def("feed", &PyAsrEngine::feed, "ids"_a, "start"_a = 0, "seq"_a = 0, "capture"_a = false)
+      .def("transcribe", &PyAsrEngine::transcribe, "features"_a, "policy"_a = "static")
+      .def("transcribe_stats", &PyAsrEngine::transcribe_stats)
+      .def("graph_stats", &PyAsrEngine::graph_stats)
       .def("next_ids", &PyAsrEngine::next_ids)
       .def("weights", &PyAsrEngine::weights)
       .def("config", &PyAsrEngine::config)

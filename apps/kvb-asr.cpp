@@ -8,6 +8,9 @@
 // --mode feed  The clips are encoded --encode-batch at a time. Each clip's ids are then teacher
 //              forced: all in one decoder step, then again one per step. Prints each row's
 //              greedy token after the suppress rules.
+// --mode transcribe  The clips are transcribed greedily in one run of the scheduler under
+//              --policy static|continuous. Prints each clip's generated ids and the run's
+//              preemptions.
 
 #include <algorithm>
 #include <cstdio>
@@ -20,6 +23,7 @@
 
 #include "args.h"
 #include "kvbound/cuda/asr_engine.h"
+#include "kvbound/cuda/transcribe.h"
 #include "kvbound/safetensors.h"
 
 namespace {
@@ -116,11 +120,35 @@ void feed(AsrEngine& engine, const std::vector<Clip>& clips) {
   std::printf("\n]}\n");
 }
 
+void transcribe(AsrEngine& engine, const std::vector<Clip>& clips, kvb::SchedulePolicy policy) {
+  std::vector<kvb::cuda::TranscribeRequest> requests;
+  for (std::size_t i = 0; i < clips.size(); ++i) {
+    requests.push_back({.id = static_cast<int>(i), .features = clips[i].features});
+  }
+  std::vector<std::vector<std::int32_t>> ids(clips.size());
+  int preemptions = 0;
+  kvb::cuda::transcribe(engine, requests, {.policy = policy},
+                        [&](const kvb::cuda::TranscribeStep& step) {
+                          preemptions += static_cast<int>(step.plan.preempt.size());
+                          for (const kvb::StepResult::Token& token : step.result.tokens) {
+                            ids[token.seq].push_back(token.token);
+                          }
+                        });
+  std::printf("{\"preemptions\": %d, \"clips\": [", preemptions);
+  for (std::size_t i = 0; i < clips.size(); ++i) {
+    std::printf("%s\n  {\"id\": \"%s\", \"ids\": ", i == 0 ? "" : ",", clips[i].id.c_str());
+    print_ids(ids[i]);
+    std::printf("}");
+  }
+  std::printf("\n]}\n");
+}
+
 int run(int argc, char** argv) {
   Args args(argc, argv);
   const std::string model_dir = args.required("model");
   const std::vector<Clip> clips = load_clips(args.required("clips"));
   const std::string mode = args.str("mode", "feed");
+  const std::string policy_name = args.str("policy", "static");
 
   kvb::cuda::EngineConfig config;
   kvb::cuda::AsrOptions options;
@@ -145,13 +173,19 @@ int run(int argc, char** argv) {
   if (!self_dtype || !cross_dtype) throw kvb::Error("unknown --kv-dtype or --cross-kv-dtype");
   config.kv_dtype = *self_dtype;
   options.cross_kv_dtype = *cross_dtype;
-  if (mode != "feed") throw kvb::Error("unknown --mode " + mode);
+  const auto policy = kvb::schedule_policy_from_name(policy_name);
+  if (!policy) throw kvb::Error("unknown --policy " + policy_name);
+  if (mode != "feed" && mode != "transcribe") throw kvb::Error("unknown --mode " + mode);
   // Teacher forcing asks for the logits of every row of a step.
-  config.max_outputs = std::numeric_limits<int>::max();
+  if (mode == "feed") config.max_outputs = std::numeric_limits<int>::max();
 
   KVB_CUDA(cudaSetDevice(0));
   AsrEngine engine(model_dir, config, options);
-  feed(engine, clips);
+  if (mode == "feed") {
+    feed(engine, clips);
+  } else {
+    transcribe(engine, clips, *policy);
+  }
   return 0;
 }
 

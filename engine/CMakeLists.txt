@@ -13,6 +13,7 @@ add_library(kvbound STATIC
   model/llama/program.cpp
   model/whisper/program.cpp
   runtime/sampler.cpp
+  runtime/sequence.cpp
   runtime/step.cpp
   sched/scheduler.cpp
 )
@@ -41,8 +42,11 @@ if(KVB_ENABLE_CUDA)
     runtime/asr_engine.cpp
     runtime/engine.cpp
     runtime/generate.cpp
+    runtime/graph_cache.cpp
     runtime/run_hooks.cpp
     runtime/serve.cpp
+    runtime/step_buffers.cpp
+    runtime/transcribe.cpp
   )
   add_library(kvbound::cuda ALIAS kvbound_cuda)
   target_link_libraries(kvbound_cuda PUBLIC kvbound CUDA::cudart CUDA::cublas PRIVATE kvb_warnings)

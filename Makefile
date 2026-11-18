@@ -16,7 +16,7 @@ WEIGHTS ?= fp16
 KV ?= fp16
 # The weights:kv pairs `make precision` measures
 PRECISIONS ?= fp16:fp16 fp16:int8 int8_pc:fp16 int8_pc:int8 int4_g:fp16 int4_g:int8 int4_g.awq:fp16 int4_g.awq:int8
-# Speech stack and beam width of `make eval-asr`: hf | faster-whisper, 1 for greedy
+# Speech stack and beam width of `make eval-asr`: hf | faster-whisper | kvbound, 1 for greedy
 BACKEND ?= hf
 BEAMS ?= 1
 

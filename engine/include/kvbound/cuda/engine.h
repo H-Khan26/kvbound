@@ -12,10 +12,13 @@
 
 #include "kvbound/block_allocator.h"
 #include "kvbound/cuda/device.h"
+#include "kvbound/cuda/graph_cache.h"
 #include "kvbound/cuda/kv_pool.h"
 #include "kvbound/cuda/llama_model.h"
 #include "kvbound/cuda/run_hooks.h"
+#include "kvbound/cuda/step_buffers.h"
 #include "kvbound/sampler.h"
+#include "kvbound/sequence.h"
 #include "kvbound/step.h"
 
 namespace kvb::cuda {
@@ -62,15 +65,6 @@ struct EngineConfig {
 // together.
 EngineConfig resolved(EngineConfig config);
 
-// How the engine launched its steps so far.
-struct GraphStats {
-  std::int64_t replayed = 0;  // steps launched from a graph
-  std::int64_t eager = 0;     // steps launched kernel by kernel
-  int captured = 0;           // graphs built, counting a row count again after its eviction
-  int evicted = 0;
-  double capture_s = 0.0;  // time spent capturing and instantiating
-};
-
 struct ForwardOptions {
   Capture* capture = nullptr;
   OpTimes* times = nullptr;
@@ -105,7 +99,7 @@ class Engine {
   const std::vector<std::size_t>& value_sizes() const noexcept { return model_->value_sizes(); }
   int kv_block_size() const noexcept { return static_cast<int>(kv_->dims().block_size); }
   int kv_free_blocks() const noexcept { return blocks_.n_free(); }
-  const GraphStats& graph_stats() const noexcept { return graph_stats_; }
+  const GraphStats& graph_stats() const noexcept { return graphs_.stats(); }
 
   // --- Raw step -------------------------------------------------------------------------------
 
@@ -114,9 +108,7 @@ class Engine {
   void forward(std::span<const StepRow> rows, std::span<const std::int32_t> out_rows,
                const ForwardOptions& options = {});
   // Greedy token of each output row of the last step.
-  std::span<const std::int32_t> next_ids() const noexcept {
-    return {next_ids_.as<std::int32_t>(), last_n_out_};
-  }
+  std::span<const std::int32_t> next_ids() const noexcept { return buffers_.next_ids(); }
   // Copies the last step's logits [n_out, vocab] to the host.
   std::vector<float> logits();
   // Points block-table row `seq` at these physical blocks.
@@ -141,22 +133,11 @@ class Engine {
   void set_op_times(OpTimes* times) noexcept { op_times_ = times; }
 
  private:
-  struct Sequence {
-    int row = -1;             // block-table row, -1 until blocks are allocated
-    std::vector<int> blocks;  // physical blocks, in logical order
-    std::vector<std::int32_t> tokens;
-    int n_cached = 0;  // tokens whose keys and values are in the cache
+  struct Sequence : CachedSequence {
     Sampler sampler;
   };
 
-  struct Graph {
-    cudaGraphExec_t exec = nullptr;
-    std::int64_t last_used = 0;  // value of graph_stats_.replayed at the latest launch
-  };
-
   Sequence& sequence(int seq);
-  void release_cache(Sequence& s);
-  void run_graph(int n_tokens, int n_out);
 
   EngineConfig config_;
   cudaStream_t stream_ = nullptr;
@@ -166,13 +147,9 @@ class Engine {
   BlockAllocator rows_;
   std::unordered_map<int, Sequence> sequences_;
 
-  // Step inputs and outputs: pinned host copies and their persistent device buffers.
-  PinnedBuffer rows_host_, out_rows_host_, tiles_host_, next_ids_;
-  DeviceBuffer rows_dev_, out_rows_dev_, tiles_dev_;
-  std::size_t last_n_out_ = 0;
+  StepBuffers buffers_;
   OpTimes* op_times_ = nullptr;
-  std::unordered_map<std::int64_t, Graph> graphs_;  // keyed by (n_tokens, n_out)
-  GraphStats graph_stats_;
+  GraphCache graphs_;  // keyed by (n_tokens, n_out)
 };
 
 }  // namespace kvb::cuda

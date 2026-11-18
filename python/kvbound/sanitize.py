@@ -12,7 +12,9 @@ expanded to FP16.
 The Whisper run encodes the golden clips of fixtures/tiny-whisper, one and three to an encoder
 step, and teacher-forces their decoder ids as one step and token by token: the fused and the
 unfused programs, kvbound's kernels and cuBLAS, INT8 caches, and INT8 and INT4 copies of the
-weights on each of their three paths.
+weights on each of their three paths. It then transcribes the clips greedily through the
+scheduler: a static batch eager and with CUDA graphs, and continuous batching in a Self pool small
+enough to preempt and re-encode a sequence and to evict a graph.
 
 Usage: python -m kvbound.sanitize [--family llama|whisper]
 """
@@ -92,6 +94,9 @@ def llama_cases(preset: str, tmp: Path) -> list[Case]:
 def whisper_cases(preset: str, tmp: Path) -> list[Case]:
     fp16 = str(WHISPER_FIXTURE_DIR)
     small_blocks = ["--kv-block-size", "4"]
+    # Three clips over three rows; 8 blocks of 4 hold one full sequence, so the continuous run
+    # preempts, re-encodes and evicts its one graph.
+    transcribe = ["--mode", "transcribe", "--slots", "3", "--max-graphs", "1", *small_blocks]
     runs: list[tuple[str, str, list[str]]] = [
         ("whisper, fused", fp16, []),
         ("whisper, unfused, cuBLAS", fp16, ["--fuse", "0", "--f16-gemv-rows", "0", *small_blocks]),
@@ -104,6 +109,13 @@ def whisper_cases(preset: str, tmp: Path) -> list[Case]:
             "whisper, int8 caches",
             fp16,
             ["--kv-dtype", "int8", "--cross-kv-dtype", "int8", *small_blocks],
+        ),
+        ("whisper transcribe, eager", fp16, [*transcribe, "--graph", "0"]),
+        ("whisper transcribe, graphs", fp16, [*transcribe, "--encode-batch", "3"]),
+        (
+            "whisper transcribe, preempting",
+            fp16,
+            [*transcribe, "--policy", "continuous", "--encode-batch", "2", "--kv-blocks", "8"],
         ),
     ]
     for scheme in ("int8_pc", "int4_g"):
