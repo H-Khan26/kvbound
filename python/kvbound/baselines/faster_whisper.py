@@ -143,6 +143,10 @@ class FasterWhisper:
             "kv": kv,
             "beams": beams,
             "transcribe_options": OPTIONS,
+            "encoder_ms_covers": (
+                "encode(): features on the host to the encoder output on the device; the "
+                "cross-attention keys and values are projected inside generate()"
+            ),
         }
         if device == "cpu":
             # CTranslate2 takes its thread count from OMP_NUM_THREADS, and uses 4 without it.

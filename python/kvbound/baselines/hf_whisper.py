@@ -87,6 +87,10 @@ class HfWhisper:
             "weights": compute_type,
             "kv": compute_type,
             "beams": beams,
+            "encoder_ms_covers": (
+                "forward pass of the encoder module, features already on the device; the "
+                "cross-attention keys and values are projected in the first decoder step"
+            ),
         }
         if device == "cpu":
             self.params["cpu_threads"] = torch.get_num_threads()

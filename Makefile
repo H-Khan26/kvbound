@@ -141,7 +141,8 @@ ASR = uv run python -m kvbound.evals.asr eval --model $(MODEL)
 eval-asr:         ## WER and real-time factor of one speech stack on the recitation subset (MODEL=... BACKEND=hf BEAMS=1)
 	$(ASR) --backend $(BACKEND) --beams $(BEAMS)
 
-bench-asr:        ## speech baselines, greedy and beam 5: Hugging Face, faster-whisper on the GPU and the CPU (MODEL=...)
+bench-asr:        ## speech baselines, greedy and beam 5: Hugging Face on the GPU, faster-whisper on the GPU and the CPU (MODEL=...; needs `uv sync --group faster-whisper`)
+	uv run python -c "import faster_whisper"
 	for b in 1 5; do \
 	  $(ASR) --backend hf --beams $$b || exit 1; \
 	  $(ASR) --backend faster-whisper --compute-type float16 --beams $$b || exit 1; \

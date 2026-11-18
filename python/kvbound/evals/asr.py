@@ -595,7 +595,8 @@ class Transcriber(Protocol):
 
     engine  the record's engine field: name and version of the stack.
     params  the configuration, in the record's params: backend, device, compute_type, weights,
-            kv, beams, and whatever else the stack was told.
+            kv, beams, whatever else the stack was told, and encoder_ms_covers: what the stack's
+            encoder time spans, where that is not kvbound.record's definition of encoder_ms.
     """
 
     engine: dict[str, Any]

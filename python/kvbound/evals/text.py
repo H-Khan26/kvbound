@@ -1,8 +1,8 @@
 """Arabic text normalization and word and character error rates for speech evaluation.
 
-normalize_arabic is the normalization of the Sawt Sakinah app (its detection/_arabic.py), so a
-score here is over the words the app matches against the Quran text: bare letters, with no
-diacritics and one spelling for each letter the script writes several ways.
+normalize_arabic gives the words of the Sawt Sakinah app's arabic_words (detection/_arabic.py),
+joined by spaces, so a score here is over the words the app matches against the Quran text: bare
+letters, with no diacritics and one spelling for each letter the script writes several ways.
 
 Error rates are edit distances over a reference: (substitutions + insertions + deletions) /
 reference length. WER counts whitespace-separated words. CER counts characters, with every run of
