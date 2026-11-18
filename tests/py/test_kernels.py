@@ -430,3 +430,312 @@ def test_prefill_attention_needs_adjacent_key_dimensions(kvb, gen):
             bits(q), bits(k), bits(k), positions, np.zeros(4, dtype=np.int32), positions,
             np.zeros((1, 1), dtype=np.int32), 4, 1, "dim_major", kernel="prefill",
         )  # fmt: skip
+
+
+# 100 and 9000 take the scalar kernel, as in RMSNorm; 384 and 512 are Whisper's widths.
+@pytest.mark.parametrize("dim", [16, 64, 100, 384, 512, 2048, 9000])
+@pytest.mark.parametrize("rows", [1, 3])
+def test_layer_norm(kvb, gen, rows, dim):
+    # A mean far from zero: the variance has to be taken about it.
+    x = (torch.randn(rows, dim, generator=gen) * 3.0 + 20.0).to(torch.float16)
+    w, b = rand_f16(gen, dim), rand_f16(gen, dim)
+    eps = 1e-5
+    expected = F.layer_norm(x.float(), (dim,), w.float(), b.float(), eps)
+    actual = from_bits(kvb.layer_norm(bits(x), bits(w), bits(b), eps))
+    assert tolerance.rel_rms(actual, expected) < F16_ROUNDING
+
+
+@pytest.mark.parametrize(("rows", "dim"), [(1, 64), (3, 512), (2, 5000), (2, 100), (1, 9000)])
+def test_add_layer_norm(kvb, gen, rows, dim):
+    x, y = rand_f16(gen, rows, dim, scale=3.0), rand_f16(gen, rows, dim)
+    w, b = rand_f16(gen, dim), rand_f16(gen, dim)
+    eps = 1e-5
+    total, normed = kvb.add_layer_norm(bits(x), bits(y), bits(w), bits(b), eps)
+    # The sum is rounded to FP16 before the norm reads it, as a separate add would leave it.
+    expected_total = (x.float() + y.float()).to(torch.float16)
+    assert np.array_equal(total, bits(expected_total))
+    expected = F.layer_norm(expected_total.float(), (dim,), w.float(), b.float(), eps)
+    assert tolerance.rel_rms(from_bits(normed), expected) < F16_ROUNDING
+
+
+@pytest.mark.parametrize("n", [1, 255, 4097])
+def test_gelu(kvb, gen, n):
+    x = rand_f16(gen, n, scale=3.0)
+    actual = from_bits(kvb.gelu(bits(x)))
+    assert tolerance.rel_rms(actual, F.gelu(x.double())) < F16_ROUNDING
+
+
+def test_gelu_is_the_erf_form_in_both_tails(kvb):
+    """Inputs from -10 to 10: within one FP16 step of erf GELU computed in FP64, which holds
+    the tanh approximation out and covers outputs down to the smallest FP16 magnitudes."""
+    x = torch.linspace(-10, 10, 8001).to(torch.float16)
+    expected = bits(F.gelu(x.double()).to(torch.float16)).astype(np.int32)
+    actual = kvb.gelu(bits(x)).astype(np.int32)
+    assert np.abs(actual - expected).max() <= 1
+
+
+@pytest.mark.parametrize(("rows", "dim"), [(1, 8), (5, 384), (1500, 100)])
+def test_add_positions(kvb, gen, rows, dim):
+    x, table = rand_f16(gen, rows, dim), rand_f16(gen, 1500, dim)
+    positions = torch.randint(1500, (rows,), generator=gen, dtype=torch.int32)
+    positions[0] = 1499
+    actual = kvb.add_positions(bits(x), bits(table), positions.numpy())
+    expected = (x.float() + table[positions.long()].float()).to(torch.float16)
+    assert np.array_equal(actual, bits(expected))
+
+
+def run_linear(kvb, scheme: str, w: torch.Tensor, x: torch.Tensor, group: int = 0, **options):
+    """x through the engine's Linear dispatch with w stored under `scheme`.
+
+    Returns the product and the weights it multiplies by in FP32.
+    """
+    if scheme == "fp16":
+        data, scale, deq = bits(w).view(np.uint8), np.zeros(0, dtype=np.uint16), w.float()
+    else:
+        data, scale, deq = quantized(w, scheme, group)
+    return kvb.run_linear(scheme, data, scale, bits(x), group_size=group, **options), deq
+
+
+# The last two are Whisper's stem on one 30 s window: 3,000 frames of 80 mels, then of 384.
+@pytest.mark.parametrize(
+    ("n_seqs", "frames", "channels", "d"),
+    [(1, 128, 16, 128), (2, 37, 8, 24), (3, 1, 8, 16), (2, 2, 8, 16), (1, 3000, 80, 384)],
+)
+@pytest.mark.parametrize("stride", [1, 2])
+def test_unfold3_then_linear_is_conv1d(kvb, gen, stride, n_seqs, frames, channels, d):
+    x = rand_f16(gen, n_seqs, frames, channels)
+    w = rand_f16(gen, d, channels, 3, scale=1 / math.sqrt(3 * channels))
+    b = rand_f16(gen, d)
+    by_channel = x.float().transpose(1, 2)  # [n_seqs, channels, frames], as Conv1d takes it
+
+    unfolded = kvb.unfold3(bits(x.reshape(-1, channels)), n_seqs=n_seqs, stride=stride)
+    # [n_seqs, channels, out_frames, 3]: the three frames under each position of the filter.
+    windows = F.pad(by_channel, (1, 1)).unfold(2, 3, stride)
+    out_frames = windows.shape[2]
+    assert out_frames == (frames - 1) // stride + 1
+    expected_windows = windows.permute(0, 2, 1, 3).reshape(n_seqs * out_frames, 3 * channels)
+    assert np.array_equal(unfolded, bits(expected_windows.to(torch.float16)))
+
+    # The Hugging Face weight [d, channels, 3], flattened as the checkpoint stores it.
+    actual, _ = run_linear(kvb, "fp16", w.reshape(d, -1), from_bits(unfolded).half(), bias=bits(b))
+    expected = F.conv1d(by_channel, w.float(), b.float(), stride=stride, padding=1)
+    expected = expected.transpose(1, 2).reshape(-1, d)
+    assert tolerance.rel_rms(from_bits(actual), expected) < F16_ROUNDING
+
+
+@pytest.mark.parametrize(("rows", "n_out"), [(1, 5), (3, 4097)])
+def test_add_bias(kvb, gen, rows, n_out):
+    y, b = rand_f16(gen, rows, n_out), rand_f16(gen, n_out)
+    expected = (y.float() + b.float()).to(torch.float16)
+    assert np.array_equal(kvb.add_bias(bits(y), bits(b)), bits(expected))
+    y32 = torch.randn(rows, n_out, generator=gen)
+    assert np.array_equal(kvb.add_bias(y32.numpy(), bits(b)), (y32 + b.float()).numpy())
+
+
+@pytest.mark.parametrize(("n_out", "n_in"), [(8, 8), (300, 512), (51865, 384)])
+@pytest.mark.parametrize("rows", [1, 3, 4, 17, 64])
+def test_linear_f16_adds_bias(kvb, gen, rows, n_out, n_in):
+    w = rand_f16(gen, n_out, n_in, scale=1 / math.sqrt(n_in))
+    x, b = rand_f16(gen, rows, n_in), rand_f16(gen, n_out)
+    expected = x.float() @ w.float().T + b.float()
+    f16_out = from_bits(kvb.linear_f16(bits(w), bits(x), bias=bits(b)))
+    assert tolerance.rel_rms(f16_out, expected) < F16_ROUNDING
+    f32_out = torch.from_numpy(kvb.linear_f16(bits(w), bits(x), f32_out=True, bias=bits(b)))
+    assert tolerance.rel_rms(f32_out, expected) < 1e-5
+
+
+@pytest.mark.parametrize(("n_out", "n_in", "group"), [(8, 64, 32), (300, 512, 128), (200, 96, 32)])
+@pytest.mark.parametrize("rows", [1, 3, 4, 17, 64])
+@pytest.mark.parametrize("scheme", ["int8_pc", "int4_g"])
+def test_quantized_products_add_bias(kvb, gen, scheme, rows, n_out, n_in, group):
+    """The bias of both quantized kernels, over every row-count variant and tile shape."""
+    w = rand_f16(gen, n_out, n_in, scale=1 / math.sqrt(n_in))
+    x, b = rand_f16(gen, rows, n_in), rand_f16(gen, n_out)
+    data, scale, deq = quantized(w, scheme, group)
+    for kernel, weights in (
+        (kvb.linear_quantized, deq),
+        (kvb.gemm_quantized, deq.to(torch.float16).float()),
+    ):
+        expected = x.float() @ weights.T + b.float()
+        f32_out = kernel(scheme, data, scale, bits(x), group_size=group, f32_out=True, bias=bits(b))
+        assert tolerance.rel_rms(torch.from_numpy(f32_out), expected) < 1e-5
+        f16_out = kernel(scheme, data, scale, bits(x), group_size=group, bias=bits(b))
+        assert tolerance.rel_rms(from_bits(f16_out), expected) < F16_ROUNDING
+
+
+@pytest.mark.parametrize("expand", [False, True])
+@pytest.mark.parametrize("rows", [1, 3, 4, 17, 64])
+@pytest.mark.parametrize("scheme", ["fp16", "int8_pc", "int4_g"])
+def test_run_linear_with_and_without_bias(kvb, gen, scheme, rows, expand):
+    """The engine's dispatch over its five products, each with a bias: the two FP16 kernels
+    (cuBLAS past 4 rows), the two quantized ones (tensor cores past 3 rows), and with `expand`
+    cuBLAS on the expanded matrix, four slices of output channels at a time."""
+    n_out, n_in, group = 200, 512, 128
+    w = rand_f16(gen, n_out, n_in, scale=1 / math.sqrt(n_in))
+    x, b = rand_f16(gen, rows, n_in), rand_f16(gen, n_out)
+    options = {"expand_quantized": expand, "dequant_slice_bytes": 64 * n_in * 2}
+    for bias in (None, bits(b)):
+        f16_out, deq = run_linear(kvb, scheme, w, x, group, bias=bias, **options)
+        # Past 3 rows a quantized matrix is multiplied as the FP16 weights it expands to.
+        weights = deq if rows <= 3 else deq.to(torch.float16).float()
+        expected = x.float() @ weights.T + (0 if bias is None else b.float())
+        assert tolerance.rel_rms(from_bits(f16_out), expected) < F16_ROUNDING
+        f32_out, _ = run_linear(kvb, scheme, w, x, group, bias=bias, f32_out=True, **options)
+        assert tolerance.rel_rms(torch.from_numpy(f32_out), expected) < 1e-5
+
+
+def test_run_linear_picks_each_kernel_by_scheme_and_rows(kvb, gen):
+    """Without a bias the dispatch returns, bit for bit, what the kernel it picks returns."""
+    n_out, n_in, group = 200, 512, 128
+    w = rand_f16(gen, n_out, n_in, scale=1 / math.sqrt(n_in))
+    xs = {rows: rand_f16(gen, rows, n_in) for rows in (1, 3, 4, 5)}
+
+    def dispatched(scheme, rows, **options):
+        return run_linear(kvb, scheme, w, xs[rows], group, **options)[0]
+
+    for rows in (1, 4):
+        assert np.array_equal(dispatched("fp16", rows), kvb.linear_f16(bits(w), bits(xs[rows])))
+    for rows, options in ((5, {}), (1, {"f16_gemv_rows": 0})):
+        blas = kvb.linear(bits(w), bits(xs[rows]))
+        assert np.array_equal(dispatched("fp16", rows, **options), blas)
+    for scheme in ("int8_pc", "int4_g"):
+        data, scale, _ = quantized(w, scheme, group)
+        for rows, kernel in ((3, kvb.linear_quantized), (4, kvb.gemm_quantized)):
+            direct = kernel(scheme, data, scale, bits(xs[rows]), group_size=group)
+            assert np.array_equal(dispatched(scheme, rows), direct)
+        # A wider in-place limit keeps 4 rows off the tensor cores.
+        direct = kvb.linear_quantized(scheme, data, scale, bits(xs[4]), group_size=group)
+        assert np.array_equal(dispatched(scheme, 4, quantized_gemm_rows=4), direct)
+        expanded = kvb.dequantize(scheme, data, scale, group_size=group)
+        blas = kvb.linear(expanded, bits(xs[4]))
+        assert np.array_equal(dispatched(scheme, 4, expand_quantized=True), blas)
+
+
+@pytest.mark.parametrize(("n_always", "n_begin"), [(0, 0), (3, 0), (0, 2), (88, 2), (700, 40)])
+def test_suppress_logits(kvb, gen, n_always, n_begin):
+    """Six step rows, five of them outputs; the two at position 3 are at the begin position."""
+    vocab, begin_pos = 1000, 3
+    positions = torch.tensor([0, 3, 2, 3, 4, 7], dtype=torch.int32)
+    out_rows = torch.tensor([5, 1, 2, 3, 0], dtype=torch.int32)
+    logits = torch.randn(len(out_rows), vocab, generator=gen)
+    always = torch.randint(vocab, (n_always,), generator=gen, dtype=torch.int32)
+    begin = torch.randint(vocab, (n_begin,), generator=gen, dtype=torch.int32)
+    if n_always:
+        always[:2] = torch.tensor([0, vocab - 1])
+
+    expected = logits.clone()
+    expected[:, always.long()] = float("-inf")
+    for o, row in enumerate(out_rows.tolist()):
+        if positions[row] == begin_pos:
+            expected[o, begin.long()] = float("-inf")
+    actual = kvb.suppress_logits(
+        logits.numpy(), positions.numpy(), out_rows.numpy(), always.numpy(), begin.numpy(),
+        begin_pos,
+    )  # fmt: skip
+    assert np.array_equal(actual, expected.numpy())
+    # What greedy decoding then picks.
+    assert kvb.argmax(actual).tolist() == expected.argmax(-1).tolist()
+
+
+# Whisper's encoder shapes: 1,500 frames with 6 heads (tiny) and 8 (base), and the fixture's 64
+# frames with 2. Then a single key, tiles that end mid-way, and head_dim 128.
+@pytest.mark.parametrize(
+    ("n_seqs", "n_keys", "n_heads", "head_dim"),
+    [(1, 1500, 6, 64), (2, 1500, 8, 64), (1, 64, 2, 64), (1, 1, 2, 64), (3, 65, 4, 64),
+     (2, 100, 2, 128)],
+)  # fmt: skip
+def test_dense_attention_over_the_stacked_product(kvb, gen, n_seqs, n_keys, n_heads, head_dim):
+    """Every frame attends every frame of its audio; q, k and v are thirds of one value."""
+    dim = n_heads * head_dim
+    qkv = rand_f16(gen, n_seqs * n_keys, 3 * dim)
+    q, k, v = (
+        part.float().view(n_seqs, n_keys, n_heads, head_dim).transpose(1, 2)
+        for part in qkv.split(dim, dim=1)
+    )
+    expected = F.scaled_dot_product_attention(q, k, v).transpose(1, 2).reshape(-1, dim)
+    actual = from_bits(kvb.attention_dense_stacked(bits(qkv), n_seqs, n_heads))
+    assert tolerance.rel_rms(actual, expected) < 2 * F16_ROUNDING
+
+
+# 1,500 keys in one block per sequence is Whisper's cross cache; 100 keys in blocks of 16 pages
+# it; 64 fills one key tile exactly.
+@pytest.mark.parametrize(("n_keys", "block_size"), [(1500, 1505), (100, 16), (64, 128)])
+@pytest.mark.parametrize(("n_heads", "n_kv_heads"), [(8, 8), (4, 2)])
+@pytest.mark.parametrize("layout", ["head_major", "token_major", "dim_major"])
+@pytest.mark.parametrize("kv_dtype", ["fp16", "int8"])
+def test_attention_over_a_fixed_context(
+    kvb, gen, kv_dtype, layout, n_heads, n_kv_heads, n_keys, block_size
+):
+    """Cross attention: queries at any position attend the first n_keys cached positions of their
+    sequence, by attention(fixed_ctx) and by attention_dense. The cache is written from one value
+    that holds keys and values side by side, as an encoder's stacked product does. Each sequence
+    caches five positions more, which no query may see."""
+    head_dim, n_seqs, cached = 64, 2, n_keys + 5
+    blocks_per_seq = math.ceil(cached / block_size)
+    n_blocks = n_seqs * blocks_per_seq
+    physical = torch.randperm(n_blocks, generator=gen).view(n_seqs, blocks_per_seq)
+    # The cached rows of both sequences, then the queries: 70 consecutive positions of sequence
+    # 1 (two tiles), single rows of both, and a run of sequence 0 that starts past the keys.
+    keys = [(s, p) for s in range(n_seqs) for p in range(cached)]
+    queries = [(1, p) for p in range(70)] + [(0, 3), (1, 0), (0, 447)]
+    queries += [(0, p) for p in range(n_keys + 2, n_keys + 9)]
+    seqs = torch.tensor([s for s, _ in keys + queries], dtype=torch.int32)
+    positions = torch.tensor([p for _, p in keys + queries], dtype=torch.int32)
+    key_seqs, key_pos = seqs[: len(keys)].long(), positions[: len(keys)]
+    slots = torch.zeros(len(seqs), dtype=torch.int32)
+    in_block = key_pos % block_size
+    slots[: len(keys)] = physical[key_seqs, (key_pos // block_size).long()] * block_size + in_block
+    q = rand_f16(gen, len(seqs), n_heads, head_dim)
+    k, v = (rand_f16(gen, len(keys), n_kv_heads, head_dim) for _ in range(2))
+
+    def run(kernel, wide=True):
+        return from_bits(
+            kvb.kv_attention(
+                bits(q), bits(k), bits(v), positions.numpy(), seqs.numpy(), slots.numpy(),
+                physical.to(torch.int32).numpy(), block_size, n_blocks, layout,
+                query_from=len(keys), wide_key_loads=wide, kv_dtype=kv_dtype, kernel=kernel,
+                fixed_ctx=n_keys, stacked_kv=True,
+            )
+        )  # fmt: skip
+
+    # The tensor-core kernel needs adjacent key dimensions.
+    actual = [run("decode", wide) for wide in (True, False)]
+    if layout != "dim_major":
+        actual.append(run("dense"))
+
+    cached_k, cached_v = (int8_readback(x) if kv_dtype == "int8" else x.float() for x in (k, v))
+    expected = torch.zeros(len(queries), n_heads, head_dim)
+    for s in range(n_seqs):
+        mine = seqs[len(keys) :] == s
+        # [heads, positions, head_dim], each KV head repeated for the query heads that read it.
+        ks, vs = (
+            x[s * cached : s * cached + n_keys].transpose(0, 1)
+            .repeat_interleave(n_heads // n_kv_heads, 0)
+            for x in (cached_k, cached_v)
+        )  # fmt: skip
+        qs = q[len(keys) :][mine].float().transpose(0, 1)
+        expected[mine] = F.scaled_dot_product_attention(qs, ks, vs).transpose(0, 1)
+    for out in actual:
+        assert tolerance.rel_rms(out, expected) < 2 * F16_ROUNDING
+
+
+def test_dense_attention_needs_adjacent_key_dimensions(kvb, gen):
+    q, k = rand_f16(gen, 4, 2, 64), rand_f16(gen, 4, 1, 64)
+    positions = np.arange(4, dtype=np.int32)
+    with pytest.raises(RuntimeError, match="adjacent key dimensions"):
+        kvb.kv_attention(
+            bits(q), bits(k), bits(k), positions, np.zeros(4, dtype=np.int32), positions,
+            np.zeros((1, 1), dtype=np.int32), 4, 1, "dim_major", kernel="dense", fixed_ctx=4,
+        )  # fmt: skip
+
+
+@pytest.mark.parametrize("kernel", ["decode", "dense"])
+def test_fixed_context_must_fit_the_cache(kvb, gen, kernel):
+    """Five keys asked of a cache whose sequences hold one block of four positions."""
+    q, k = rand_f16(gen, 4, 2, 64), rand_f16(gen, 4, 1, 64)
+    positions = np.arange(4, dtype=np.int32)
+    with pytest.raises(RuntimeError, match="sequence's cache"):
+        kvb.kv_attention(
+            bits(q), bits(k), bits(k), positions, np.zeros(4, dtype=np.int32), positions,
+            np.zeros((1, 1), dtype=np.int32), 4, 1, kernel=kernel, fixed_ctx=5,
+        )  # fmt: skip
