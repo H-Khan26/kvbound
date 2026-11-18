@@ -17,7 +17,7 @@ from transformers import LlamaForCausalLM
 from transformers.generation.streamers import BaseStreamer
 
 from kvbound import record
-from kvbound.models import load_spec
+from kvbound.models import load_spec, model_entry
 from kvbound.nvml_sampler import NvmlSampler
 
 DTYPES = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp32": torch.float32}
@@ -96,7 +96,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "kind": "generate",
         "engine": {"name": "hf-transformers", "version": transformers.__version__},
-        "model": {"name": spec.name, "hf_repo": spec.hf_repo, "revision": spec.revision},
+        "model": model_entry(spec),
         "params": {
             "dtype": args.dtype,
             "batch": args.batch,

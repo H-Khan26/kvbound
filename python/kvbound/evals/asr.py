@@ -57,7 +57,7 @@ from huggingface_hub import HfFileSystem
 
 from kvbound import audio, record
 from kvbound.evals import parquet_pages, text
-from kvbound.models import ModelSpec, load_spec
+from kvbound.models import ModelSpec, load_spec, model_entry
 from kvbound.nvml_sampler import NvmlSampler
 from kvbound.paths import CONFIGS, DATA
 
@@ -736,12 +736,7 @@ def run(
     result = {
         "kind": "asr",
         "engine": transcriber.engine,
-        "model": {
-            "name": spec.name,
-            "family": spec.family,
-            "hf_repo": spec.hf_repo,
-            "revision": spec.revision,
-        },
+        "model": model_entry(spec),
         "params": {
             **transcriber.params,
             "prompt": transcripts[0].prompt,

@@ -23,7 +23,7 @@ from transformers import AutoTokenizer
 
 from kvbound import bench, golden, native, record, tolerance
 from kvbound.awq import norm_site_scales
-from kvbound.models import load_spec
+from kvbound.models import load_spec, model_entry
 from kvbound.weight_format import VARIANTS
 
 
@@ -74,7 +74,7 @@ def evaluate(
     return {
         "kind": "eval.sites",
         "engine": {"name": "kvbound", "preset": preset},
-        "model": {"name": spec.name, "hf_repo": spec.hf_repo, "revision": spec.revision},
+        "model": model_entry(spec),
         "params": {
             "weights": weights,
             "kv": kv,

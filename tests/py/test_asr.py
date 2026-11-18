@@ -9,8 +9,10 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
+from kvbound import record
 from kvbound.evals import asr
 from kvbound.evals.asr import Row, Transcript
+from kvbound.models import load_spec, model_entry
 
 
 def metadata(seed=0):
@@ -153,7 +155,14 @@ class FakeStack:
     """Returns scripted texts with fixed timings."""
 
     engine = {"name": "fake"}
-    params = {"backend": "fake"}
+    params = {
+        "backend": "fake",
+        "device": "cpu",
+        "compute_type": "fp32",
+        "weights": "fp32",
+        "kv": "fp32",
+        "beams": 1,
+    }
 
     def __init__(self, texts, first_token_s=0.03, prompts=None):
         self.texts, self.first_token_s = iter(texts), first_token_s
@@ -222,6 +231,61 @@ def test_evaluate_rejects_a_prompt_that_changes_between_clips():
         asr.evaluate(FakeStack(["x", "y"], prompts=[[1], [1, 2]]), CLIPS, warmup=0)
     with pytest.raises(ValueError, match="no clips"):
         asr.evaluate(FakeStack([]), [])
+
+
+def test_model_entry_adds_the_family_to_the_three_older_keys():
+    spec = load_spec("tinyllama-1.1b")
+    assert list(model_entry(spec).items()) == [
+        ("name", spec.name),
+        ("hf_repo", spec.hf_repo),
+        ("revision", spec.revision),
+        ("family", "llama"),
+    ]
+    assert model_entry(load_spec("whisper-base-ar-quran"))["family"] == "whisper"
+
+
+def test_a_run_writes_an_asr_record_of_a_whisper_model(monkeypatch, tmp_path):
+    stack = FakeStack(["warm-up", "بسم الله الرحمن الرحيم", "قل هو الله احد"])
+    monkeypatch.setattr(asr, "load_clips", lambda: CLIPS)
+    monkeypatch.setattr(asr, "load_transcriber", lambda *args: stack)
+    result, clips, transcripts = asr.run(
+        "whisper-base-ar-quran", "fake", device="cpu", subset=asr.CLIPS
+    )
+    assert (len(clips), len(transcripts)) == (2, 2)
+
+    # A machine without a GPU has no fingerprint; the record needs these fields of one.
+    fingerprint = {"device_id": "test", "git": {"dirty": False}, "software": {"os_class": "linux"}}
+    monkeypatch.setattr(record.fp, "fingerprint", lambda gpu_index: fingerprint)
+    monkeypatch.setattr(record, "RESULTS_RAW", tmp_path)
+    written = json.loads(record.write_record(**result).read_text(encoding="utf-8"))
+    assert written["kind"] == "asr" and record.model_family(written) == "whisper"
+    assert written["model"] == model_entry(load_spec("whisper-base-ar-quran"))
+    assert written["metrics"]["wer"] == 0.0 and written["metrics"]["wer_raw"] == 1.0
+    assert written["nvml"] is None
+    assert {
+        "prompt",
+        "beams",
+        "weights",
+        "kv",
+        "subset",
+        "n_clips",
+        "backend",
+        "compute_type",
+        "normalization",
+    } <= set(written["params"])
+    assert {
+        "wer",
+        "cer",
+        "wer_raw",
+        "cer_raw",
+        "rtf_model",
+        "rtf_e2e",
+        "encoder_ms",
+        "first_token_ms",
+        "decode_ms_per_token",
+    } <= set(written["metrics"])
+    with pytest.raises(ValueError, match="whisper"):
+        asr.run("tinyllama-1.1b", "fake", device="cpu", subset=asr.CLIPS)
 
 
 # Every 40th row of select_subset(metadata(), n_clips=200), as (shard number, row).

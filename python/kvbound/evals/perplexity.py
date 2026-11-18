@@ -29,7 +29,7 @@ from torch import Tensor
 from transformers import AutoTokenizer
 
 from kvbound import native, record
-from kvbound.models import load_spec, sha256_file
+from kvbound.models import load_spec, model_entry, sha256_file
 from kvbound.paths import DATA
 from kvbound.ref import load_llama
 from kvbound.weight_format import VARIANTS, WeightFormat
@@ -204,7 +204,7 @@ def evaluate(
     return {
         "kind": "eval.perplexity",
         "engine": engine,
-        "model": {"name": spec.name, "hf_repo": spec.hf_repo, "revision": spec.revision},
+        "model": model_entry(spec),
         "params": {
             "weights": weights,
             "weights_header": header,

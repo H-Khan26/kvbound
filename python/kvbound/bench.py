@@ -25,7 +25,7 @@ from typing import Any
 import torch
 
 from kvbound import fingerprint, record
-from kvbound.models import load_spec
+from kvbound.models import load_spec, model_entry
 from kvbound.nvml_sampler import NvmlSampler
 from kvbound.paths import binary
 from kvbound.perfmodel import hardware
@@ -170,7 +170,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "kind": "generate",
         "engine": {"name": "kvbound", "preset": args.preset},
-        "model": {"name": spec.name, "hf_repo": spec.hf_repo, "revision": spec.revision},
+        "model": model_entry(spec),
         "params": {
             "batch": 1,
             "prompt_len": args.prompt_len,
