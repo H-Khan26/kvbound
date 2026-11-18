@@ -6,6 +6,7 @@
 #include <string>
 
 #include "kvbound/cuda/kernels.h"
+#include "kvbound/cuda/linear.h"
 
 namespace kvb::cuda {
 namespace {
@@ -120,9 +121,8 @@ std::size_t dequant_scratch_bytes(const Program& program, const DeviceWeights& w
     const Value& out = program.values[op.out];
     const int max_rows = out.rows == RowKind::Token ? limits.max_step_tokens : limits.max_outputs;
     if (max_rows <= limits.quantized_gemm_rows) continue;
-    const std::size_t row_bytes = program.values[op.in0].cols * sizeof(std::uint16_t);
-    const std::size_t matrix = static_cast<std::size_t>(out.cols) * row_bytes;
-    bytes = std::max(bytes, std::min(matrix, std::max(limits.dequant_slice_bytes, row_bytes)));
+    bytes = std::max(bytes, expand_scratch_bytes(program.values[op.in0].cols, out.cols,
+                                                 limits.dequant_slice_bytes));
   }
   return bytes;
 }
@@ -184,43 +184,21 @@ void LlamaModel::run(const StepRow* rows, const std::int32_t* out_rows, int n_to
                               value<f16>(op.out), n_rows, static_cast<int>(out->cols),
                               static_cast<float>(config_.rms_norm_eps), stream);
         break;
-      case OpKind::Linear: {
-        const WeightRef weight = weights_.ref(op.weight);
-        const int n_in = static_cast<int>(in0->cols), n_out_cols = static_cast<int>(out->cols);
-        if (weight.scheme == WeightScheme::F16 && n_rows <= limits_.f16_gemv_rows &&
-            n_in % 8 == 0) {
-          kernels::linear_f16(weights_.data(op.weight), value<f16>(op.in0), value<void>(op.out),
-                              n_rows, n_in, n_out_cols, out->dtype == DType::F32, stream);
-        } else if (weight.scheme == WeightScheme::F16) {
-          blas_.linear(weights_.data(op.weight), value<f16>(op.in0), value<void>(op.out), n_rows,
-                       n_in, n_out_cols, out->dtype);
-        } else if (n_rows <= limits_.quantized_gemm_rows) {
-          kernels::linear_quantized(weight, value<f16>(op.in0), value<void>(op.out), n_rows, n_in,
-                                    n_out_cols, out->dtype == DType::F32, stream);
-        } else if (!limits_.expand_quantized) {
-          kernels::gemm_quantized(weight, value<f16>(op.in0), value<void>(op.out), n_rows, n_in,
-                                  n_out_cols, out->dtype == DType::F32, stream);
-        } else {
-          // Expanded and multiplied a slice of output channels at a time.
-          const int slice = static_cast<int>(dequant_.bytes() / sizeof(f16) / n_in);
-          const std::size_t element = size_bytes(out->dtype);
-          for (int first = 0; first < n_out_cols; first += slice) {
-            const int count = std::min(slice, n_out_cols - first);
-            kernels::dequantize(weight, dequant_.as<f16>(), n_in, first, count, stream);
-            blas_.linear(dequant_.as<f16>(), value<f16>(op.in0),
-                         value<std::byte>(op.out) + first * element, n_rows, n_in, count,
-                         out->dtype, n_out_cols);
-          }
-        }
+      case OpKind::Linear:
+        run_linear(weights_.ref(op.weight), nullptr, value<f16>(op.in0), value<void>(op.out),
+                   n_rows, static_cast<int>(in0->cols), static_cast<int>(out->cols), out->dtype,
+                   {.f16_gemv_rows = limits_.f16_gemv_rows,
+                    .quantized_gemm_rows = limits_.quantized_gemm_rows,
+                    .expand_quantized = limits_.expand_quantized},
+                   blas_, dequant_, stream);
         break;
-      }
       case OpKind::Rope:
         kernels::rope(value<f16>(op.in0), rows, rope_table_.as<float>(), n_tokens,
                       static_cast<int>(in0->cols) / head_dim, head_dim, stream);
         break;
       case OpKind::KvWrite:
         kernels::kv_write(value<f16>(op.in0), value<f16>(op.in1), rows, kv.layer_view(op.layer),
-                          n_tokens, n_kv_heads, head_dim, stream);
+                          n_tokens, n_kv_heads, head_dim, n_kv_heads * head_dim, stream);
         break;
       case OpKind::RopeKvWrite:
         kernels::rope_kv_write(value<f16>(op.in0), rows, rope_table_.as<float>(),
@@ -235,7 +213,7 @@ void LlamaModel::run(const StepRow* rows, const std::int32_t* out_rows, int n_to
           break;
         }
         kernels::attention(value<f16>(op.in0), value<f16>(op.out), rows, view, n_tokens, n_heads,
-                           n_kv_heads, head_dim, limits_.max_ctx,
+                           n_kv_heads, head_dim, limits_.max_ctx, 0,
                            limits_.wide_key_loads ? kernels::widest_key_loads(view, head_dim)
                                                   : kernels::KeyLoads::Scalar,
                            stream);

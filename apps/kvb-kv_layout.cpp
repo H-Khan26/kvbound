@@ -233,13 +233,13 @@ int run(const Options& options) {
           const Timing write = time_steps(reps, [&] {
             for (int layer = 0; layer < kLayers; ++layer) {
               kvb::kernels::kv_write(k.as<f16>(), v.as<f16>(), r, pool.layer_view(layer), n_tokens,
-                                     kKvHeads, kHeadDim, nullptr);
+                                     kKvHeads, kHeadDim, kKvHeads * kHeadDim, nullptr);
             }
           });
           const Timing attend = time_steps(reps, [&] {
             for (int layer = 0; layer < kLayers; ++layer) {
               kvb::kernels::attention(q.as<f16>(), out.as<f16>(), r, pool.layer_view(layer),
-                                      n_tokens, kHeads, kKvHeads, kHeadDim, kMaxCtx, loads,
+                                      n_tokens, kHeads, kKvHeads, kHeadDim, kMaxCtx, 0, loads,
                                       nullptr);
             }
           });
