@@ -1,0 +1,5 @@
+# TensorRT-LLM's latest release and the torch build its install guide names (CUDA 13.0).
+tensorrt-llm==1.2.1
+torch==2.9.1
+# TensorRT-LLM pins numpy<2; pyarrow 26 (through datasets) refuses numpy 1 at import.
+pyarrow<26

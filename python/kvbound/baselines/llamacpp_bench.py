@@ -29,97 +29,34 @@ import http.client
 import json
 import os
 import re
-import socket
-import subprocess
 import time
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
-from types import TracebackType
 from typing import Any
 
 from kvbound import record
 from kvbound.baselines import llamacpp
+from kvbound.baselines.http_server import HOST, ServerProcess, free_port
 from kvbound.bench import random_prompt, request_metrics
 from kvbound.models import load_spec, model_entry
 from kvbound.nvml_sampler import NvmlSampler
 from kvbound.perfmodel.model import Arch
 
 KV_TYPES = ("f16", "q8_0", "q4_0")
-HOST = "127.0.0.1"
-LOAD_TIMEOUT_S = 300
 # The buffer lines llama.cpp logs when it loads a model and creates a context.
 BUFFER_LINE = re.compile(
     r"\b(CUDA\d+|CPU|CUDA_Host)\w* (model|KV|compute) buffer size =\s*([\d.]+) MiB"
 )
 
 
-def free_port() -> int:
-    with socket.socket() as s:
-        s.bind((HOST, 0))
-        port: int = s.getsockname()[1]
-        return port
-
-
-class Server:
+class Server(ServerProcess):
     """llama-server as a context manager: started and loaded on enter, ended on exit."""
 
     def __init__(self, args: list[str], log_path: Path) -> None:
-        self.port = free_port()
-        self.command = [str(llamacpp.exe("llama-server")), *args, "--host", HOST]
-        self.command += ["--port", str(self.port)]
-        self.log_path = log_path
-        self.process: subprocess.Popen[bytes] | None = None
-
-    def __enter__(self) -> "Server":
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.log_path.open("wb") as log:
-            self.process = subprocess.Popen(
-                self.command, stdout=log, stderr=subprocess.STDOUT,
-                cwd=self.log_path.parent, env=llamacpp.runtime_env(),
-            )  # fmt: skip
-        try:
-            self._wait_loaded()
-        except BaseException:
-            self.stop()
-            raise
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        self.stop()
-
-    def _wait_loaded(self) -> None:
-        deadline = time.monotonic() + LOAD_TIMEOUT_S
-        assert self.process is not None
-        while time.monotonic() < deadline:
-            if self.process.poll() is not None:
-                raise RuntimeError(f"llama-server exited early; see {self.log_path}:\n{self.log()}")
-            try:
-                conn = http.client.HTTPConnection(HOST, self.port, timeout=5)
-                conn.request("GET", "/health")
-                if conn.getresponse().status == 200:
-                    return
-            except OSError:
-                pass
-            time.sleep(0.2)
-        raise TimeoutError(f"llama-server did not load in {LOAD_TIMEOUT_S} s; see {self.log_path}")
-
-    def stop(self) -> None:
-        if self.process is not None and self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(30)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait()
-
-    def log(self) -> str:
-        return self.log_path.read_text(encoding="utf-8", errors="replace")
+        port = free_port()
+        command = [str(llamacpp.exe("llama-server")), *args, "--host", HOST, "--port", str(port)]
+        super().__init__(command, log_path, port, name="llama-server", env=llamacpp.runtime_env())
 
     def complete(self, body: dict[str, Any]) -> dict[str, Any]:
         """One streamed completion, timed from just before the request is sent; raises when
