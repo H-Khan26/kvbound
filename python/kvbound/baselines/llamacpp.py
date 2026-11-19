@@ -12,9 +12,9 @@ Everything lives under $KVBOUND_EXT/llama.cpp/<tag>/ (kvbound.paths.EXT):
   gguf/<model>/<FORMAT>.gguf
 
 The F16 file is converted from the fetched Hugging Face checkpoint (data/models/<name>), plus the
-repository's tokenizer.model where it has one, by the tag's own converter; Q8_0, Q4_K_M and
-Q4_0 are quantized from it with the tag's llama-quantize, which keeps its default mix of tensor
-types per format (see gguf_info).
+repository's tokenizer.model where it has one, by the tag's own converter; the other FORMATS
+are quantized from it with the tag's llama-quantize, which keeps its default mix of tensor types
+per format except in Q4_0_PURE (see gguf_info).
 
 Downloads are treated as untrusted: each zip goes into a new folder, is extracted into another
 new folder with every member's path checked, and no interpreter runs from inside them. The
@@ -84,10 +84,19 @@ DONE_FILE = "kvbound-fetched.json"
 # Seconds a download may wait on the connection or on its next bytes.
 DOWNLOAD_TIMEOUT_S = 60
 
-# Formats llama-quantize makes from the F16 file. Q4_0 (blocks of 32 weights with one F16
-# scale, round to nearest) is the nearest relative of kvbound's int4_g; Q4_K_M is the format
-# most often downloaded.
-FORMATS = ("F16", "Q8_0", "Q4_K_M", "Q4_0")
+# Formats llama-quantize makes from the F16 file. Q4_0 is blocks of 32 weights with one F16
+# scale, round to nearest; llama-quantize keeps the output matrix (or a tied embedding) in Q6_K.
+# Q4_0_PURE is Q4_0 with --pure, every matrix Q4_0, embeddings and output included: the closest
+# analog of kvbound's int4_g, which quantizes every matrix. Q4_K_M is the format most often
+# downloaded.
+FORMATS = ("F16", "Q8_0", "Q4_K_M", "Q4_0", "Q4_0_PURE")
+# llama-quantize arguments of each quantized format: options, then the type.
+QUANTIZE_ARGS = {
+    "Q8_0": ["Q8_0"],
+    "Q4_K_M": ["Q4_K_M"],
+    "Q4_0": ["Q4_0"],
+    "Q4_0_PURE": ["--pure", "Q4_0"],
+}
 
 ROOT = EXT / "llama.cpp" / TAG
 BIN = ROOT / "bin"
@@ -270,11 +279,12 @@ def convert(model: str, formats: tuple[str, ...] = FORMATS) -> None:
         shutil.rmtree(source)  # links or copies, made above
     for fmt in formats:
         out = gguf_path(model, fmt)
-        if out.exists():
+        if fmt == "F16" or out.exists():
             continue
         partial = out.with_name(out.name + ".partial")
+        *options, kind = QUANTIZE_ARGS[fmt]
         subprocess.run(
-            [str(exe("llama-quantize")), str(f16), str(partial), fmt],
+            [str(exe("llama-quantize")), *options, str(f16), str(partial), kind],
             check=True, cwd=out.parent, env=runtime_env(gpu=False),
         )  # fmt: skip
         partial.replace(out)

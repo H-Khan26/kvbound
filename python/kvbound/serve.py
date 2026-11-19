@@ -19,6 +19,7 @@ Usage: python -m kvbound.serve --model tinyllama-1.1b --workload longtail --poli
 
 import argparse
 import dataclasses
+import json
 from typing import Any
 
 from kvbound import bench, record, workload
@@ -31,11 +32,35 @@ def weighted_mean(values: list[float], weights: list[float]) -> float:
     return sum(v * w for v, w in zip(values, weights, strict=True)) / sum(weights)
 
 
-def pass_metrics(run: dict[str, Any], config: dict[str, Any]) -> dict[str, float]:
-    """Metrics of one pass over the workload.
+def latency_metrics(requests: list[dict[str, Any]], total_s: float) -> dict[str, float]:
+    """Throughput and latency of one pass over the workload, from each request's arrival_s and
+    token_times_s (seconds from the start of the pass) and the pass's length in seconds.
 
     Latency is per request, from its arrival: TTFT to its first token, TPOT between its tokens
     (requests with one token have none), latency to its last token.
+    """
+    first = sorted(r["token_times_s"][0] - r["arrival_s"] for r in requests)
+    last = sorted(r["token_times_s"][-1] - r["arrival_s"] for r in requests)
+    tpot = sorted(
+        (r["token_times_s"][-1] - r["token_times_s"][0]) / (len(r["token_times_s"]) - 1)
+        for r in requests
+        if len(r["token_times_s"]) > 1
+    )
+    generated = sum(len(r["token_times_s"]) for r in requests)
+    return {
+        "total_s": total_s,
+        "throughput_tok_s": generated / total_s,
+        "ttft_p50_s": record.percentile(first, 50),
+        "ttft_p90_s": record.percentile(first, 90),
+        "tpot_p50_s": record.percentile(tpot, 50),
+        "tpot_p90_s": record.percentile(tpot, 90),
+        "latency_p50_s": record.percentile(last, 50),
+        "latency_p90_s": record.percentile(last, 90),
+    }
+
+
+def pass_metrics(run: dict[str, Any], config: dict[str, Any]) -> dict[str, float]:
+    """Metrics of one pass over the workload: latency_metrics, then the engine's own.
 
     KV occupancy is sampled after every step and weighted by the step's duration, so time the
     engine spends idle between arrivals does not count.
@@ -53,26 +78,11 @@ def pass_metrics(run: dict[str, Any], config: dict[str, Any]) -> dict[str, float
     used = weighted_mean(steps["used_tokens"], durations)
     reserved = weighted_mean(steps["reserved_tokens"], durations)
     requests = run["requests"]
-    first = sorted(r["token_times_s"][0] - r["arrival_s"] for r in requests)
-    last = sorted(r["token_times_s"][-1] - r["arrival_s"] for r in requests)
-    tpot = sorted(
-        (r["token_times_s"][-1] - r["token_times_s"][0]) / (len(r["token_times_s"]) - 1)
-        for r in requests
-        if len(r["token_times_s"]) > 1
-    )
-    generated = sum(len(r["token_times_s"]) for r in requests)
     needed_rows = sum(r["n_prompt"] + len(r["token_times_s"]) - 1 for r in requests)
     graphs = run["graphs"]
     return {
-        "total_s": total,
+        **latency_metrics(requests, total),
         "busy_s": sum(durations),
-        "throughput_tok_s": generated / total,
-        "ttft_p50_s": record.percentile(first, 50),
-        "ttft_p90_s": record.percentile(first, 90),
-        "tpot_p50_s": record.percentile(tpot, 50),
-        "tpot_p90_s": record.percentile(tpot, 90),
-        "latency_p50_s": record.percentile(last, 50),
-        "latency_p90_s": record.percentile(last, 90),
         "kv_used_mean_tokens": used,
         "kv_reserved_mean_tokens": reserved,
         "kv_used_peak_tokens": max(steps["used_tokens"]),
@@ -205,11 +215,13 @@ def main() -> None:
     parser.add_argument("--iters", type=int, default=3)
     parser.add_argument("--preset", default="cuda")
     parser.add_argument("--allow-dirty", action="store_true")
+    parser.add_argument("--no-record", action="store_true", help="print the result only")
     args = parser.parse_args()
 
-    record.require_clean_tree(args.allow_dirty)
+    if not args.no_record:
+        record.require_clean_tree(args.allow_dirty)
     result = benchmark(args)
-    path = record.write_record(**result)
+    path = "(not recorded)" if args.no_record else record.write_record(**result)
     m = result["metrics"]
     print(
         f"{args.workload}, {args.policy}, {args.slots} slots:"
@@ -221,6 +233,10 @@ def main() -> None:
         f" {m['kv_used_of_pool']['p50']:.0%} of the pool"
         f" | {m['preemptions']['p50']:.0f} preemptions\n{path}"
     )
+    if args.no_record:
+        names = ["throughput_tok_s", "ttft_p50_s", "ttft_p90_s", "tpot_p50_s", "tpot_p90_s"]
+        names += ["latency_p50_s", "latency_p90_s", "running_mean", "running_peak", "steps"]
+        print(json.dumps({name: m[name] for name in names}))
 
 
 if __name__ == "__main__":

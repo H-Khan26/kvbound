@@ -1,14 +1,21 @@
-"""The llama.cpp baseline: outside-stack records, GGUF bit counting, the server harness's
-parsing, and (slow) llama.cpp's perplexity against kvbound's on the same windows."""
+"""The llama.cpp baseline: outside-stack records, fetching and conversion inputs, GGUF bit
+counting, the server harnesses' parsing and arithmetic, and (slow) llama.cpp's perplexity
+against kvbound's on the same windows."""
 
+import contextlib
+import hashlib
+import io
+import json
 import struct
+import zipfile
 
 import pytest
 
-from kvbound import record
-from kvbound.baselines import llamacpp
-from kvbound.baselines.llamacpp_bench import buffers_mib, command_line, request_body
+from kvbound import models, record, serve, workload
+from kvbound.baselines import llamacpp, llamacpp_serve
+from kvbound.baselines.llamacpp_bench import buffers_mib, command_line, read_stream, request_body
 from kvbound.baselines.llamacpp_eval import compare_tokens
+from kvbound.perfmodel.model import Arch
 
 
 def test_external_engine_needs_a_version():
@@ -136,6 +143,138 @@ def test_compare_tokens_reports_the_first_difference():
     assert compare_tokens([1, 2, 3], [1, 9, 3])["first_difference"] == 1
     shorter = compare_tokens([1, 2, 3], [1, 2])
     assert (shorter["same_count"], shorter["first_difference"]) == (False, 2)
+
+
+def test_extract_refuses_a_member_outside_the_folder(tmp_path):
+    archive = tmp_path / "evil.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("bin/ok.txt", "ok")
+        zf.writestr("../escaped.txt", "no")
+    dest = tmp_path / "out" / "bin"
+    with pytest.raises(SystemExit):
+        llamacpp._extract(archive, dest)
+    assert not dest.exists()
+    assert not (tmp_path / "out" / "escaped.txt").exists()
+
+
+def test_download_keeps_nothing_whose_sha256_differs(tmp_path, monkeypatch):
+    monkeypatch.setattr(llamacpp, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        llamacpp.urllib.request,
+        "urlopen",
+        lambda url, timeout: contextlib.closing(io.BytesIO(b"not the pinned bytes")),
+    )
+    artifact = llamacpp.Artifact("bin", "x.zip", "https://example.invalid/x.zip", "0" * 64)
+    with pytest.raises(SystemExit):
+        llamacpp._download(artifact)
+    assert list((tmp_path / "downloads" / "bin").iterdir()) == []
+    good = llamacpp.Artifact(
+        "bin", "x.zip", artifact.url, hashlib.sha256(b"not the pinned bytes").hexdigest()
+    )
+    assert llamacpp._download(good).read_bytes() == b"not the pinned bytes"
+
+
+@pytest.mark.parametrize("repo_has_spm", [True, False])
+def test_converter_input_holds_the_checkpoint_and_the_repos_tokenizer_model(
+    tmp_path, monkeypatch, repo_has_spm
+):
+    monkeypatch.setattr(models, "DATA", tmp_path / "data")
+    monkeypatch.setattr(llamacpp, "ROOT", tmp_path / "ext")
+    spec = models.ModelSpec("toy", "org/toy", "abc123", False, {})
+    spec.checkpoint_dir.mkdir(parents=True)
+    for name in models.CHECKPOINT_FILES:
+        (spec.checkpoint_dir / name).write_text(name)
+    asked = []
+    repo = ["config.json", "tokenizer.model"] if repo_has_spm else ["config.json"]
+
+    def list_repo_files(repo_id, revision):
+        assert (repo_id, revision) == ("org/toy", "abc123")
+        return repo
+
+    def hf_hub_download(repo_id, filename, revision, local_dir):
+        asked.append(filename)
+        (local_dir / filename).write_text("spm")
+
+    monkeypatch.setattr(llamacpp, "list_repo_files", list_repo_files)
+    monkeypatch.setattr(llamacpp, "hf_hub_download", hf_hub_download)
+    out = llamacpp.converter_input(spec)
+    for name in models.CHECKPOINT_FILES:
+        assert (out / name).read_text() == name
+    assert asked == (["tokenizer.model"] if repo_has_spm else [])
+    assert (out / "tokenizer.model").exists() == repo_has_spm
+
+
+def test_every_quantized_format_has_quantize_arguments():
+    assert set(llamacpp.QUANTIZE_ARGS) == set(llamacpp.FORMATS) - {"F16"}
+    assert llamacpp.QUANTIZE_ARGS["Q4_0_PURE"] == ["--pure", "Q4_0"]
+
+
+def _events(*events):
+    return [b"data: " + json.dumps(e).encode() + b"\n" for e in events]
+
+
+def test_tokens_sharing_an_event_take_its_time():
+    clock = iter([1.0, 1.5, 2.25, 3.0]).__next__
+    lines = [b": keep-alive\n", *_events({"tokens": [5]}, {"tokens": [6, 7]}, {"tokens": [8]})]
+    lines += _events({"tokens": [], "stop": True, "timings": {"prompt_n": 3}})
+    out = read_stream(lines, 0.5, clock)
+    assert out["tokens"] == [5, 6, 7, 8]
+    assert out["times"] == [0.5, 1.0, 1.0, 1.75]
+    assert out["multi_token_events"] == 1
+    assert out["final"]["timings"] == {"prompt_n": 3}
+    assert out["error"] is None
+
+
+def test_an_error_event_ends_the_stream():
+    out = read_stream(_events({"tokens": [5]}, {"error": {"message": "full"}}), 0.0, lambda: 1.0)
+    assert out["error"] == {"message": "full"}
+    assert out["tokens"] == [5]
+
+
+def test_latency_metrics_follow_arrivals():
+    requests = [
+        {"arrival_s": 0.0, "token_times_s": [0.1, 0.2, 0.3]},
+        {"arrival_s": 1.0, "token_times_s": [1.5]},
+    ]
+    m = serve.latency_metrics(requests, 2.0)
+    assert m["throughput_tok_s"] == pytest.approx(4 / 2.0)
+    assert m["ttft_p50_s"] == pytest.approx(0.3)  # 0.1 and 0.5, interpolated
+    assert m["tpot_p50_s"] == pytest.approx(0.1)  # the one-token request has no TPOT
+    assert m["latency_p90_s"] == pytest.approx(0.3 + 0.9 * 0.2)
+
+
+def test_the_pool_holds_kvbounds_bytes():
+    arch = Arch.from_table(models.load_spec("tinyllama-1.1b").arch)
+    cells, pool_bytes = llamacpp_serve.kv_cells(arch, 8, 1024, "f16")
+    assert pool_bytes == 8 * 1024 * 22528
+    assert cells == 8192
+    cells, _ = llamacpp_serve.kv_cells(arch, 8, 1024, "q8_0")
+    assert cells == 15360  # 8 * 1024 * 22528 / 11968, rounded down to 256
+
+
+def test_safe_slots_cannot_overflow_the_cache():
+    trace = workload.trace(workload.load("fixed"), 32000, 1024)
+    assert llamacpp_serve.safe_slots(8192, trace) == 8192 // 384
+    assert llamacpp_serve.safe_slots(10**6, trace) == llamacpp_serve.MAX_SLOTS
+
+
+def test_failed_requests_leave_the_latency_figures():
+    trace = {"requests": [{"arrival_s": 0.0, "max_new_tokens": 2}] * 2}
+    ok = {"times": [0.2, 0.3], "error": None, "sent_s": 0.001}
+    failed = {"times": [0.2], "error": "Context size has been exceeded.", "sent_s": 0.003}
+    m = llamacpp_serve.pass_metrics(trace, [ok, failed])
+    assert m["failed"] == 1
+    assert m["total_s"] == pytest.approx(0.3)
+    assert m["throughput_tok_s"] == pytest.approx(2 / 0.3)
+    assert m["send_lag_max_s"] == pytest.approx(0.003)
+
+
+def test_server_counters_give_steps_and_busy_slots():
+    page = "# HELP x\nllamacpp:n_decode_total 30\nllamacpp:n_busy_slots_per_decode 2.5\n"
+    after = llamacpp_serve.parse_metrics(page)
+    before = {"n_decode_total": 10.0, "n_busy_slots_per_decode": 1.0}
+    counts = llamacpp_serve.step_counts(before, after)
+    assert counts == {"steps": 20.0, "busy_slots_per_step": (75 - 10) / 20}
 
 
 @pytest.mark.gpu

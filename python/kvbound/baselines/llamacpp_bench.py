@@ -32,6 +32,7 @@ import re
 import socket
 import subprocess
 import time
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
@@ -121,34 +122,71 @@ class Server:
         return self.log_path.read_text(encoding="utf-8", errors="replace")
 
     def complete(self, body: dict[str, Any]) -> dict[str, Any]:
-        """One streamed completion: the ids received, the seconds from just before the request
-        was sent to the event that carried each, and the server's closing event."""
-        payload = json.dumps({**body, "stream": True, "return_tokens": True}).encode()
-        conn = http.client.HTTPConnection(HOST, self.port, timeout=600)
-        start = time.perf_counter()
+        """One streamed completion, timed from just before the request is sent; raises when
+        the server reports an error."""
+        out = stream_completion(self.port, body)
+        if out["error"] is not None:
+            raise RuntimeError(f"/completion failed: {out['error']}")
+        return out
+
+
+def read_stream(
+    lines: Iterable[bytes], origin: float, clock: Callable[[], float] = time.perf_counter
+) -> dict[str, Any]:
+    """The server-sent events of one completion: the ids received, the seconds from origin to
+    the event that carried each, the closing event, and the error the server sent, if any. Ids
+    that arrive together take their event's time; multi_token_events counts such events."""
+    times: list[float] = []
+    tokens: list[int] = []
+    multi = 0
+    final: dict[str, Any] = {}
+    error = None
+    for line in lines:
+        if not line.startswith(b"data: "):
+            continue
+        now = clock() - origin
+        event = json.loads(line[6:])
+        if "error" in event:
+            error = event["error"]
+            break
+        ids = event.get("tokens") or []
+        times += [now] * len(ids)
+        tokens += ids
+        multi += len(ids) > 1
+        if event.get("stop"):
+            final = event
+            break
+    return {
+        "times": times,
+        "tokens": tokens,
+        "final": final,
+        "multi_token_events": multi,
+        "error": error,
+    }
+
+
+def stream_completion(
+    port: int, body: dict[str, Any], origin: float | None = None
+) -> dict[str, Any]:
+    """POSTs one streamed /completion and reads it (read_stream). Times count from origin, a
+    time.perf_counter() value, or from just before the request is sent; sent_s is when it was
+    sent. An HTTP error status counts as the server's error."""
+    payload = json.dumps({**body, "stream": True, "return_tokens": True}).encode()
+    conn = http.client.HTTPConnection(HOST, port, timeout=600)
+    sent = time.perf_counter()
+    origin = sent if origin is None else origin
+    try:
         conn.request("POST", "/completion", payload, {"Content-Type": "application/json"})
         response = conn.getresponse()
         if response.status != 200:
-            raise RuntimeError(f"/completion returned {response.status}: {response.read()!r}")
-        times: list[float] = []
-        tokens: list[int] = []
-        events = multi = 0
-        final: dict[str, Any] = {}
-        for line in response:
-            if not line.startswith(b"data: "):
-                continue
-            now = time.perf_counter() - start
-            event = json.loads(line[6:])
-            ids = event.get("tokens") or []
-            times += [now] * len(ids)
-            tokens += ids
-            events += 1
-            multi += len(ids) > 1
-            if event.get("stop"):
-                final = event
-                break
+            out = read_stream([], origin)
+            out["error"] = f"HTTP {response.status}: {response.read()[:500]!r}"
+        else:
+            out = read_stream(response, origin)
+    finally:
         conn.close()
-        return {"times": times, "tokens": tokens, "final": final, "multi_token_events": multi}
+    out["sent_s"] = sent - origin
+    return out
 
 
 def buffers_mib(log: str) -> dict[str, float]:
