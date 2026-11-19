@@ -112,6 +112,23 @@ def test_server_flags_and_greedy_request():
     assert body["cache_prompt"] is False
 
 
+def test_worker_nll_is_kvbounds_rule():
+    """The llama.cpp worker scores a window as kvbound.evals.perplexity.window_nll does, across
+    more rows than one float64 chunk."""
+    import numpy as np
+    import torch
+
+    from kvbound.baselines.llamacpp_lib import SCORE_ROWS, window_nll
+    from kvbound.evals import perplexity
+
+    rng = np.random.default_rng(0)
+    n, vocab = SCORE_ROWS * 2 + 7, 300
+    logits = (rng.standard_normal((n, vocab)) * 4).astype(np.float32)
+    ids = rng.integers(0, vocab, n)
+    expected = perplexity.window_nll(torch.from_numpy(logits), torch.from_numpy(ids))
+    assert window_nll(logits, ids) == pytest.approx(expected, rel=1e-6)
+
+
 def test_compare_tokens_reports_the_first_difference():
     assert compare_tokens([1, 2, 3], [1, 2, 3]) == {
         "n_tokens": 3, "same_count": True, "identical": True, "first_difference": None,

@@ -5,7 +5,9 @@ test split tokenized once by the model's Hugging Face tokenizer, non-overlapping
 `window` tokens, every position after the first of a window scored, the NLL summed in float64.
 Only the logits come from llama.cpp: each window goes through the pinned release's llama.dll
 (kvbound.baselines.llamacpp_lib) as one batch from position 0 with the cache cleared, all
-layers on the GPU, every position's logits returned.
+layers on the GPU, every position's logits returned. That runs in a worker process without
+torch (see llamacpp_lib), which applies kvbound's rule to the logits in float64 and returns the
+per-window sums; kvbound.evals.perplexity.summarize turns them into the perplexity.
 
 llama-perplexity scores differently: it puts BOS in place of the first token of every window and
 scores only the second half of each, so its numbers are not comparable with kvbound's and are not
@@ -17,13 +19,18 @@ Usage: python -m kvbound.baselines.llamacpp_eval --model tinyllama-1.1b --weight
 """
 
 import argparse
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 from typing import Any
 
-import torch
+import numpy as np
 
 from kvbound import record
 from kvbound.baselines import llamacpp
-from kvbound.baselines.llamacpp_lib import FLASH_ATTN, GGML_TYPES, Llama
+from kvbound.baselines.llamacpp_lib import FLASH_ATTN, GGML_TYPES
 from kvbound.evals import perplexity as ppl
 from kvbound.models import load_spec, model_entry
 
@@ -56,15 +63,20 @@ def evaluate(
     text = ppl.load_text(ppl.fetch_dataset())
     ids = ppl.tokenize(text, spec.checkpoint_dir)
     spans = ppl.split_windows(len(ids), window, max_windows)
-    llama = Llama(gguf, window, flash_attn=flash_attn, kv=kv)
-    try:
-        tokens = compare_tokens(ids, llama.tokenize(text))
-        sums, counts, seconds = ppl.score(
-            ids, spans, lambda window_ids: torch.from_numpy(llama.logits(window_ids))
-        )
-        settings = llama.settings
-    finally:
-        llama.close()
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = Path(tmp)
+        np.save(folder / "ids.npy", np.array(ids, dtype=np.int32))
+        np.save(folder / "spans.npy", np.array(spans, dtype=np.int64))
+        (folder / "text.txt").write_text(text, encoding="utf-8")
+        subprocess.run(
+            [sys.executable, "-m", "kvbound.baselines.llamacpp_lib", str(folder),
+             "--gguf", str(gguf), "--bin", str(llamacpp.BIN), "--cudart", str(llamacpp.CUDART),
+             "--window", str(window), "--flash-attn", flash_attn, "--kv", kv],
+            check=True,
+        )  # fmt: skip
+        out = json.loads((folder / "result.json").read_text(encoding="utf-8"))
+        tokens = compare_tokens(ids, np.load(folder / "llama_tokens.npy").tolist())
+    sums, counts, seconds, settings = out["sums"], out["counts"], out["seconds"], out["settings"]
     return {
         "kind": "eval.perplexity",
         "engine": llamacpp.engine_entry("llama.dll"),

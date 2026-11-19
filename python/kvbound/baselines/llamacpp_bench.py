@@ -177,6 +177,8 @@ def server_settings(args: argparse.Namespace, ctx: int) -> dict[str, Any]:
         "--cache-ram": 0,
         "--no-cache-prompt": True,
         "--no-webui": True,
+        # Info from libllama, which includes the buffer sizes buffers_mib reads.
+        "--log-verbosity": 4,
     }
 
 
