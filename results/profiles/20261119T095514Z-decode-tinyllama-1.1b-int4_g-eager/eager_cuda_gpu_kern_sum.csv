@@ -1,0 +1,13 @@
+Time (%),Total Time (ns),Instances,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+76.5,368122548,22528,16340.7,13744.5,7073,32897,9170.4,"void kvb::kernels::<unnamed>::linear_quantized_kernel<(bool)1, (int)1, (bool)0>(const uint4 *, const __half *, const __half *, const __half *, void *, int, int, int, int)"
+10.2,49347162,5632,8761.9,8864.0,6368,10336,749.4,"void kvb::kernels::<unnamed>::attention_kernel<(bool)1, (bool)0>(const __half *, __half *, const kvb::StepRow *, kvb::KvView, int, int, int, int)"
+4.5,21842223,11008,1984.2,1920.0,1824,3200,118.4,"void kvb::kernels::<unnamed>::rms_norm_wide_kernel<(bool)1>(const uint4 *, const uint4 *, uint4 *, const uint4 *, uint4 *, int, float)"
+4.4,20981284,256,81958.1,82080.0,80992,87073,745.0,"void kvb::kernels::<unnamed>::linear_quantized_kernel<(bool)1, (int)1, (bool)1>(const uint4 *, const __half *, const __half *, const __half *, void *, int, int, int, int)"
+2.1,9871134,5632,1752.7,1664.0,1600,2464,123.0,"void kvb::kernels::<unnamed>::rope_kv_write_kernel<(bool)0>(const __half *, const kvb::StepRow *, const float2 *, __half *, kvb::KvView, int, int, int, unsigned long long)"
+1.7,8121250,5632,1442.0,1376.0,1312,3648,102.6,"kvb::kernels::<unnamed>::silu_mul_kernel(const __half *, const __half *, __half *, int, int, unsigned long long)"
+0.2,1059043,256,4136.9,3984.0,3808,4576,267.5,"kvb::kernels::<unnamed>::argmax_kernel(const float *, int *, int)"
+0.2,958114,512,1871.3,1824.0,1728,2304,113.7,"void kvb::kernels::<unnamed>::rms_norm_wide_kernel<(bool)0>(const uint4 *, const uint4 *, uint4 *, const uint4 *, uint4 *, int, float)"
+0.1,406753,256,1588.9,1536.0,1440,2400,104.4,"void kvb::kernels::<unnamed>::embedding_quantized_kernel<(bool)1>(const unsigned char *, const __half *, const kvb::StepRow *, __half *, int, unsigned long long, int)"
+0.1,367712,256,1436.4,1376.0,1344,1568,85.0,"kvb::kernels::<unnamed>::gather_rows_kernel(const __half *, const int *, __half *, int, unsigned long long)"
+0.1,277441,256,1083.8,1024.0,992,1216,71.7,"kvb::kernels::<unnamed>::add_kernel(__half *, const __half *, unsigned long long)"
+0.0,92577,1,92577.0,92577.0,92577,92577,0.0,"kvb::kernels::<unnamed>::count_non_finite_kernel(const unsigned short *, unsigned long long, unsigned long long *)"
