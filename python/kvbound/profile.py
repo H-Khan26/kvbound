@@ -28,8 +28,9 @@ from kvbound.weight_format import VARIANTS
 PROFILES = REPO_ROOT / "results" / "profiles"
 # Kernels that run once per weight tensor while the model loads, not in a decode step.
 LOAD_KERNELS = {"bf16_to_f16", "f32_to_f16", "count_non_finite"}
-# The CUDA API calls a decode step makes: launches, the wait for the step, and host copies.
-API_CALLS = ("LaunchKernel", "GraphLaunch", "StreamSynchronize", "Memcpy")
+# The CUDA API calls summarized per step: launches and the waits on the stream. Copies are left
+# to the CSV: most of their time is the weight upload while the model loads, not a step's.
+API_CALLS = ("LaunchKernel", "GraphLaunch", "StreamSynchronize")
 
 
 def find_nsys() -> str:
@@ -98,6 +99,33 @@ def run(command: list[str]) -> None:
         raise SystemExit(f"{Path(command[0]).name} failed:\n{done.stdout}\n{done.stderr}")
 
 
+def keep(
+    nsys: str,
+    work: Path,
+    stem: str,
+    steps: int,
+    name: str,
+    extra: dict[str, Any],
+    family_of: Callable[[str], str] = kernel_family,
+) -> tuple[dict[str, Any], Path]:
+    """Turns the report work/<stem>.nsys-rep into a profile under results/profiles/.
+
+    Exports the kernel and API summaries as CSV beside the report, writes summary.json (extra's
+    fields, then summarize's) and copies the folder to results/profiles/<time>-<name>. Returns
+    the summary and that folder.
+    """
+    run([
+        nsys, "stats", "--report", "cuda_gpu_kern_sum,cuda_api_sum", "--format", "csv",
+        "--output", str(work / stem), "--force-export", "true", str(work / f"{stem}.nsys-rep"),
+    ])  # fmt: skip
+    summary = {**extra, **summarize(work, stem, steps, family_of)}
+    with (work / "summary.json").open("w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(summary, indent=2) + "\n")
+    out = PROFILES / f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{name}"
+    shutil.copytree(work, out)
+    return summary, out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True)
@@ -139,15 +167,14 @@ def main() -> None:
             "--trace", str(trace_path), "--max-ctx", str(args.new_tokens + 1),
             "--warmup", "0", "--iters", "1", "--graph", str(int(args.graph)),
         ])  # fmt: skip
-        run([
-            nsys, "stats", "--report", "cuda_gpu_kern_sum,cuda_api_sum", "--format", "csv",
-            "--output", str(work / stem), "--force-export", "true", str(report),
-        ])  # fmt: skip
-        summary = summarize(work, stem, args.new_tokens)
-        with (work / "summary.json").open("w", encoding="utf-8", newline="\n") as f:
-            f.write(json.dumps(summary, indent=2) + "\n")
-        out = PROFILES / f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-decode-{spec.name}{variant}-{stem}"
-        shutil.copytree(work, out)
+        summary, out = keep(
+            nsys,
+            work,
+            stem,
+            args.new_tokens,
+            f"decode-{spec.name}{variant}-{stem}",
+            {"weights": args.weights},
+        )
 
     print(f"{spec.name} {args.weights}, {args.new_tokens} decode steps, graph={args.graph}")
     print(f"GPU time in kernels: {summary['gpu_ms_per_step_total']:.2f} ms per step")

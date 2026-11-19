@@ -15,12 +15,9 @@ Usage: python -m kvbound.baselines.llamacpp_profile --model tinyllama-1.1b --wei
 """
 
 import argparse
-import json
 import re
-import shutil
 import subprocess
 import tempfile
-from datetime import UTC, datetime
 from pathlib import Path
 
 from kvbound import profile
@@ -93,26 +90,26 @@ def main() -> None:
             env=env,
             check=False,
         )
+        logged = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
         if done.returncode != 0:
             output = done.stdout + done.stderr
-            raise SystemExit(f"llama-completion under nsys failed:\n{output[-4000:]}")
-        steps, wall_ms = decode_evals(log.read_text(encoding="utf-8", errors="replace"))
-        profile.run([
-            nsys, "stats", "--report", "cuda_gpu_kern_sum,cuda_api_sum", "--format", "csv",
-            "--output", str(work / stem), "--force-export", "true", str(report),
-        ])  # fmt: skip
-        summary = {
-            "engine": llamacpp.engine_entry("llama-completion under nsys"),
-            "weights": args.weights,
-            "traced_wall_ms_per_step": wall_ms / steps,
-            **profile.summarize(work, stem, steps, kernel_name),
-        }
-        with (work / "summary.json").open("w", encoding="utf-8", newline="\n") as f:
-            f.write(json.dumps(summary, indent=2) + "\n")
-        out = profile.PROFILES / (
-            f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-llamacpp-decode-{spec.name}-{args.weights}-{stem}"
+            raise SystemExit(
+                f"llama-completion under nsys failed:\n{output[-4000:]}\n{logged[-4000:]}"
+            )
+        steps, wall_ms = decode_evals(logged)
+        summary, out = profile.keep(
+            nsys,
+            work,
+            stem,
+            steps,
+            f"llamacpp-decode-{spec.name}-{args.weights}-{stem}",
+            {
+                "engine": llamacpp.engine_entry("llama-completion under nsys"),
+                "weights": args.weights,
+                "traced_wall_ms_per_step": wall_ms / steps,
+            },
+            kernel_name,
         )
-        shutil.copytree(work, out)
 
     print(f"llama.cpp {llamacpp.TAG} {spec.name} {args.weights}, {steps} decode steps, {stem}")
     print(f"GPU time in kernels: {summary['gpu_ms_per_step_total']:.2f} ms per step")

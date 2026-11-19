@@ -203,7 +203,7 @@ eval-llamacpp:   ## WikiText-2 perplexity of each GGUF format under kvbound's pr
 	  uv run python -m kvbound.baselines.llamacpp_eval --model $(MODEL) --weights $$f || exit 1; \
 	done
 
-# The formats of profile-llamacpp: the counterparts of PROFILE_WEIGHTS.
+# The formats of profile-llamacpp: llama.cpp's FP16 file and its plain 4-bit one.
 LLAMACPP_PROFILE_FORMATS ?= F16 Q4_0
 
 profile-llamacpp: ## Nsight Systems decode profile of llama.cpp, with and without CUDA graphs (MODEL=...)
