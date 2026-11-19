@@ -90,6 +90,9 @@ DEFAULT_DAMP = 0.01
 # Columns per lazy block update (rounded up to whole groups).
 BLOCK_COLUMNS = 128
 LM_HEAD = "lm_head.weight"
+# Rows of an untied lm_head on the device at once. Rows share H and the column order and are
+# solved independently, so the chunks give the integers the whole matrix would.
+HEAD_CHUNK_ROWS = 32768
 
 
 @dataclass(frozen=True)
@@ -444,16 +447,42 @@ def quantize_model(
         h = head.mean()
         del head
         model.final_norm.to("cpu")
-        model.lm_head.to(device)
         result.report.append(
-            {
-                "lm_head": quantize_stage(
-                    {LM_HEAD: model.lm_head}, h, group_size, config, given, result
-                )
-            }
+            {"lm_head": quantize_head(model.lm_head, h, config, given.get(LM_HEAD), result)}
         )
-        model.lm_head.to("cpu")
     return result
+
+
+def quantize_head(
+    lm_head: nn.Linear, h: Tensor, config: GptqConfig, given: Tensor | None, result: GptqResult
+) -> dict[str, Any]:
+    """quantize_stage for an untied lm_head on the CPU, HEAD_CHUNK_ROWS rows at a time on h's
+    device; the chunks' reports are summed into one."""
+    rows = lm_head.out_features
+    report: dict[str, Any] = {}
+    packed, scales = [], []
+    for start in range(0, rows, HEAD_CHUNK_ROWS):
+        end = min(start + HEAD_CHUNK_ROWS, rows)
+        part = nn.Linear(lm_head.in_features, end - start, bias=False, device=h.device)
+        part.weight.copy_(lm_head.weight[start:end])
+        part_given = {LM_HEAD: given[start:end]} if given is not None else {}
+        part_result = GptqResult(result.group_size)
+        entry = quantize_stage(
+            {LM_HEAD: part}, h, result.group_size, config, part_given, part_result
+        )
+        lm_head.weight[start:end] = part.weight.cpu()
+        q, scale = part_result.quantized[LM_HEAD]
+        packed.append(q)
+        scales.append(scale)
+        del part, part_result
+        if not report:
+            report = entry
+            continue
+        report["loss_predicted"] += entry["loss_predicted"]
+        for key, value in entry["matrices"][LM_HEAD].items():
+            report["matrices"][LM_HEAD][key] += value
+    result.quantized[LM_HEAD] = (torch.cat(packed), torch.cat(scales))
+    return report
 
 
 def stage_summary(report: list[dict[str, Any]]) -> dict[str, tuple[float, float]]:

@@ -23,6 +23,13 @@ rounding "gptq" marks an int4_g file whose integers were chosen by GPTQ (kvbound
 round-to-nearest: on the same grid and against the same kind of F16 scales, so it too reads and
 runs like any other int4_g file. Without the key the integers are rounded to nearest.
 
+rotation "hadamard" marks a checkpoint whose residual stream is rotated by a seeded randomized
+Hadamard matrix (kvbound.rotate): its norm gains are ones and folded into the matrices, and it
+stores lm_head even when the source tied it, with a config.json that says so. It computes the
+same function as its source, so it reads and runs like any other file. The key is the only
+kvbound key that also appears in a plain FP16 checkpoint, which is then the variant "fp16.rot";
+the engine reads a file without the scheme key as plain FP16 whatever else it holds.
+
 Usage: WeightFormat.from_metadata(safe_open(path, "pt").metadata())
 """
 
@@ -38,6 +45,10 @@ SCHEMES = (FP16, INT8_PC, INT4_G)
 CLIPS = ("minmax", "mse", "awq")
 ACT_SCALES = ("", "awq")
 ROUNDINGS = ("", "gptq")
+HADAMARD = "hadamard"
+ROTATIONS = ("", HADAMARD)
+# The variant suffix of each rotation.
+ROTATION_SUFFIX = {HADAMARD: "rot"}
 PACK_ORDER = "lo_nibble_first"
 SCALE_DTYPE = "F16"
 SCALE_SUFFIX = ".scale"
@@ -54,6 +65,9 @@ KEY_SCALE_DTYPE = "kvbound.scale_dtype"
 KEY_CLIP = "kvbound.clip"
 KEY_ACT_SCALES = "kvbound.act_scales"
 KEY_ROUNDING = "kvbound.rounding"
+KEY_ROTATION = "kvbound.rotation"
+# The seed of a rotated file's random signs.
+KEY_ROTATION_SEED = "kvbound.rotation_seed"
 KEY_SOURCE = "kvbound.source"
 KEY_SOURCE_SHA256 = "kvbound.source_sha256"
 # Where the calibration tokens of an act_scales or gptq file came from.
@@ -83,6 +97,9 @@ VARIANTS = (
     f"{INT4_G}.gptq",
     f"{INT4_G}.awq-gptq",
     f"{INT4_G}.awq-noclip-gptq",
+    f"{FP16}.rot",
+    f"{INT4_G}.rot",
+    f"{INT4_G}.rot-gptq",
 )
 
 
@@ -95,6 +112,7 @@ class WeightFormat:
     clip: str = ""
     act_scales: str = ""
     rounding: str = ""
+    rotation: str = ""
 
     def __post_init__(self) -> None:
         if self.scheme not in SCHEMES:
@@ -124,6 +142,15 @@ class WeightFormat:
             self.rounding not in ROUNDINGS or self.scheme != INT4_G or self.clip == "mse"
         ):
             raise ValueError(f"inconsistent weight format: {self}")
+        # A rotated file is plain FP16 or int4_g with min-max scales. AWQ's scales live in the
+        # norm gains the rotation folds away, and the mse clip is not part of this experiment.
+        if self.rotation and (
+            self.rotation not in ROTATIONS
+            or self.scheme == INT8_PC
+            or self.act_scales
+            or self.clip == "mse"
+        ):
+            raise ValueError(f"inconsistent weight format: {self}")
         # The kernels read 32 weights per load and find a load's scale with a shift.
         if self.scheme == INT4_G and (
             self.group_size < 32 or self.group_size & (self.group_size - 1)
@@ -141,13 +168,16 @@ class WeightFormat:
         clip: str = "minmax",
         act_scales: str = "",
         rounding: str = "",
+        rotation: str = "",
     ) -> "WeightFormat":
         """The format of a scheme with the fields it does not use filled in."""
         if scheme == INT4_G:
-            return cls(INT4_G, group_size, PACK_ORDER, SCALE_DTYPE, clip, act_scales, rounding)
+            return cls(
+                INT4_G, group_size, PACK_ORDER, SCALE_DTYPE, clip, act_scales, rounding, rotation
+            )
         if scheme == INT8_PC:
-            return cls(INT8_PC, 0, "", SCALE_DTYPE, clip, act_scales, rounding)
-        return cls(act_scales=act_scales, rounding=rounding)
+            return cls(INT8_PC, 0, "", SCALE_DTYPE, clip, act_scales, rounding, rotation)
+        return cls(act_scales=act_scales, rounding=rounding, rotation=rotation)
 
     @property
     def quantized(self) -> bool:
@@ -157,19 +187,22 @@ class WeightFormat:
     def variant(self) -> str:
         """Directory suffix of checkpoints in this format: the scheme, then ".mse" for the mse
         clip, ".awq" for activation scales with the awq clip and ".awq-noclip" for scales alone;
-        GPTQ rounding adds ".gptq" to a bare scheme and "-gptq" to the rest (".awq-gptq")."""
+        a rotation adds ".rot" to a bare scheme ("fp16.rot"); GPTQ rounding adds ".gptq" to a bare
+        scheme and "-gptq" to the rest (".awq-gptq", ".rot-gptq")."""
         if self.act_scales:
             variant = f"{self.scheme}.awq" if self.clip == "awq" else f"{self.scheme}.awq-noclip"
         else:
             variant = f"{self.scheme}.mse" if self.clip == "mse" else self.scheme
+        if self.rotation:
+            variant += f".{ROTATION_SUFFIX[self.rotation]}"
         if self.rounding:
             variant += f"-{self.rounding}" if "." in variant else f".{self.rounding}"
         return variant
 
     def to_metadata(self) -> dict[str, str]:
-        """The header keys of this format; empty for a plain checkpoint."""
+        """The header keys of this format; for a plain checkpoint the rotation alone, if any."""
         if not self.quantized:
-            return {}
+            return {KEY_ROTATION: self.rotation} if self.rotation else {}
         metadata = {
             KEY_VERSION: FORMAT_VERSION,
             KEY_SCHEME: self.scheme,
@@ -178,11 +211,14 @@ class WeightFormat:
             KEY_SCALE_DTYPE: self.scale_dtype,
             KEY_CLIP: self.clip,
         }
-        # Written only when set, so files without activation scales or GPTQ keep their header.
+        # Written only when set, so files without activation scales, GPTQ or a rotation keep
+        # their header.
         if self.act_scales:
             metadata[KEY_ACT_SCALES] = self.act_scales
         if self.rounding:
             metadata[KEY_ROUNDING] = self.rounding
+        if self.rotation:
+            metadata[KEY_ROTATION] = self.rotation
         return metadata
 
     @classmethod
@@ -190,7 +226,7 @@ class WeightFormat:
         """Reads a safetensors header's __metadata__; no scheme key means a plain checkpoint."""
         metadata = metadata or {}
         if KEY_SCHEME not in metadata:
-            return cls()
+            return cls(rotation=metadata.get(KEY_ROTATION, ""))
         version = metadata.get(KEY_VERSION)
         if version != FORMAT_VERSION:
             raise ValueError(f"unsupported {KEY_VERSION} {version!r}; expected {FORMAT_VERSION}")
@@ -203,6 +239,7 @@ class WeightFormat:
                 clip=metadata[KEY_CLIP],
                 act_scales=metadata.get(KEY_ACT_SCALES, ""),
                 rounding=metadata.get(KEY_ROUNDING, ""),
+                rotation=metadata.get(KEY_ROTATION, ""),
             )
         except KeyError as e:
             raise ValueError(f"quantized checkpoint lacks metadata key {e}") from e

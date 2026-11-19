@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import torch
 
-from kvbound import fixture, golden, quantize, tolerance
+from kvbound import fixture, golden, quantize, rotate, tolerance
 from kvbound.fixture import FIXTURE_DIR
 from kvbound.models import load_spec
 from kvbound.ref import load_llama
@@ -125,6 +125,29 @@ def test_fixture_greedy_matches_reference(kvb):
         assert engine.generate(prompt, 40) == expected
 
 
+def test_rotated_fixture_computes_the_original_logits(kvb, tmp_path):
+    """The rotated fixture is untied with unit norm gains; the engine reads it like any FP16
+    checkpoint and produces the original model's logits (its other sites are rotated)."""
+    rotated = tmp_path / "fp16.rot"
+    rotate.rotate_checkpoint(FIXTURE_DIR, rotated)
+    manifest, tensors = golden.load(FIXTURE_DIR)
+    limit = manifest["thresholds"]["fp16"]["rel_rms_max"]["logits"]
+    engine = kvb.Engine(str(rotated), max_ctx=64)
+    for prompt in manifest["prompts"]:
+        ids = tensors[f"{prompt['id']}/input_ids"].tolist()
+        logits = torch.from_numpy(engine.feed(ids, start=0)["logits"])
+        assert tolerance.rel_rms(logits, tensors[f"{prompt['id']}/logits"]) <= limit
+    model = load_llama(FIXTURE_DIR)
+    for prompt in fixture_prompts():
+        expected, gaps = reference_greedy(model, prompt, 40)
+        actual = engine.generate(prompt, 40)
+        # The rotated weights are rounded to FP16 anew, so a near-tie may resolve differently.
+        first = next(
+            (i for i, (a, b) in enumerate(zip(actual, expected, strict=True)) if a != b), None
+        )
+        assert first is None or gaps[first] < TIE_GAP
+
+
 def test_static_batches_match_reference(kvb):
     """More requests than slots, of different lengths: each still gets the reference's tokens."""
     model = load_llama(FIXTURE_DIR)
@@ -189,15 +212,20 @@ def quantized_fixture(tmp_path_factory):
         calib=calibration,
         awq=True,
     )
+    rotated = tmp_path_factory.mktemp("fp16.rot")
+    rotate.rotate_checkpoint(FIXTURE_DIR, rotated)
+    dirs["int4_g.rot"] = tmp_path_factory.mktemp("int4_g.rot")
+    quantize.convert(rotated, dirs["int4_g.rot"], "int4_g", group_size=32)
     return dirs
 
 
-@pytest.mark.parametrize("variant", ["int8_pc", "int4_g", "int4_g.awq"])
+@pytest.mark.parametrize("variant", ["int8_pc", "int4_g", "int4_g.awq", "int4_g.rot"])
 def test_quantized_weights_match_the_dequantizing_reference(kvb, quantized_fixture, variant):
     """The engine on quantized weights against the reference model computing in FP32 on the same
     weights dequantized. Every way of multiplying is covered: in place, on tensor cores
     (quantized_gemm_rows=0 takes that path on every step), and expanded to FP16 for cuBLAS, whole
-    and two output channels at a time. An AWQ checkpoint is an int4_g one to the engine."""
+    and two output channels at a time. An AWQ checkpoint is an int4_g one to the engine, and a
+    rotated one an untied int4_g one."""
     model_dir = quantized_fixture[variant]
     scheme = variant.partition(".")[0]
     model = load_llama(model_dir)
