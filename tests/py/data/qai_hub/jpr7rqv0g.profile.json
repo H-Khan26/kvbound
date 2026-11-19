@@ -1,0 +1,46 @@
+{
+  "execution_summary": {
+    "estimated_inference_time": 36,
+    "estimated_inference_peak_memory": 136712192,
+    "first_load_time": 151259,
+    "warm_load_time": 173224,
+    "inference_memory_peak_range": [
+      16384,
+      8834176
+    ],
+    "first_load_memory_peak_range": [
+      36179968,
+      45744256
+    ],
+    "all_inference_times": [
+      544,
+      63,
+      42,
+      43,
+      42
+    ]
+  },
+  "execution_detail": [
+    {
+      "name": "Input",
+      "type": "Input",
+      "compute_unit": "NPU",
+      "execution_time": 0,
+      "execution_cycles": 0
+    },
+    {
+      "name": "node_embedding",
+      "type": "node",
+      "compute_unit": "NPU",
+      "execution_time": 0,
+      "execution_cycles": 1542
+    },
+    {
+      "name": "Output",
+      "type": "Output",
+      "compute_unit": "NPU",
+      "execution_time": 0,
+      "execution_cycles": 682
+    }
+  ]
+}

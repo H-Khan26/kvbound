@@ -1,4 +1,4 @@
-.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters step-counters microbench quantize eval precision eval-asr bench-asr report predict lint format typecheck clean
+.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters step-counters microbench quantize eval precision eval-asr bench-asr qaihub report predict lint format typecheck clean
 
 # torch wheel: cu128 on GPU machines, cpu in CI and on machines without a GPU
 TORCH ?= cu128
@@ -149,6 +149,14 @@ bench-asr:        ## speech baselines, greedy and beam 5: Hugging Face on the GP
 	  $(ASR) --backend faster-whisper --compute-type int8_float16 --beams $$b || exit 1; \
 	  $(ASR) --backend faster-whisper --device cpu --compute-type int8 --beams $$b || exit 1; \
 	done
+
+# A finished `qai-hub-models export`: its log, and a folder outside the repo for the downloads.
+QAIHUB_LOG ?=
+QAIHUB_RAW ?=
+
+qaihub:           ## re-download an AI Hub export's profiles and summarize them into results/profiles/ (QAIHUB_LOG=... QAIHUB_RAW=...; needs `uv sync --group qai-hub`)
+	uv run python -m kvbound.baselines.qai_hub fetch --log "$(QAIHUB_LOG)" --raw "$(QAIHUB_RAW)"
+	uv run python -m kvbound.baselines.qai_hub summarize --raw "$(QAIHUB_RAW)"
 
 report:           ## roofline, bandwidth and latency figures from the records (MODEL=... DEVICE=...)
 	uv run python -m kvbound.report --device $(DEVICE) --model $(MODEL)

@@ -1,0 +1,477 @@
+{
+  "kind": "qaihub.llm_profile",
+  "model": {
+    "name": "llama-3.2-1b-instruct",
+    "hf_repo": "meta-llama/Llama-3.2-1B-Instruct",
+    "family": "llama",
+    "qai_hub_model_id": "llama_v3_2_1b_instruct"
+  },
+  "device": {
+    "name": "Samsung Galaxy S25",
+    "os": "15"
+  },
+  "params": {
+    "precision": "w4a16",
+    "prompt_len": 128,
+    "context_length": 4096,
+    "export_command": "qai-hub-models export llama_v3_2_1b_instruct --checkpoint DEFAULT_W4A16 --device \"Samsung Galaxy S25\" --output-dir <dir>",
+    "qairt": "2.51.0.260929181845"
+  },
+  "derived": {
+    "prompt_len": 128,
+    "context_length": 4096,
+    "prompt_pass_ms": 31.253,
+    "token_pass_ms": 17.174,
+    "decode_tok_s": 58.22755327821125,
+    "prefill_tok_s": 4095.6068217451125,
+    "ttft_ms": {
+      "128": 31.253,
+      "1024": 250.024
+    },
+    "largest_process_peak_mib": 205.20703125,
+    "from_median_iteration": {
+      "prompt_pass_ms": 34.275,
+      "token_pass_ms": 17.7275,
+      "decode_tok_s": 56.40953321111268,
+      "prefill_tok_s": 3734.5003646973014,
+      "ttft_ms": {
+        "128": 34.275,
+        "1024": 274.2
+      }
+    }
+  },
+  "published": {
+    "genie": {
+      "decode_tok_s": {
+        "published": 67.22,
+        "derived_over_published": 0.8662236429367934
+      },
+      "prefill_tok_s": {
+        "published": 1782.53,
+        "derived_over_published": 2.2976369664157756
+      }
+    },
+    "geniex_qairt": {
+      "decode_tok_s": {
+        "published": 46.04,
+        "derived_over_published": 1.2647166220289152
+      },
+      "prefill_tok_s": {
+        "published": 2529.58,
+        "derived_over_published": 1.6190857066173485
+      }
+    }
+  },
+  "published_source": "qai-hub-models 0.67.0, models/llama_v3_2_1b_instruct/perf.yaml",
+  "graphs": {
+    "prompt_ar128_cl4096_1_of_3": {
+      "graph": "prompt_ar128_cl4096_1_of_3",
+      "kind": "prompt",
+      "seq_len": 128,
+      "context_length": 4096,
+      "part": 1,
+      "parts": 3,
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part1_of_3_prompt_ar128_cl4096_1_of_3",
+      "job_id": "jgnw4y6kg",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/jgnw4y6kg/",
+      "created_utc": "2026-11-19T01:10:28+00:00",
+      "latency_ms": 0.081,
+      "iterations_ms": {
+        "n": 50,
+        "min": 0.081,
+        "p50": 0.089,
+        "max": 0.604
+      },
+      "process_peak_mib": 131.578125,
+      "inference_memory_peak_range_mib": [
+        0.0546875,
+        8.43353271484375
+      ],
+      "first_load_ms": 163.959,
+      "warm_load_ms": 179.809,
+      "first_load_memory_peak_range_mib": [
+        1.2421875,
+        11.104263305664062
+      ],
+      "layers": 3,
+      "layers_by_unit": {
+        "NPU": 3
+      },
+      "cost_measure": "execution_cycles",
+      "cost_share_by_unit": {
+        "NPU": 1.0
+      },
+      "cost_share_by_op": {
+        "embedding": 0.9291207583890511,
+        "output": 0.07087924161094893,
+        "input": 0.0
+      },
+      "off_npu_types": {}
+    },
+    "prompt_ar128_cl4096_2_of_3": {
+      "graph": "prompt_ar128_cl4096_2_of_3",
+      "kind": "prompt",
+      "seq_len": 128,
+      "context_length": 4096,
+      "part": 2,
+      "parts": 3,
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part2_of_3_prompt_ar128_cl4096_2_of_3",
+      "job_id": "jp2z16krp",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/jp2z16krp/",
+      "created_utc": "2026-11-19T01:10:29+00:00",
+      "latency_ms": 12.523,
+      "iterations_ms": {
+        "n": 50,
+        "min": 12.523,
+        "p50": 12.6345,
+        "max": 13.501
+      },
+      "process_peak_mib": 199.46875,
+      "inference_memory_peak_range_mib": [
+        30.734375,
+        39.61360168457031
+      ],
+      "first_load_ms": 165.851,
+      "warm_load_ms": 164.017,
+      "first_load_memory_peak_range_mib": [
+        4.39453125,
+        14.053421020507812
+      ],
+      "layers": 5291,
+      "layers_by_unit": {
+        "NPU": 5291
+      },
+      "cost_measure": "execution_cycles",
+      "cost_share_by_unit": {
+        "NPU": 1.0
+      },
+      "cost_share_by_op": {
+        "softmax": 0.36213948492891923,
+        "add": 0.16215112813419216,
+        "matmul": 0.15515955571788378,
+        "conv": 0.10505347185109107,
+        "slice": 0.08344592341557257,
+        "linear": 0.05363625391551849,
+        "rms_norm_node": 0.028578812267629605,
+        "mul": 0.02257127262196509,
+        "transpose": 0.009031431340109468,
+        "sub": 0.008139194136037545,
+        "other": 0.010093471671080984
+      },
+      "off_npu_types": {}
+    },
+    "prompt_ar128_cl4096_3_of_3": {
+      "graph": "prompt_ar128_cl4096_3_of_3",
+      "kind": "prompt",
+      "seq_len": 128,
+      "context_length": 4096,
+      "part": 3,
+      "parts": 3,
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part3_of_3_prompt_ar128_cl4096_3_of_3",
+      "job_id": "jp0xwqz9p",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/jp0xwqz9p/",
+      "created_utc": "2026-11-19T01:10:30+00:00",
+      "latency_ms": 18.649,
+      "iterations_ms": {
+        "n": 50,
+        "min": 18.649,
+        "p50": 21.551499999999997,
+        "max": 23.695
+      },
+      "process_peak_mib": 205.20703125,
+      "inference_memory_peak_range_mib": [
+        8.4453125,
+        16.794830322265625
+      ],
+      "first_load_ms": 196.011,
+      "warm_load_ms": 202.114,
+      "first_load_memory_peak_range_mib": [
+        1.28515625,
+        10.675827026367188
+      ],
+      "layers": 5298,
+      "layers_by_unit": {
+        "NPU": 5298
+      },
+      "cost_measure": "execution_cycles",
+      "cost_share_by_unit": {
+        "NPU": 1.0
+      },
+      "cost_share_by_op": {
+        "softmax": 0.2994145173685364,
+        "conv": 0.16167929703397074,
+        "add": 0.13527335964612153,
+        "matmul": 0.12837098007457856,
+        "output": 0.09578818927916721,
+        "slice": 0.06962088843932843,
+        "linear": 0.04520809718875093,
+        "rms_norm_node": 0.024842771280507926,
+        "mul": 0.01860768187036102,
+        "transpose": 0.007832165988082226,
+        "other": 0.013362051830594975
+      },
+      "off_npu_types": {}
+    },
+    "token_ar1_cl4096_1_of_3": {
+      "graph": "token_ar1_cl4096_1_of_3",
+      "kind": "token",
+      "seq_len": 1,
+      "context_length": 4096,
+      "part": 1,
+      "parts": 3,
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part1_of_3_token_ar1_cl4096_1_of_3",
+      "job_id": "jpr7rqv0g",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/jpr7rqv0g/",
+      "created_utc": "2026-11-19T01:10:29+00:00",
+      "latency_ms": 0.036,
+      "iterations_ms": {
+        "n": 50,
+        "min": 0.036,
+        "p50": 0.042,
+        "max": 0.544
+      },
+      "process_peak_mib": 130.37890625,
+      "inference_memory_peak_range_mib": [
+        0.015625,
+        8.4249267578125
+      ],
+      "first_load_ms": 151.259,
+      "warm_load_ms": 173.224,
+      "first_load_memory_peak_range_mib": [
+        34.50390625,
+        43.6251220703125
+      ],
+      "layers": 3,
+      "layers_by_unit": {
+        "NPU": 3
+      },
+      "cost_measure": "execution_cycles",
+      "cost_share_by_unit": {
+        "NPU": 1.0
+      },
+      "cost_share_by_op": {
+        "embedding": 0.6933453237410072,
+        "output": 0.3066546762589928,
+        "input": 0.0
+      },
+      "off_npu_types": {}
+    },
+    "token_ar1_cl4096_2_of_3": {
+      "graph": "token_ar1_cl4096_2_of_3",
+      "kind": "token",
+      "seq_len": 1,
+      "context_length": 4096,
+      "part": 2,
+      "parts": 3,
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part2_of_3_token_ar1_cl4096_2_of_3",
+      "job_id": "jpyylw18p",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/jpyylw18p/",
+      "created_utc": "2026-11-19T01:10:29+00:00",
+      "latency_ms": 6.6,
+      "iterations_ms": {
+        "n": 50,
+        "min": 6.6,
+        "p50": 6.689500000000001,
+        "max": 7.695
+      },
+      "process_peak_mib": 194.390625,
+      "inference_memory_peak_range_mib": [
+        30.09765625,
+        38.41108703613281
+      ],
+      "first_load_ms": 168.635,
+      "warm_load_ms": 167.083,
+      "first_load_memory_peak_range_mib": [
+        46.41796875,
+        55.0350341796875
+      ],
+      "layers": 5267,
+      "layers_by_unit": {
+        "NPU": 5267
+      },
+      "cost_measure": "execution_cycles",
+      "cost_share_by_unit": {
+        "NPU": 1.0
+      },
+      "cost_share_by_op": {
+        "matmul": 0.37892075043271045,
+        "slice": 0.2021719724063228,
+        "add": 0.126095667774568,
+        "linear": 0.08547982369281018,
+        "softmax": 0.06046392342617541,
+        "conv": 0.055963389190359716,
+        "mul": 0.034129270342112696,
+        "cat": 0.014370151197534506,
+        "silu": 0.011565166729547289,
+        "sub": 0.008872727258566216,
+        "other": 0.021967157549292772
+      },
+      "off_npu_types": {}
+    },
+    "token_ar1_cl4096_3_of_3": {
+      "graph": "token_ar1_cl4096_3_of_3",
+      "kind": "token",
+      "seq_len": 1,
+      "context_length": 4096,
+      "part": 3,
+      "parts": 3,
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part3_of_3_token_ar1_cl4096_3_of_3",
+      "job_id": "jp8kn9qkp",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/jp8kn9qkp/",
+      "created_utc": "2026-11-19T01:10:30+00:00",
+      "latency_ms": 10.538,
+      "iterations_ms": {
+        "n": 50,
+        "min": 10.538,
+        "p50": 10.995999999999999,
+        "max": 12.93
+      },
+      "process_peak_mib": 196.41015625,
+      "inference_memory_peak_range_mib": [
+        32.18359375,
+        40.52130126953125
+      ],
+      "first_load_ms": 194.092,
+      "warm_load_ms": 189.613,
+      "first_load_memory_peak_range_mib": [
+        1.0234375,
+        9.8961181640625
+      ],
+      "layers": 5272,
+      "layers_by_unit": {
+        "NPU": 5272
+      },
+      "cost_measure": "execution_cycles",
+      "cost_share_by_unit": {
+        "NPU": 1.0
+      },
+      "cost_share_by_op": {
+        "matmul": 0.32626499472945547,
+        "conv": 0.2164348142680843,
+        "slice": 0.1630181929183599,
+        "add": 0.10437149784920216,
+        "linear": 0.07031892423759137,
+        "softmax": 0.047800851989977036,
+        "mul": 0.027289887999556804,
+        "cat": 0.011289365134728325,
+        "silu": 0.008745503692829164,
+        "sub": 0.008221598682328237,
+        "other": 0.016244368497887206
+      },
+      "off_npu_types": {}
+    }
+  },
+  "jobs": [
+    {
+      "type": "compile",
+      "id": "jpvn834zg",
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part1_of_3",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/jpvn834zg/",
+      "status": "SUCCESS"
+    },
+    {
+      "type": "compile",
+      "id": "jgj89x115",
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part1_of_3",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/jgj89x115/",
+      "status": "SUCCESS"
+    },
+    {
+      "type": "compile",
+      "id": "jpenq928p",
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part2_of_3",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/jpenq928p/",
+      "status": "SUCCESS"
+    },
+    {
+      "type": "compile",
+      "id": "jgz06ew45",
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part2_of_3",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/jgz06ew45/",
+      "status": "SUCCESS"
+    },
+    {
+      "type": "compile",
+      "id": "j5wrkox4p",
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part3_of_3",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/j5wrkox4p/",
+      "status": "SUCCESS"
+    },
+    {
+      "type": "compile",
+      "id": "jp1m903np",
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part3_of_3",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/jp1m903np/",
+      "status": "SUCCESS"
+    },
+    {
+      "type": "link",
+      "id": "jp1m9092p",
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part1_of_3",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/jp1m9092p/",
+      "status": "SUCCESS"
+    },
+    {
+      "type": "link",
+      "id": "jgdmkwkeg",
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part2_of_3",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/jgdmkwkeg/",
+      "status": "SUCCESS"
+    },
+    {
+      "type": "link",
+      "id": "j578mzmlp",
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part3_of_3",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/j578mzmlp/",
+      "status": "SUCCESS"
+    },
+    {
+      "type": "inference",
+      "id": "jgnw4y6kg",
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part1_of_3_prompt_ar128_cl4096_1_of_3",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/jgnw4y6kg/",
+      "status": "SUCCESS"
+    },
+    {
+      "type": "inference",
+      "id": "jpr7rqv0g",
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part1_of_3_token_ar1_cl4096_1_of_3",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/jpr7rqv0g/",
+      "status": "SUCCESS"
+    },
+    {
+      "type": "inference",
+      "id": "jp2z16krp",
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part2_of_3_prompt_ar128_cl4096_2_of_3",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/jp2z16krp/",
+      "status": "SUCCESS"
+    },
+    {
+      "type": "inference",
+      "id": "jpyylw18p",
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part2_of_3_token_ar1_cl4096_2_of_3",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/jpyylw18p/",
+      "status": "SUCCESS"
+    },
+    {
+      "type": "inference",
+      "id": "jp0xwqz9p",
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part3_of_3_prompt_ar128_cl4096_3_of_3",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/jp0xwqz9p/",
+      "status": "SUCCESS"
+    },
+    {
+      "type": "inference",
+      "id": "jp8kn9qkp",
+      "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part3_of_3_token_ar1_cl4096_3_of_3",
+      "url": "https://workbench.aihub.qualcomm.com/jobs/jp8kn9qkp/",
+      "status": "SUCCESS"
+    }
+  ],
+  "not_covered": [
+    "runtime work between the three parts and between steps",
+    "writing each step's new KV entries into the cache buffers",
+    "attention mask and RoPE inputs prepared on the host",
+    "sampling and detokenization"
+  ]
+}
