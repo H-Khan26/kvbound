@@ -167,12 +167,12 @@ def test_download_keeps_nothing_whose_sha256_differs(tmp_path, monkeypatch):
     )
     artifact = llamacpp.Artifact("bin", "x.zip", "https://example.invalid/x.zip", "0" * 64)
     with pytest.raises(SystemExit):
-        llamacpp._download(artifact)
+        llamacpp.download(artifact)
     assert list((tmp_path / "downloads" / "bin").iterdir()) == []
     good = llamacpp.Artifact(
         "bin", "x.zip", artifact.url, hashlib.sha256(b"not the pinned bytes").hexdigest()
     )
-    assert llamacpp._download(good).read_bytes() == b"not the pinned bytes"
+    assert llamacpp.download(good).read_bytes() == b"not the pinned bytes"
 
 
 @pytest.mark.parametrize("repo_has_spm", [True, False])
