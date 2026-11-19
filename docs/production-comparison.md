@@ -167,9 +167,9 @@ things in the two cases:
   At kvbound's rate those 65 MB are 0.18 ms. llama.cpp's quantized products are integer dot products, so before
   each one a second kernel quantizes the activation vector to 8 bits: 133 more launches per step. kvbound's kernel
   multiplies the 4-bit weights by the FP16 activations directly.
-- **Between kernels.** In a step llama.cpp waits on the stream 20 times and copies between host and device 8 times,
-  and samples on the CPU from logits it copies back. kvbound waits once, makes 4 small copies, and takes the argmax
-  on the GPU. Which of these the 0.2 to 0.4 ms are was not measured.
+- **Between kernels.** In a step llama.cpp waits on the stream about 20 times and samples on the CPU from logits it
+  copies back. kvbound waits once and takes the argmax on the GPU. Which of these the 0.2 to 0.4 ms are was not
+  measured.
 
 What kvbound does better at batch 1 is small and specific: fewer and larger products, no second pass over the
 activations, a denser 4-bit format, and one synchronization per step.
