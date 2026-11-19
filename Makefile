@@ -1,4 +1,4 @@
-.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters step-counters microbench quantize eval precision eval-asr bench-asr qaihub fetch-llamacpp bench-llamacpp serve-llamacpp eval-llamacpp report predict lint format typecheck clean
+.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters step-counters microbench quantize eval precision eval-asr bench-asr qaihub fetch-llamacpp bench-llamacpp serve-llamacpp eval-llamacpp report predict reproduce lint format typecheck clean
 
 # torch wheel: cu128 on GPU machines, cpu in CI and on machines without a GPU
 TORCH ?= cu128
@@ -201,6 +201,15 @@ eval-llamacpp:   ## WikiText-2 perplexity of each GGUF format under kvbound's pr
 
 report:           ## roofline, bandwidth and latency figures from the records (MODEL=... DEVICE=...)
 	uv run python -m kvbound.report --device $(DEVICE) --model $(MODEL)
+
+# The engine's own measurements end to end. The tests come first, so nothing is measured on an
+# engine that disagrees with the reference; benchmarks refuse a dirty tree, so on a card without
+# a committed golden manifest the run stops there until the new manifest is committed.
+reproduce:        ## clone to figures on a GPU machine: checkpoint, goldens, quantized copies, tests, every engine measurement, report (MODEL=... DEVICE=...)
+	$(MAKE) doctor fetch golden quantize
+	$(MAKE) test-gpu test-real
+	$(MAKE) microbench bench serve serve-load precision
+	$(MAKE) report
 
 predict:          ## latency bounds from the perf model (MODEL=... DEVICE=...)
 	uv run python -m kvbound.perfmodel --model $(MODEL) --device $(DEVICE)

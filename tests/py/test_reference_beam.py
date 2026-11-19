@@ -104,7 +104,11 @@ def test_committed_traces_match_reference(model, features):
     for name, tensor in traces.items():
         assert committed[name].dtype == tensor.dtype, name
         if tensor.is_floating_point():
-            torch.testing.assert_close(committed[name], tensor, rtol=1e-6, atol=1e-6, msg=name)
+            # Log-probabilities vary in their last bits with the platform's CPU math library;
+            # the ids and beam decisions next to them are compared exactly.
+            torch.testing.assert_close(
+                committed[name], tensor, rtol=0, atol=1e-4, msg=lambda m, n=name: f"{n}: {m}"
+            )
         else:
             assert torch.equal(committed[name], tensor), name
     configs = json.loads(metadata["configs"])
