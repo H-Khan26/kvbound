@@ -461,7 +461,15 @@ def test_convert_with_awq(tmp_path, clip):
     }
     out, plain_dir = tmp_path / "awq", tmp_path / "plain"
     manifest = convert(
-        FIXTURE_DIR, out, "int4_g", GROUP, clip, device="cpu", awq=ids, calib_meta=calib_meta
+        FIXTURE_DIR,
+        out,
+        "int4_g",
+        GROUP,
+        clip,
+        device="cpu",
+        calib=ids,
+        awq=True,
+        calib_meta=calib_meta,
     )
     convert(FIXTURE_DIR, plain_dir, "int4_g", GROUP, device="cpu")
     source = load_file(str(FIXTURE_DIR / "model.safetensors"))
@@ -560,14 +568,16 @@ def test_convert_rejects_awq_combinations(tmp_path):
     ids = calibration_ids()
     for scheme, clip in (("int8_pc", "minmax"), ("int4_g", "mse")):
         with pytest.raises(ValueError, match="inconsistent"):
-            convert(FIXTURE_DIR, tmp_path / "q", scheme, GROUP, clip, device="cpu", awq=ids)
+            convert(
+                FIXTURE_DIR, tmp_path / "q", scheme, GROUP, clip, device="cpu", calib=ids, awq=True
+            )
     with pytest.raises(ValueError, match="inconsistent"):
         convert(FIXTURE_DIR, tmp_path / "q", "int4_g", GROUP, "awq", device="cpu")
     with pytest.raises(ValueError, match="calib_meta"):
         convert(FIXTURE_DIR, tmp_path / "q", "int4_g", GROUP, device="cpu",
                 calib_meta={KEY_CALIB_SEED: "0"})  # fmt: skip
     with pytest.raises(ValueError, match="calib_meta"):
-        convert(FIXTURE_DIR, tmp_path / "q", "int4_g", GROUP, device="cpu", awq=ids,
+        convert(FIXTURE_DIR, tmp_path / "q", "int4_g", GROUP, device="cpu", calib=ids, awq=True,
                 calib_meta={KEY_SOURCE: "x"})  # fmt: skip
     assert not (tmp_path / "q").exists()
 
@@ -627,7 +637,7 @@ def test_convert_whisper_quantizes_only_its_matrices(tmp_path, scheme):
 def test_convert_refuses_awq_for_whisper(tmp_path):
     with pytest.raises(ValueError, match="Whisper checkpoint takes none"):
         convert(WHISPER_FIXTURE_DIR, tmp_path / "q", "int4_g", GROUP, device="cpu",
-                awq=calibration_ids())  # fmt: skip
+                calib=calibration_ids(), awq=True)  # fmt: skip
     assert not (tmp_path / "q").exists()
 
 
