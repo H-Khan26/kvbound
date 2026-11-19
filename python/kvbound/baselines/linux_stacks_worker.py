@@ -19,6 +19,7 @@ Usage (by the harnesses): python -m kvbound.baselines.linux_stacks_worker nll <f
 import argparse
 import importlib.metadata
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,9 @@ def window_nll(logits: Any, ids: list[int]) -> float:
 
 
 def nll(args: argparse.Namespace) -> None:
+    # The executor then runs in this process, so a window's context logits reach the scoring
+    # as a tensor instead of being serialized from a worker process (hundreds of MB a window).
+    os.environ["TLLM_WORKER_USE_SINGLE_PROCESS"] = "1"
     from tensorrt_llm import LLM, SamplingParams  # noqa: PLC0415
     from tensorrt_llm.llmapi import KvCacheConfig  # noqa: PLC0415
 
@@ -85,7 +89,7 @@ def nll(args: argparse.Namespace) -> None:
             if logits is None or logits.shape[0] != len(window):
                 shape = None if logits is None else tuple(logits.shape)
                 raise RuntimeError(f"context logits of shape {shape} for {len(window)} tokens")
-            sums.append(window_nll(logits, window.tolist()))
+            sums.append(window_nll(logits.to("cuda"), window.tolist()))
             counts.append(end - start - 1)
     finally:
         llm.shutdown()
