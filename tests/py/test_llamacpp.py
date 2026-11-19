@@ -15,6 +15,7 @@ from kvbound import models, record, serve, workload
 from kvbound.baselines import llamacpp, llamacpp_serve
 from kvbound.baselines.llamacpp_bench import buffers_mib, command_line, read_stream, request_body
 from kvbound.baselines.llamacpp_eval import compare_tokens
+from kvbound.baselines.llamacpp_profile import decode_evals, kernel_name
 from kvbound.perfmodel.model import Arch
 
 
@@ -237,6 +238,22 @@ def test_an_error_event_ends_the_stream():
     out = read_stream(_events({"tokens": [5]}, {"error": {"message": "full"}}), 0.0, lambda: 1.0)
     assert out["error"] == {"message": "full"}
     assert out["tokens"] == [5]
+
+
+def test_kernel_names_keep_template_arguments_and_drop_parameters():
+    signature = "void mul_mat_vec_q<(ggml_type)2, (int)1, (bool)1>(const void *, const void *, int)"
+    assert kernel_name(signature) == "mul_mat_vec_q<(ggml_type)2, (int)1, (bool)1>"
+    assert kernel_name("quantize_q8_1(const float *, void *, long long)") == "quantize_q8_1"
+
+
+def test_decode_evals_skip_the_prompt_line():
+    report = (
+        "prompt eval time =      31.10 ms /     2 tokens (   15.55 ms per token)\n"
+        "       eval time =    1530.00 ms /   255 runs   (    6.00 ms per token)\n"
+    )
+    assert decode_evals(report) == (255, 1530.0)
+    with pytest.raises(SystemExit):
+        decode_evals("prompt eval time = 31.10 ms / 2 tokens")
 
 
 def test_latency_metrics_follow_arrivals():

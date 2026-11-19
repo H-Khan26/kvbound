@@ -1,4 +1,4 @@
-.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters step-counters microbench quantize eval precision eval-asr bench-asr qaihub fetch-llamacpp bench-llamacpp serve-llamacpp eval-llamacpp report predict reproduce lint format typecheck clean
+.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters step-counters microbench quantize eval precision eval-asr bench-asr qaihub fetch-llamacpp bench-llamacpp serve-llamacpp eval-llamacpp profile-llamacpp report predict reproduce lint format typecheck clean
 
 # torch wheel: cu128 on GPU machines, cpu in CI and on machines without a GPU
 TORCH ?= cu128
@@ -101,10 +101,14 @@ serve-load:       ## static against paged as longtail requests arrive at a growi
 	  $(SERVE) --workload longtail --rate $$r $(PAGED) || exit 1; \
 	done
 
-profile:          ## Nsight Systems decode profile, with and without CUDA graphs (MODEL=...)
+PROFILE_WEIGHTS ?= fp16 int4_g
+
+profile:          ## Nsight Systems decode profile, with and without CUDA graphs (MODEL=... PROFILE_WEIGHTS=...)
 	$(MAKE) build PRESET=cuda
-	uv run python -m kvbound.profile --model $(MODEL) --no-graph
-	uv run python -m kvbound.profile --model $(MODEL)
+	for w in $(PROFILE_WEIGHTS); do \
+	  uv run python -m kvbound.profile --model $(MODEL) --weights $$w --no-graph || exit 1; \
+	  uv run python -m kvbound.profile --model $(MODEL) --weights $$w || exit 1; \
+	done
 
 counters:         ## hardware counters of the attention kernel on each KV layout, via Nsight Compute
 	$(MAKE) build PRESET=cuda
@@ -197,6 +201,15 @@ serve-llamacpp:   ## llama.cpp through llama-server: serve-load's longtail arriv
 eval-llamacpp:   ## WikiText-2 perplexity of each GGUF format under kvbound's protocol (MODEL=...)
 	for f in $(LLAMACPP_FORMATS); do \
 	  uv run python -m kvbound.baselines.llamacpp_eval --model $(MODEL) --weights $$f || exit 1; \
+	done
+
+# The formats of profile-llamacpp: the counterparts of PROFILE_WEIGHTS.
+LLAMACPP_PROFILE_FORMATS ?= F16 Q4_0
+
+profile-llamacpp: ## Nsight Systems decode profile of llama.cpp, with and without CUDA graphs (MODEL=...)
+	for f in $(LLAMACPP_PROFILE_FORMATS); do \
+	  uv run python -m kvbound.baselines.llamacpp_profile --model $(MODEL) --weights $$f --no-graph || exit 1; \
+	  uv run python -m kvbound.baselines.llamacpp_profile --model $(MODEL) --weights $$f || exit 1; \
 	done
 
 report:           ## roofline, bandwidth and latency figures from the records (MODEL=... DEVICE=...)

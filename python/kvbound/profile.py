@@ -4,7 +4,7 @@ Runs kvb-bench under `nsys profile`, exports the per-kernel and per-API-call sum
 into results/profiles/<run>/, and prints where a decode step's time goes. The .nsys-rep report
 itself is left in the same directory but is not committed (see .gitignore).
 
-Usage: python -m kvbound.profile --model tinyllama-1.1b [--no-graph]
+Usage: python -m kvbound.profile --model tinyllama-1.1b [--weights int4_g] [--no-graph]
 """
 
 import argparse
@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -22,10 +23,13 @@ from kvbound import bench
 from kvbound.models import load_spec
 from kvbound.paths import REPO_ROOT, binary
 from kvbound.perfmodel.model import Arch
+from kvbound.weight_format import VARIANTS
 
 PROFILES = REPO_ROOT / "results" / "profiles"
 # Kernels that run once per weight tensor while the model loads, not in a decode step.
 LOAD_KERNELS = {"bf16_to_f16", "f32_to_f16", "count_non_finite"}
+# The CUDA API calls a decode step makes: launches, the wait for the step, and host copies.
+API_CALLS = ("LaunchKernel", "GraphLaunch", "StreamSynchronize", "Memcpy")
 
 
 def find_nsys() -> str:
@@ -55,7 +59,9 @@ def read_csv(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(f))
 
 
-def summarize(out: Path, stem: str, steps: int) -> dict[str, Any]:
+def summarize(
+    out: Path, stem: str, steps: int, family_of: Callable[[str], str] = kernel_family
+) -> dict[str, Any]:
     """Per-step GPU time by kernel family and per-step CPU time by CUDA API call.
 
     Kernels replayed from a CUDA graph do not appear in the kernel summary, so a graph run
@@ -63,7 +69,7 @@ def summarize(out: Path, stem: str, steps: int) -> dict[str, Any]:
     """
     kernels: dict[str, dict[str, float]] = {}
     for row in read_csv(out / f"{stem}_cuda_gpu_kern_sum.csv"):
-        family = kernel_family(row["Name"])
+        family = family_of(row["Name"])
         if family in LOAD_KERNELS:
             continue
         entry = kernels.setdefault(family, {"ms": 0.0, "launches": 0.0})
@@ -76,7 +82,7 @@ def summarize(out: Path, stem: str, steps: int) -> dict[str, Any]:
             "median_us": float(row["Med (ns)"]) / 1e3,
         }
         for row in read_csv(out / f"{stem}_cuda_api_sum.csv")
-        if any(key in row["Name"] for key in ("LaunchKernel", "GraphLaunch", "StreamSynchronize"))
+        if any(key in row["Name"] for key in API_CALLS)
     }
     return {
         "steps": steps,
@@ -95,14 +101,18 @@ def run(command: list[str]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True)
+    parser.add_argument("--weights", choices=VARIANTS, default="fp16")
     parser.add_argument("--new-tokens", type=int, default=256)
     parser.add_argument("--graph", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--preset", default="cuda")
     args = parser.parse_args()
 
     spec = load_spec(args.model)
+    model_dir = bench.checkpoint_dir(args.model, args.weights)
     nsys = find_nsys()
     stem = "graph" if args.graph else "eager"
+    # FP16 runs keep the folder name they have always had.
+    variant = "" if args.weights == "fp16" else f"-{args.weights}"
     # A one-token prompt makes every step decode-shaped, so per-step averages mean something.
     trace = {
         "requests": [
@@ -125,7 +135,7 @@ def main() -> None:
         run([
             nsys, "profile", "--trace", "cuda", "--output", str(report),
             "--force-overwrite", "true",
-            str(binary("bench", args.preset)), "--model", str(spec.checkpoint_dir),
+            str(binary("bench", args.preset)), "--model", str(model_dir),
             "--trace", str(trace_path), "--max-ctx", str(args.new_tokens + 1),
             "--warmup", "0", "--iters", "1", "--graph", str(int(args.graph)),
         ])  # fmt: skip
@@ -136,10 +146,10 @@ def main() -> None:
         summary = summarize(work, stem, args.new_tokens)
         with (work / "summary.json").open("w", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps(summary, indent=2) + "\n")
-        out = PROFILES / f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-decode-{spec.name}-{stem}"
+        out = PROFILES / f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-decode-{spec.name}{variant}-{stem}"
         shutil.copytree(work, out)
 
-    print(f"{spec.name}, {args.new_tokens} decode steps, graph={args.graph}")
+    print(f"{spec.name} {args.weights}, {args.new_tokens} decode steps, graph={args.graph}")
     print(f"GPU time in kernels: {summary['gpu_ms_per_step_total']:.2f} ms per step")
     for family, k in summary["gpu_ms_per_step"].items():
         print(f"  {family:<14} {k['ms']:7.3f} ms  {k['launches']:6.1f} launches")
