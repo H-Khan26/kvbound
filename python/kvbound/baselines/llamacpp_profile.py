@@ -74,13 +74,15 @@ def main() -> None:
         work = Path(tmp) / "profile"
         work.mkdir()
         report = work / f"{stem}.nsys-rep"
+        # nsys does not pass the program's output on, so llama.cpp's report is read from its log.
+        log = Path(tmp) / "llama-completion.log"
         command = [
             nsys, "profile", "--trace", "cuda", "--output", str(report),
             "--force-overwrite", "true",
             str(llamacpp.exe("llama-completion")), "-m", str(gguf),
             "-p", "The", "-n", str(args.new_tokens), "--ignore-eos", "-no-cnv",
             "--temp", "0", "-c", str(args.new_tokens + 16), "-ngl", "all", "-fa", "on",
-            "--no-warmup", "--no-display-prompt",
+            "--no-warmup", "--no-display-prompt", "--log-file", str(log),
         ]  # fmt: skip
         done = subprocess.run(
             command,
@@ -91,10 +93,10 @@ def main() -> None:
             env=env,
             check=False,
         )
-        output = done.stdout + done.stderr
         if done.returncode != 0:
+            output = done.stdout + done.stderr
             raise SystemExit(f"llama-completion under nsys failed:\n{output[-4000:]}")
-        steps, wall_ms = decode_evals(output)
+        steps, wall_ms = decode_evals(log.read_text(encoding="utf-8", errors="replace"))
         profile.run([
             nsys, "stats", "--report", "cuda_gpu_kern_sum,cuda_api_sum", "--format", "csv",
             "--output", str(work / stem), "--force-export", "true", str(report),
