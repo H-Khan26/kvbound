@@ -15,7 +15,8 @@
     "prompt_len": 128,
     "context_length": 4096,
     "export_command": "qai-hub-models export llama_v3_2_1b_instruct --checkpoint DEFAULT_W4A16 --device \"Samsung Galaxy S25\" --output-dir <dir>",
-    "qairt": "2.51.0.260929181845"
+    "qairt": "2.51.0.260929181845",
+    "note": null
   },
   "derived": {
     "prompt_len": 128,
@@ -106,7 +107,7 @@
         "output": 0.07087924161094893,
         "input": 0.0
       },
-      "off_npu_types": {}
+      "off_npu_ops": {}
     },
     "prompt_ar128_cl4096_2_of_3": {
       "graph": "prompt_ar128_cl4096_2_of_3",
@@ -158,7 +159,7 @@
         "sub": 0.008139194136037545,
         "other": 0.010093471671080984
       },
-      "off_npu_types": {}
+      "off_npu_ops": {}
     },
     "prompt_ar128_cl4096_3_of_3": {
       "graph": "prompt_ar128_cl4096_3_of_3",
@@ -210,7 +211,7 @@
         "transpose": 0.007832165988082226,
         "other": 0.013362051830594975
       },
-      "off_npu_types": {}
+      "off_npu_ops": {}
     },
     "token_ar1_cl4096_1_of_3": {
       "graph": "token_ar1_cl4096_1_of_3",
@@ -254,7 +255,7 @@
         "output": 0.3066546762589928,
         "input": 0.0
       },
-      "off_npu_types": {}
+      "off_npu_ops": {}
     },
     "token_ar1_cl4096_2_of_3": {
       "graph": "token_ar1_cl4096_2_of_3",
@@ -306,7 +307,7 @@
         "sub": 0.008872727258566216,
         "other": 0.021967157549292772
       },
-      "off_npu_types": {}
+      "off_npu_ops": {}
     },
     "token_ar1_cl4096_3_of_3": {
       "graph": "token_ar1_cl4096_3_of_3",
@@ -358,7 +359,7 @@
         "sub": 0.008221598682328237,
         "other": 0.016244368497887206
       },
-      "off_npu_types": {}
+      "off_npu_ops": {}
     }
   },
   "jobs": [

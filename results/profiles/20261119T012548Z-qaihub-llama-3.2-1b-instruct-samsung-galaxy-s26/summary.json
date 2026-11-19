@@ -14,8 +14,9 @@
     "precision": "w4a16",
     "prompt_len": 128,
     "context_length": 4096,
-    "export_command": "the S25 export's uploaded sources compiled, linked and profiled on \"Samsung Galaxy S26\" with the same input specs and options",
-    "qairt": "2.51.0"
+    "export_command": "qai-hub-models export llama_v3_2_1b_instruct --checkpoint DEFAULT_W4A16 --device \"Samsung Galaxy S25\" --output-dir <dir>",
+    "qairt": "2.51.0.260929181845",
+    "note": "the source models that export uploaded, compiled again for this device with the same input specs and options, then linked and profiled"
   },
   "derived": {
     "prompt_len": 128,
@@ -106,7 +107,7 @@
         "output": 0.07615345963999645,
         "input": 0.0
       },
-      "off_npu_types": {}
+      "off_npu_ops": {}
     },
     "prompt_ar128_cl4096_2_of_3": {
       "graph": "prompt_ar128_cl4096_2_of_3",
@@ -158,7 +159,7 @@
         "sub": 0.007378556589772528,
         "other": 0.008025311200089653
       },
-      "off_npu_types": {}
+      "off_npu_ops": {}
     },
     "prompt_ar128_cl4096_3_of_3": {
       "graph": "prompt_ar128_cl4096_3_of_3",
@@ -210,7 +211,7 @@
         "transpose": 0.00726413796569709,
         "other": 0.011065143912724961
       },
-      "off_npu_types": {}
+      "off_npu_ops": {}
     },
     "token_ar1_cl4096_1_of_3": {
       "graph": "token_ar1_cl4096_1_of_3",
@@ -254,7 +255,7 @@
         "output": 0.3687074829931973,
         "input": 0.0
       },
-      "off_npu_types": {}
+      "off_npu_ops": {}
     },
     "token_ar1_cl4096_2_of_3": {
       "graph": "token_ar1_cl4096_2_of_3",
@@ -306,7 +307,7 @@
         "rms_norm_node": 0.007133155051268537,
         "other": 0.016408074638409542
       },
-      "off_npu_types": {}
+      "off_npu_ops": {}
     },
     "token_ar1_cl4096_3_of_3": {
       "graph": "token_ar1_cl4096_3_of_3",
@@ -358,7 +359,7 @@
         "sub": 0.0065479348545403075,
         "other": 0.013619357502673646
       },
-      "off_npu_types": {}
+      "off_npu_ops": {}
     }
   },
   "jobs": [

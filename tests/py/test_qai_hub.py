@@ -81,7 +81,7 @@ def test_graph_summary_converts_units_and_counts_compute_units():
     assert s["layers_by_unit"] == {"NPU": 2, "CPU": 1}
     assert s["cost_measure"] == "execution_time"
     assert s["cost_share_by_unit"] == pytest.approx({"NPU": 0.8, "CPU": 0.2})
-    assert s["off_npu_types"] == {"CPU": {"Gather": 1}}
+    assert s["off_npu_ops"] == {"CPU": {"Gather": 1}}
 
 
 def htp_layer(name, cycles, unit="NPU", kind="node"):
@@ -106,7 +106,7 @@ def test_layer_units_fall_back_to_cycles_when_times_are_zero():
     assert u["cost_measure"] == "execution_cycles"
     assert u["cost_share_by_unit"] == pytest.approx({"NPU": 0.75, "GPU": 0.25})
     assert u["cost_share_by_op"] == pytest.approx({"matmul": 0.75, "slice": 0.25, "input": 0.0})
-    assert u["off_npu_types"] == {"GPU": {"node": 1}}
+    assert u["off_npu_ops"] == {"GPU": {"slice": 1}}
 
 
 def test_op_stem_names_the_operator():
@@ -131,6 +131,30 @@ def test_graph_summary_tolerates_missing_measurements():
     assert s["inference_memory_peak_range_mib"] is None
     assert s["cost_share_by_unit"] == {}
     assert s["cost_measure"] is None
+
+
+def test_fetch_ids_merge_the_sources_once_each():
+    log = "Scheduled compile job (c1) successfully\nScheduled inference job (p1) successfully\n"
+    earlier = {"jobs": [{"id": "p1"}, {"id": "p2"}]}
+    assert qai_hub.fetch_ids(["x9", "c1"], log, earlier) == ["x9", "c1", "p1", "p2"]
+    assert qai_hub.fetch_ids([], "", None) == []
+
+
+def test_export_meta_prefers_the_command_line_then_the_log_then_the_summary():
+    earlier = {"params": {"export_command": "export a", "qairt": "2.50.0", "note": None}}
+    assert qai_hub.export_meta(earlier, "", None, None, None) == {
+        "command": "export a",
+        "qairt": "2.50.0",
+    }
+    assert qai_hub.export_meta(earlier, "qairt: 2.51.0\n", None, None, "second device") == {
+        "command": "export a",
+        "qairt": "2.51.0",
+        "note": "second device",
+    }
+    assert qai_hub.export_meta(None, "qairt: 2.51.0\n", "export b", "2.52.0", None) == {
+        "command": "export b",
+        "qairt": "2.52.0",
+    }
 
 
 def test_derive_sums_the_parts():

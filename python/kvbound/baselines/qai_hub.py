@@ -7,15 +7,16 @@ profiles every graph on a hosted device. This module turns those profile jobs in
 
   fetch      downloads the profile of each job, with the job's name, device and options, into a
              raw folder (one <job id>.profile.json each, and jobs.json). Job ids come from the
-             command line or from the export's log, which prints every job it schedules.
+             command line, from the export's log, which prints every job it schedules, or
+             from an earlier summary, whose jobs are downloaded again.
   summarize  reads a raw folder and writes results/profiles/<stamp>-qaihub-<model>-<device>/
              summary.json, the stamp being the creation time of the newest profile job, so
              summarizing the same jobs again rewrites the same file.
 
 Per graph the summary keeps AI Hub's estimated inference time and the spread of the profiled
 iterations, memory, first and warm load time, how many layers, and how much of the per-layer
-cost, each compute unit (NPU, GPU, CPU) took, the operator types of any layer that left the
-NPU, and the share of the cost of the ten costliest operators.
+cost, each compute unit (NPU, GPU, CPU) took, the operators of any layer that left the NPU,
+and the share of the cost of the ten costliest operators.
 
   memory   process_peak_mib is the peak memory of the profiling process on the device, the
            profiler's own included; inference_memory_peak_range_mib is how far inference
@@ -40,11 +41,13 @@ into the cache buffers, the attention mask and RoPE inputs), sampling, and detok
 Qualcomm's own figures, measured end to end with the Genie runtime, are kept beside them.
 
 The export itself needs qai-hub-models, whose pins conflict with this repo's torch, so it runs
-in a separate environment; this module only needs the AI Hub client and a configured token:
-uv sync --locked --extra cu128 --group qai-hub
+in a separate environment. fetch only needs the AI Hub client and a configured token; the
+client pins older versions of packages this repo shares, so it is layered on for the one
+command instead of joining the lock, and summarize needs neither.
 
-Usage: python -m kvbound.baselines.qai_hub fetch --log <export log> --raw <folder>
-       python -m kvbound.baselines.qai_hub summarize --raw <folder>
+Usage: uv run --with qai-hub python -m kvbound.baselines.qai_hub fetch --raw <folder>
+           (--log <export log> | --summary <summary.json> | --jobs <id>...)
+       uv run python -m kvbound.baselines.qai_hub summarize --raw <folder>
 """
 
 import argparse
@@ -153,7 +156,7 @@ def op_stem(layer_name: str) -> str:
 
 def layer_units(layers: list[dict[str, Any]]) -> dict[str, Any]:
     """Layers per compute unit, the share of the per-layer cost each unit took, and the operator
-    types of every layer that did not run on the NPU.
+    of every layer that did not run on the NPU.
 
     The cost is execution_time where the profile has it; HTP profiles report each layer's
     execution_cycles and leave execution_time at 0, and then the cycles are the cost.
@@ -169,7 +172,8 @@ def layer_units(layers: list[dict[str, Any]]) -> dict[str, Any]:
     off_npu: dict[str, Counter[str]] = {}
     for layer in layers:
         if layer["compute_unit"] != "NPU":
-            off_npu.setdefault(layer["compute_unit"], Counter())[layer["type"]] += 1
+            op = layer["type"] if layer["type"] != "node" else op_stem(layer["name"])
+            off_npu.setdefault(layer["compute_unit"], Counter())[op] += 1
     by_op: Counter[str] = Counter()
     for layer in layers:
         by_op[op_stem(layer["name"])] += layer.get(measure, 0)
@@ -182,7 +186,7 @@ def layer_units(layers: list[dict[str, Any]]) -> dict[str, Any]:
         "cost_measure": measure if total else None,
         "cost_share_by_unit": {u: c / total for u, c in cost.most_common()} if total else {},
         "cost_share_by_op": {op: c / total for op, c in top.items()} if total else {},
-        "off_npu_types": {u: dict(c.most_common()) for u, c in off_npu.items()},
+        "off_npu_ops": {u: dict(c.most_common()) for u, c in off_npu.items()},
     }
 
 
@@ -288,6 +292,7 @@ def summarize(raw: Path) -> dict[str, Any]:
             "context_length": derived["context_length"],
             "export_command": export.get("command"),
             "qairt": export.get("qairt"),
+            "note": export.get("note"),
         },
         "derived": derived,
         "published": compare(derived, device),
@@ -340,6 +345,33 @@ def fetch(job_ids: list[str], raw: Path) -> list[dict[str, Any]]:
     return jobs
 
 
+def fetch_ids(jobs: list[str], log: str, earlier: dict[str, Any] | None) -> list[str]:
+    """The job ids to fetch, each once: those given, the log's, then an earlier summary's."""
+    ids = [*jobs, *(j["id"] for j in parse_export_log(log))]
+    if earlier:
+        ids += [j["id"] for j in earlier["jobs"]]
+    return list(dict.fromkeys(ids))
+
+
+def export_meta(
+    earlier: dict[str, Any] | None,
+    log: str,
+    command: str | None,
+    qairt: str | None,
+    note: str | None,
+) -> dict[str, str]:
+    """The export.json entries of a fetch: an earlier summary's, then the log's QAIRT version,
+    then the values given on the command line."""
+    params = earlier["params"] if earlier else {}
+    found = QAIRT.search(log)
+    meta = {
+        "command": command or params.get("export_command"),
+        "qairt": qairt or (found["v"] if found else params.get("qairt")),
+        "note": note or params.get("note"),
+    }
+    return {key: value for key, value in meta.items() if value}
+
+
 def print_summary(summary: dict[str, Any]) -> None:
     print(f"{summary['device']['name']}, context {summary['params']['context_length']}")
     for name, g in summary["graphs"].items():
@@ -373,27 +405,26 @@ def main() -> None:
     f = sub.add_parser("fetch", help="download the profiles of an export's jobs")
     f.add_argument("--raw", type=Path, required=True, help="folder for the downloads")
     f.add_argument("--log", type=Path, help="export log; its scheduled jobs are fetched")
-    f.add_argument("--jobs", nargs="*", default=[], help="job ids, in addition to the log's")
-    f.add_argument("--export-command", help="kept in the summary as given (export.json)")
+    f.add_argument("--summary", type=Path, help="earlier summary; its jobs are fetched again")
+    f.add_argument("--jobs", nargs="*", default=[], help="job ids, in addition to those")
+    f.add_argument("--export-command", help="the export's command, kept in the summary")
     f.add_argument("--qairt", help="QAIRT version of the jobs, if the log does not print it")
+    f.add_argument("--note", help="how the jobs came about, when not from the export alone")
     s = sub.add_parser("summarize", help="write the summary of a raw folder")
     s.add_argument("--raw", type=Path, required=True)
     s.add_argument("--out", type=Path, help="summary file; default under results/profiles/")
     args = parser.parse_args()
 
     if args.command == "fetch":
-        ids = list(args.jobs)
         log = args.log.read_text(encoding="utf-8", errors="replace") if args.log else ""
-        ids += [j["id"] for j in parse_export_log(log) if j["id"] not in ids]
+        earlier = json.loads(args.summary.read_text("utf-8")) if args.summary else None
+        ids = fetch_ids(args.jobs, log, earlier)
         if not ids:
-            raise SystemExit("no job ids: pass --log or --jobs")
+            raise SystemExit("no job ids: pass --log, --summary or --jobs")
         fetch(ids, args.raw)
         export_file = args.raw / "export.json"
         export = json.loads(export_file.read_text("utf-8")) if export_file.exists() else {}
-        if args.export_command:
-            export["command"] = args.export_command
-        if qairt := args.qairt or ((m := QAIRT.search(log)) and m["v"]):
-            export["qairt"] = qairt
+        export.update(export_meta(earlier, log, args.export_command, args.qairt, args.note))
         export_file.write_text(json.dumps(export, indent=2) + "\n", "utf-8")
         return
 
