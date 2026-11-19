@@ -1,0 +1,53 @@
+{
+  "execution_summary": {
+    "estimated_inference_time": 18649,
+    "estimated_inference_peak_memory": 215175168,
+    "first_load_time": 196011,
+    "warm_load_time": 202114,
+    "inference_memory_peak_range": [
+      8855552,
+      17610656
+    ],
+    "first_load_memory_peak_range": [
+      1347584,
+      11194416
+    ],
+    "all_inference_times": [
+      19619,
+      18789,
+      18810,
+      18785,
+      18649
+    ]
+  },
+  "execution_detail": [
+    {
+      "name": "Input",
+      "type": "Input",
+      "compute_unit": "NPU",
+      "execution_time": 0,
+      "execution_cycles": 37766
+    },
+    {
+      "name": "node_slice_129",
+      "type": "node",
+      "compute_unit": "NPU",
+      "execution_time": 0,
+      "execution_cycles": 227080
+    },
+    {
+      "name": "node_slice_130",
+      "type": "node",
+      "compute_unit": "NPU",
+      "execution_time": 0,
+      "execution_cycles": 61407
+    },
+    {
+      "name": "node_slice_131",
+      "type": "node",
+      "compute_unit": "NPU",
+      "execution_time": 0,
+      "execution_cycles": 10055
+    }
+  ]
+}

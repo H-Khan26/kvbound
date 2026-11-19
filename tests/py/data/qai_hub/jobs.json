@@ -1,0 +1,79 @@
+[
+  {
+    "type": "compile",
+    "id": "jpvn834zg",
+    "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part1_of_3",
+    "url": "https://workbench.aihub.qualcomm.com/jobs/jpvn834zg/",
+    "status": "SUCCESS",
+    "created_utc": "2026-11-19T01:00:10+00:00",
+    "device": "Samsung Galaxy S25",
+    "device_os": "15",
+    "options": "--target_runtime qnn_dlc --qairt_version latest --quantize_io --qnn_options context_enable_graphs=prompt_ar128_cl4096_1_of_3  -O0 --quantize_full_type w8a16 --quantize_io"
+  },
+  {
+    "type": "inference",
+    "id": "jgnw4y6kg",
+    "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part1_of_3_prompt_ar128_cl4096_1_of_3",
+    "url": "https://workbench.aihub.qualcomm.com/jobs/jgnw4y6kg/",
+    "status": "SUCCESS",
+    "created_utc": "2026-11-19T01:10:28+00:00",
+    "device": "Samsung Galaxy S25",
+    "device_os": "15",
+    "options": "--qairt_version latest --qnn_options context_enable_graphs=prompt_ar128_cl4096_1_of_3 --max_profiler_iterations 50"
+  },
+  {
+    "type": "inference",
+    "id": "jpr7rqv0g",
+    "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part1_of_3_token_ar1_cl4096_1_of_3",
+    "url": "https://workbench.aihub.qualcomm.com/jobs/jpr7rqv0g/",
+    "status": "SUCCESS",
+    "created_utc": "2026-11-19T01:10:29+00:00",
+    "device": "Samsung Galaxy S25",
+    "device_os": "15",
+    "options": "--qairt_version latest --qnn_options context_enable_graphs=token_ar1_cl4096_1_of_3 --max_profiler_iterations 50"
+  },
+  {
+    "type": "inference",
+    "id": "jp2z16krp",
+    "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part2_of_3_prompt_ar128_cl4096_2_of_3",
+    "url": "https://workbench.aihub.qualcomm.com/jobs/jp2z16krp/",
+    "status": "SUCCESS",
+    "created_utc": "2026-11-19T01:10:29+00:00",
+    "device": "Samsung Galaxy S25",
+    "device_os": "15",
+    "options": "--qairt_version latest --qnn_options context_enable_graphs=prompt_ar128_cl4096_2_of_3 --max_profiler_iterations 50"
+  },
+  {
+    "type": "inference",
+    "id": "jpyylw18p",
+    "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part2_of_3_token_ar1_cl4096_2_of_3",
+    "url": "https://workbench.aihub.qualcomm.com/jobs/jpyylw18p/",
+    "status": "SUCCESS",
+    "created_utc": "2026-11-19T01:10:29+00:00",
+    "device": "Samsung Galaxy S25",
+    "device_os": "15",
+    "options": "--qairt_version latest --qnn_options context_enable_graphs=token_ar1_cl4096_2_of_3 --max_profiler_iterations 50"
+  },
+  {
+    "type": "inference",
+    "id": "jp0xwqz9p",
+    "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part3_of_3_prompt_ar128_cl4096_3_of_3",
+    "url": "https://workbench.aihub.qualcomm.com/jobs/jp0xwqz9p/",
+    "status": "SUCCESS",
+    "created_utc": "2026-11-19T01:10:30+00:00",
+    "device": "Samsung Galaxy S25",
+    "device_os": "15",
+    "options": "--qairt_version latest --qnn_options context_enable_graphs=prompt_ar128_cl4096_3_of_3 --max_profiler_iterations 50"
+  },
+  {
+    "type": "inference",
+    "id": "jp8kn9qkp",
+    "name": "llama_v3_2_1b_instruct_w4a16_DEFAULT_W4A16_part3_of_3_token_ar1_cl4096_3_of_3",
+    "url": "https://workbench.aihub.qualcomm.com/jobs/jp8kn9qkp/",
+    "status": "SUCCESS",
+    "created_utc": "2026-11-19T01:10:30+00:00",
+    "device": "Samsung Galaxy S25",
+    "device_os": "15",
+    "options": "--qairt_version latest --qnn_options context_enable_graphs=token_ar1_cl4096_3_of_3 --max_profiler_iterations 50"
+  }
+]

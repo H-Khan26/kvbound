@@ -1,4 +1,4 @@
-.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters step-counters microbench quantize eval precision eval-asr bench-asr report predict lint format typecheck clean
+.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters step-counters microbench quantize eval precision eval-asr bench-asr qaihub report predict lint format typecheck clean
 
 # torch wheel: cu128 on GPU machines, cpu in CI and on machines without a GPU
 TORCH ?= cu128
@@ -149,6 +149,19 @@ bench-asr:        ## speech baselines, greedy and beam 5: Hugging Face on the GP
 	  $(ASR) --backend faster-whisper --compute-type int8_float16 --beams $$b || exit 1; \
 	  $(ASR) --backend faster-whisper --device cpu --compute-type int8 --beams $$b || exit 1; \
 	done
+
+# The jobs to download: a finished `qai-hub-models export`'s log, or a summary under
+# results/profiles/ to rebuild. QAIHUB_RAW is a folder outside the repo for the downloads.
+QAIHUB_LOG ?=
+QAIHUB_SUMMARY ?=
+QAIHUB_RAW ?=
+
+qaihub:           ## re-download AI Hub profile jobs and summarize them into results/profiles/ (QAIHUB_RAW=... and QAIHUB_LOG=... or QAIHUB_SUMMARY=...)
+	@test -n "$(QAIHUB_RAW)" || { echo "set QAIHUB_RAW to a folder for the downloads"; exit 1; }
+	@test -n "$(QAIHUB_LOG)$(QAIHUB_SUMMARY)" || { echo "set QAIHUB_LOG or QAIHUB_SUMMARY"; exit 1; }
+	uv run --with "qai-hub>=0.58.0" python -m kvbound.baselines.qai_hub fetch --raw "$(QAIHUB_RAW)" \
+	  $(if $(QAIHUB_LOG),--log "$(QAIHUB_LOG)") $(if $(QAIHUB_SUMMARY),--summary "$(QAIHUB_SUMMARY)")
+	uv run python -m kvbound.baselines.qai_hub summarize --raw "$(QAIHUB_RAW)"
 
 report:           ## roofline, bandwidth and latency figures from the records (MODEL=... DEVICE=...)
 	uv run python -m kvbound.report --device $(DEVICE) --model $(MODEL)
