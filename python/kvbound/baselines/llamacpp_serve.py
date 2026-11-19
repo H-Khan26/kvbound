@@ -175,7 +175,11 @@ def pass_metrics(trace: dict[str, Any], results: list[dict[str, Any]]) -> dict[s
             continue
         done.append({"arrival_s": req["arrival_s"], "token_times_s": out["times"]})
     if not done:
-        raise RuntimeError(f"every request failed; first error: {results[0]['error']}")
+        raise RuntimeError(
+            f"all {failed} requests failed ({results[0]['error']}); with more slots than the "
+            "cache holds requests llama.cpp fails every request in flight: lower --parallel, "
+            "or pass 0 for the most slots that cannot overflow"
+        )
     total = max(r["token_times_s"][-1] for r in done)
     return {
         **serve.latency_metrics(done, total),
