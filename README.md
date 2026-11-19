@@ -109,8 +109,12 @@ make eval-llamacpp MODEL=tinyllama-1.1b     # perplexity of each GGUF format und
 make bench-llamacpp MODEL=tinyllama-1.1b    # one request at a time through llama-server
 make serve-llamacpp MODEL=tinyllama-1.1b    # the serving workloads in the same KV bytes
 make profile-llamacpp MODEL=tinyllama-1.1b  # Nsight Systems decode profiles of llama.cpp
+make fetch-exllamav3 MODEL=tinyllama-1.1b   # the pinned ExLlamaV3 wheel in its own environment, and EXL3 conversions
+make eval-exllamav3 bench-exllamav3 MODEL=tinyllama-1.1b
+make setup-stacks                           # Linux or WSL2: pinned environments of vLLM and TensorRT-LLM
+make quantize-stacks MODEL=tinyllama-1.1b   # their 4-bit checkpoints, made with each stack's own tool
+make eval-stacks bench-stacks serve-stacks MODEL=tinyllama-1.1b
 ```
-<!-- STACK-TARGETS -->
 
 ## Status
 
@@ -139,37 +143,46 @@ Ti the DRAM writes of `gemm_quantized` are not explained; the step-counter profi
 
 ## Phase 7: against production stacks
 
-llama.cpp (release `b12503`) ran on the RTX 3060 Ti with the same token ids, the same requests and the same KV
-bytes, in one session with kvbound (2026-11-19, driver 621.24).
-[`docs/production-comparison.md`](docs/production-comparison.md) has the method, every table and the profiles.
+Four GPU stacks ran on the RTX 3060 Ti with the same token ids, the same requests and the same KV bytes as kvbound:
+llama.cpp `b12503` and ExLlamaV3 1.6.7 on Windows, vLLM 0.34.0 and TensorRT-LLM 1.2.1 under WSL2 (2026-11-19, driver
+621.24). [`docs/production-comparison.md`](docs/production-comparison.md) has the method, every table, the profiles
+and what was not done.
 
-| RTX 3060 Ti | TinyLlama: kvbound | llama.cpp | Llama 3.2: kvbound | llama.cpp |
-| --- | --- | --- | --- | --- |
-| Decode, one request, FP16 / F16 | 180 tokens/s | 160 | 156 | 138 |
-| Decode, one request, INT4 / Q4_0 | 510 tokens/s | 381 | 472 | 337 |
-| First token, 1,024-token prompt, FP16 / F16 | 72.6 ms | 67.9 ms at the server, 69.9 at the client | 69.5 ms | 63.6, 65.7 |
-| `longtail` at 16 requests per second, FP16 / F16 | 942 tokens/s | 877 | 896 | 743 |
-| 96 `fixed` requests at once, FP16 / F16 | 1,819 tokens/s, 30 running | 1,340, 21 slots | 1,917 | 1,026 |
-| Perplexity at 4 bits: `int4_g.awq-gptq` / Q4_0 / Q4_K_M | 9.20 at 4.13 bits | 9.24 at 4.63, 9.16 at 4.85 | 12.13 at 4.13 bits | 12.41 at 4.94, 11.44 at 5.18 |
+| RTX 3060 Ti | kvbound | llama.cpp | vLLM | TensorRT-LLM | ExLlamaV3 |
+| --- | --- | --- | --- | --- | --- |
+| TinyLlama, FP16 decode, one request, tokens/s | 180 | 160 | 150 | 153 | 62 |
+| TinyLlama, fastest 4-bit decode, tokens/s | 512 | 391 | 331 | 291 | 245 |
+| TinyLlama, first token of a 1,024-token prompt, FP16, ms | 72.6 | 69.9 | 86.1 | 86.2 | 95.0 |
+| TinyLlama, `longtail` at 16 requests per second, FP16, tokens/s | 942 | 877 | 943 | 932 | not measured |
+| TinyLlama, 96 `fixed` requests at once, FP16, tokens/s | 1,819 | 1,340 | 1,834 | 1,735 | not measured |
+| Llama 3.2, 96 `fixed` requests at once, FP16, tokens/s | 1,917 | 1,026 | 1,809 | 1,650 | not measured |
+| TinyLlama, best perplexity under 5 bits per weight (FP16: 8.87) | 9.20 at 4.13 | 9.16 at 4.85 | none under 5 | none under 5 | 8.99 at 4.85, 9.00 at 4.02 |
+| Llama 3.2, best perplexity under 5 bits per weight (FP16: 10.99) | 12.13 at 4.13 | 12.41 at 4.94 | none under 5 | none under 5 | 11.28 at 4.88 |
 
-- **Ahead at batch 1.** llama.cpp's decode step is about 0.7 ms longer at either precision. Nsight profiles of both
-  engines put it in more and smaller products, a 4-bit format with more bytes per weight, a kernel that quantizes
-  the activations before each quantized product, and twenty stream synchronizations per step against one.
-- **Ahead when requests outnumber the memory**, for two reasons that are not kernels: admission by free blocks runs
-  30 sequences where llama.cpp's slots must be sized for 21, and llama-server's work around its engine adds 4 to 8
-  ms to a 21-row step.
-- **Level below saturation**, and in accuracy from the same FP16 weights.
-- **Behind on a long prompt.** llama.cpp accumulates wide FP16 products in FP16; kvbound's accuracy contract needs
-  FP32, which the tensor cores run at 33 TFLOPS against 58.
-- **4-bit accuracy is not settled.** kvbound's calibrated checkpoint scores better than Q4_0 with fewer bits, but
-  it is calibrated on the test corpus's train split and llama.cpp's files use no calibration. Q4_K_M scores better
-  on both models with more bits.
+- **Ahead for one request.** kvbound decodes 8 to 20% faster than llama.cpp, vLLM and TensorRT-LLM with FP16 weights
+  and 1.3 to 2.1 times faster than all four at 4 bits. Nsight profiles of kvbound and llama.cpp show llama.cpp's
+  step about 0.7 ms longer at either precision: more and smaller products, a 4-bit format with more bytes per
+  weight, a kernel that quantizes the activations before each quantized product, and twenty stream synchronizations
+  per step against one. vLLM's and TensorRT-LLM's 4-bit files keep the vocabulary matrix in FP16 and read 1.2 to 1.6
+  times the bytes per token; the three other stacks were not profiled.
+- **Level with vLLM under load.** Both page the KV cache in 16-token blocks and preempt, and both run 30 sequences
+  from the same bytes. TensorRT-LLM is 5 to 14% behind with 96 requests at once. llama.cpp is 26 to 46% behind, for
+  two reasons that are not kernels: its slots must be sized for 21 sequences, and its server's work around the
+  engine adds 4 to 8 ms to a 21-row step.
+- **Behind llama.cpp on a long prompt.** llama.cpp accumulates wide FP16 products in FP16; kvbound's accuracy
+  contract needs FP32, which the tensor cores run at 33 TFLOPS against 58. The other three are slower than kvbound
+  here.
+- **Behind in accuracy per bit.** ExLlamaV3's trellis-coded format loses about a third as much perplexity as
+  kvbound's best 4-bit checkpoint, with calibration text that is not from the test corpus. Against the scalar
+  formats kvbound's calibrated checkpoint scores better than llama.cpp's Q4_0 at fewer bits, though kvbound
+  calibrates on the test corpus's train split and llama.cpp's files use no calibration; AWQ and GPTQ in vLLM and
+  TensorRT-LLM, on the same calibration windows, give the numbers kvbound's give. kvbound has no format between 4
+  and 8 bits, where Q4_K_M and vLLM's GPTQ file score better.
 
 Qualcomm's stock export of Llama 3.2 1B was profiled on the Hexagon NPU of two phones through Qualcomm AI Hub as a
 production example of the static memory design: 58 to 60 tokens/s from per-graph latencies, with every step
 attending over a fixed context of 4,096 positions
 ([design document](docs/static-vs-paged-memory.md#a-production-static-design-llama-32-1b-on-a-snapdragon-npu)).
-<!-- STACKS -->
 
 ## Phase 6: profile and optimize
 
@@ -625,12 +638,12 @@ make bench-asr MODEL=whisper-base-ar-quran      # Hugging Face and faster-whispe
 | `microbench/` | standalone CUDA binaries that measure bandwidth, latency and GEMM peaks |
 | `python/kvbound/ref/` | from-scratch PyTorch reference models: Llama (RMSNorm, RoPE, grouped-query attention, SwiGLU), which loads quantized checkpoints by dequantizing them, and Whisper (conv stem, encoder, decoder with cross attention, greedy decoding and Hugging Face's beam search) |
 | `python/kvbound/` | golden tensors, tolerance metrics, result records, fingerprint, perf model, workloads, the quantizer with its AWQ scale search, GPTQ solver and residual rotation, the log-mel front end, speech recognition through the engine (`asr.py`), bench, serve and profile wrappers, plots |
-| `python/kvbound/baselines/` | other stacks measured by the same record code: Hugging Face for both models, faster-whisper for Whisper, llama.cpp (fetch, GGUF conversion, perplexity through `llama.dll`, one request, serving, Nsight profiles), Qualcomm AI Hub profile jobs |
+| `python/kvbound/baselines/` | other stacks measured by the same record code: Hugging Face for both models, faster-whisper for Whisper, llama.cpp (fetch, GGUF conversion, perplexity through `llama.dll`, one request, serving, Nsight profiles), ExLlamaV3 (its wheel in its own environment, EXL3 conversions, perplexity, one request), vLLM and TensorRT-LLM under Linux or WSL2 (pinned environments, 4-bit checkpoints by each stack's tool, perplexity, one request, serving), Qualcomm AI Hub profile jobs |
 | `python/kvbound/evals/` | WikiText-2 perplexity, per-site error against the goldens with sample text, and the speech evaluation: the recitation subset, Arabic normalization, word and character error rates, real-time factors |
 | `fixtures/tiny-llama/`, `fixtures/tiny-whisper/` | committed 2-layer random models with goldens and thresholds (and reference beam-search traces for Whisper); what CI tests against |
 | `tests/cpp/` | GoogleTest, CPU only: parser, loader, weight format, fixture contracts, op programs, memory plan, both scheduling policies, sampler, allocator and block reference counts, beam search against the reference traces |
 | `tests/py/` | pytest: reference vs Hugging Face, the quantizer, the perplexity and error-rate arithmetic; under the `gpu` marker, each kernel vs torch and both engines vs the goldens, FP16 and quantized, and Whisper greedy and beam search vs the reference |
-| `configs/` | model, device, workload and evaluation-subset descriptions |
+| `configs/` | model, device, workload and evaluation-subset descriptions; `stacks/`: the pinned requirements of the vLLM, TensorRT-LLM and llm-compressor environments |
 | `results/raw/<device>/` | one JSON record per benchmark or evaluation run, written only by `kvbound.record` |
 | `results/profiles/` | Nsight Systems summaries (CSV) of decode runs of kvbound and of llama.cpp; Nsight Compute counters of the attention kernel and of every kernel in one step; summaries of the Qualcomm AI Hub profile jobs |
 | `docs/` | the blog post, the design document on static and paged KV memory, the comparison with production stacks, and the optimization log |

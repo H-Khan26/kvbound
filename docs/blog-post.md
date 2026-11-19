@@ -154,7 +154,18 @@ form: a context of 4,096 positions compiled into the graph, one sequence, and ev
 context under a mask. Its per-graph latencies work out to 58 to 60 tokens per second. On the NPU the softmax and the
 attention products are the costliest operators; on the GPU engine, attention is a few percent of a step.
 
-<!-- STACKS -->
+Three more GPU stacks went through the same protocol that day: vLLM and TensorRT-LLM under WSL2, and ExLlamaV3.
+
+- **vLLM is the closest in design**, a cache paged in 16-token blocks with preemption, and under load it is level
+  with kvbound: 1,834 tokens per second against 1,819 with 96 requests at once, both running 30 sequences from the
+  same memory.
+- **For one request kvbound is faster than all of them**, by 8 to 20% in FP16 and by 1.5 to 2.1 times at 4 bits.
+  Part of the 4-bit gap is bytes again: vLLM's and TensorRT-LLM's 4-bit files keep the vocabulary matrix in FP16
+  and read it whole on every token.
+- **ExLlamaV3 is far ahead in accuracy per bit.** Its format is not a grid of levels per weight: it rotates each
+  matrix and codes the weights with a trellis. With every matrix near 4 bits it scores 9.00 on TinyLlama, a third
+  of the loss of kvbound's best checkpoint, and its calibration text is not from the test corpus. AWQ and GPTQ on
+  a scalar format did not close that gap.
 
 ## The same engine, a different model
 
@@ -176,7 +187,8 @@ The project stops with open items, and the repository lists them where they belo
 - Requests with a common prompt prefix do not share cache blocks, although the reference counts that would allow it
   exist for beam search.
 - The speech path has no timestamps and no audio longer than one 30-second window.
-<!-- OPEN -->
+- vLLM, TensorRT-LLM and ExLlamaV3 were measured but not profiled, so their gaps to kvbound are numbers without
+  explanations.
 
 The repository has the code, every record behind these numbers, a design document on the two memory designs, the
 comparison with production stacks, and the log of each optimization with its profiler evidence.
