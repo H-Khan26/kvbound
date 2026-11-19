@@ -16,7 +16,7 @@ RATES ?= 2 4 8 16
 WEIGHTS ?= fp16
 KV ?= fp16
 # The weights:kv pairs `make precision` measures
-PRECISIONS ?= fp16:fp16 fp16:int8 int8_pc:fp16 int8_pc:int8 int4_g:fp16 int4_g:int8 int4_g.awq:fp16 int4_g.awq:int8
+PRECISIONS ?= fp16:fp16 fp16:int8 int8_pc:fp16 int8_pc:int8 int4_g:fp16 int4_g:int8 int4_g.awq:fp16 int4_g.awq:int8 int4_g.gptq:fp16 int4_g.awq-gptq:fp16 int4_g.awq-gptq:int8
 # Speech stack and beam width of `make eval-asr`: hf | faster-whisper | kvbound, 1 for greedy
 BACKEND ?= hf
 BEAMS ?= 1
@@ -118,10 +118,12 @@ microbench:       ## build the cuda preset, then run bandwidth, latency, GEMM an
 	$(MAKE) build PRESET=cuda
 	uv run python -m kvbound.microbench --preset cuda
 
-quantize:         ## quantized checkpoints: INT8 per channel, INT4 in groups of 128, and INT4 with AWQ scales (MODEL=...)
+quantize:         ## quantized checkpoints: INT8 per channel, INT4 in groups of 128, and INT4 with AWQ scales, GPTQ rounding, and both (MODEL=...)
 	uv run python -m kvbound.quantize $(MODEL) --scheme int8_pc
 	uv run python -m kvbound.quantize $(MODEL) --scheme int4_g --group-size 128
 	uv run python -m kvbound.quantize $(MODEL) --scheme int4_g --group-size 128 --awq
+	uv run python -m kvbound.quantize $(MODEL) --scheme int4_g --group-size 128 --gptq
+	uv run python -m kvbound.quantize $(MODEL) --scheme int4_g --group-size 128 --awq --gptq
 
 eval:             ## WikiText-2 perplexity of the engine at one precision (MODEL=... WEIGHTS=fp16 KV=fp16)
 	$(MAKE) build PRESET=cuda
