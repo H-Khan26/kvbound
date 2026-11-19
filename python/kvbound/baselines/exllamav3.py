@@ -7,7 +7,6 @@ Everything lives under $KVBOUND_EXT/exllamav3/<version>/ (kvbound.paths.EXT):
   work/<model>/<FORMAT>/   the converter's working folder while it runs
   exl3/<model>/<FORMAT>/   each converted model, with kvbound-converted.json: the converter's
                            arguments as it resolved them, its seconds and the packages it ran with
-  logs/
 
 ExLlamaV3 is not part of the repository's environment: it runs in venv/ as worker processes
 (kvbound.baselines.exllamav3_lib), and the repository's environment starts them and writes the
@@ -43,7 +42,8 @@ from kvbound.models import load_spec
 from kvbound.paths import EXT, REPO_ROOT
 
 VERSION = "1.6.7"
-COMMIT = "v1.6.7"  # the release tag; GitHub builds the wheels from it
+# The commit the release tag v1.6.7 points at; GitHub builds the wheels from it.
+COMMIT = "8c593e4e5c88da76a4aaf8f1b1838bb7c1fce4e0"
 RELEASE_URL = f"https://github.com/turboderp-org/exllamav3/releases/download/v{VERSION}"
 WHEEL = Artifact(
     "wheel",
