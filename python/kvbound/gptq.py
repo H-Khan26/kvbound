@@ -281,8 +281,9 @@ def quantize_stage(
 
     Matrices named in `given` keep those F16 scales; when any is, the others in the stack take
     min-max scales of their weights before any update, so the whole stack has fixed scales.
-    Returns the stage's report: per matrix the output error after GPTQ and after rounding to
-    nearest on the scales GPTQ starts from (fixed ones, or min-max of the original weights).
+    Returns the stage's report: whether the group scales were fixed before any update, and per
+    matrix the output error after GPTQ and after rounding to nearest on the scales GPTQ starts
+    from (fixed ones, or min-max of the original weights).
     """
     names = list(linears)
     w = torch.cat([linears[name].weight.float() for name in names])
@@ -306,6 +307,7 @@ def quantize_stage(
 
     report: dict[str, Any] = {
         "dead_inputs": int((torch.diagonal(h) == 0).sum().item()),
+        "fixed_scales": fixed is not None or config.act_order or config.static_groups,
         "loss_predicted": loss,
         "matrices": {},
     }

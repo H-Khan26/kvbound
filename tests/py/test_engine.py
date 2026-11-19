@@ -181,7 +181,13 @@ def quantized_fixture(tmp_path_factory):
     calibration = torch.randint(fixture.HF_CONFIG["vocab_size"], (8, 32), generator=gen)
     dirs["int4_g.awq"] = tmp_path_factory.mktemp("int4_g.awq")
     quantize.convert(
-        FIXTURE_DIR, dirs["int4_g.awq"], "int4_g", group_size=32, clip="awq", awq=calibration
+        FIXTURE_DIR,
+        dirs["int4_g.awq"],
+        "int4_g",
+        group_size=32,
+        clip="awq",
+        calib=calibration,
+        awq=True,
     )
     return dirs
 

@@ -170,9 +170,10 @@ def test_convert_with_gptq(tmp_path, awq):
         GROUP,
         clip,
         device="cpu",
-        awq=ids if awq else None,
+        calib=ids,
+        awq=awq,
+        gptq=GptqConfig(),
         calib_meta=calib_meta,
-        gptq=ids,
     )
     with safe_open(str(out / "model.safetensors"), framework="pt") as f:
         metadata = f.metadata()
@@ -190,7 +191,16 @@ def test_convert_with_gptq(tmp_path, awq):
     )
     stored = load_file(str(out / "model.safetensors"))
     plain_dir = tmp_path / "plain"
-    convert(FIXTURE_DIR, plain_dir, "int4_g", GROUP, clip, device="cpu", awq=ids if awq else None)
+    convert(
+        FIXTURE_DIR,
+        plain_dir,
+        "int4_g",
+        GROUP,
+        clip,
+        device="cpu",
+        calib=ids if awq else None,
+        awq=awq,
+    )
     plain = load_file(str(plain_dir / "model.safetensors"))
     # The embedding rounds to nearest; the layers' integers differ; AWQ's scales are kept.
     assert torch.equal(stored["model.embed_tokens.weight"], plain["model.embed_tokens.weight"])
@@ -202,15 +212,9 @@ def test_convert_with_gptq(tmp_path, awq):
         assert torch.equal(stored[norm], plain[norm])
 
 
-def test_convert_refuses_mismatched_calibration(tmp_path):
-    with pytest.raises(ValueError, match="same tokens"):
-        convert(
-            FIXTURE_DIR,
-            tmp_path / "q",
-            "int4_g",
-            GROUP,
-            "awq",
-            device="cpu",
-            awq=calibration_ids(seed=0),
-            gptq=calibration_ids(seed=1),
-        )
+def test_convert_takes_calibration_tokens_only_with_awq_or_gptq(tmp_path):
+    with pytest.raises(ValueError, match="calib is given"):
+        convert(FIXTURE_DIR, tmp_path / "q", "int4_g", GROUP, device="cpu", gptq=GptqConfig())
+    with pytest.raises(ValueError, match="calib is given"):
+        convert(FIXTURE_DIR, tmp_path / "q", "int4_g", GROUP, device="cpu", calib=calibration_ids())
+    assert not (tmp_path / "q").exists()
