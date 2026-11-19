@@ -20,7 +20,7 @@ sends without their ids in an event are counted from the usage it reports; held_
 tokens that only the closing usage revealed, which take its time.
 
 One server process per run, sized like kvbound's bench: the longest sequence is prompt + new
-tokens, the KV cache holds one more (rounded up to the stack's block) at the chosen KV
+tokens, the KV cache holds that and a block to spare (sequence_kv_tokens) at the chosen KV
 type, one sequence at a time, the whole prompt in one step, CUDA graphs for batch 1 (vLLM
 captures its own set, batch 1 among them). GPU memory is NVML's device memory in use, sampled
 once a second from before the server starts to after it ends: gpu_memory_mib is the largest
@@ -230,9 +230,9 @@ class ServerTimings:
 
 def bench_config(stack: str, arch: Arch, max_ctx: int, kv: str) -> ls.ServerConfig:
     """One sequence of max_ctx tokens, its whole prompt in one step (a step takes max_ctx
-    tokens, so chunked prefill never splits it), a KV cache that holds it plus the one token
-    TensorRT-LLM's attention window reserves beyond the sequence, in whole blocks."""
-    tokens = ls.round_up(max_ctx + 1, ls.KV_BLOCK_TOKENS[stack])
+    tokens, so chunked prefill never splits it), a KV cache that holds it
+    (linux_stacks.sequence_kv_tokens)."""
+    tokens = ls.sequence_kv_tokens(stack, max_ctx)
     per_token = kv_bytes_per_token(arch, ls.KV_VALUE_BYTES[kv])
     return ls.ServerConfig(
         max_ctx=max_ctx,

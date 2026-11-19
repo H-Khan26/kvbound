@@ -113,7 +113,8 @@ LOG_FACTS = {
     "vllm": re.compile(
         r"Model loading took .*|Available KV cache memory: .*|GPU KV cache size: .*"
         r"|Maximum concurrency for .*|Graph capturing finished .*|Using .* backend.*"
-        r"|Memory profiling takes .*"
+        r"|Memory profiling takes .*|Initial free memory .*|Pinned host memory .*"
+        r"|Using FlashInfer .*"
     ),
     "tensorrt-llm": re.compile(
         r"\[MemUsageChange\].*|.*[Pp]aged KV cache.*|.*max_tokens.*|.*[Aa]ttention backend.*"
@@ -268,6 +269,14 @@ def weights_params(stack: str, model: str, fmt: str) -> dict[str, Any]:
 
 def round_up(n: int, multiple: int) -> int:
     return -(-n // multiple) * multiple
+
+
+def sequence_kv_tokens(stack: str, max_ctx: int) -> int:
+    """KV tokens that hold one sequence of max_ctx tokens: whole blocks for max_ctx + 1 tokens
+    (TensorRT-LLM's attention window takes one token beyond the sequence) and one block more
+    (vLLM keeps one block of its pool empty as a null block)."""
+    block = KV_BLOCK_TOKENS[stack]
+    return round_up(max_ctx + 1, block) + block
 
 
 @dataclass(frozen=True)

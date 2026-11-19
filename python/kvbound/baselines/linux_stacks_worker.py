@@ -2,13 +2,13 @@
 
 The harnesses (linux_stacks_eval, linux_stacks_quantize) run in kvbound's environment and start
 this module with the stack's interpreter, the repository's python/ folder as the working folder
-so that `-m kvbound.baselines.linux_stacks_worker` resolves. It imports nothing of kvbound but
-llamacpp_lib's NLL rule (numpy only), since the stack's environment holds neither kvbound's
-dependencies nor its torch. Inputs and outputs are files in a folder the harness names.
+so that `-m kvbound.baselines.linux_stacks_worker` resolves. It imports nothing else of kvbound,
+since the stack's environment holds neither kvbound's dependencies nor its torch, and nothing at
+module level but numpy. Inputs and outputs are files in a folder the harness names.
 
   nll        TensorRT-LLM: each window of ids.npy (spans.npy) fed from position 0 as one prompt
-             through the LLM API with its context logits returned, scored by kvbound's rule in
-             float64; writes result.json (per-window NLL sums and counts, seconds, settings).
+             through the LLM API with its context logits returned, scored by window_nll;
+             writes result.json (per-window NLL sums and counts, seconds, settings).
   quantize   llm-compressor (vLLM's checkpoints) or Model Optimizer (TensorRT-LLM's): 4-bit
              weights calibrated on calib.npy, written to --out; writes worker.json (the tool's
              version and the recipe).
@@ -25,21 +25,35 @@ from typing import Any
 
 import numpy as np
 
-from kvbound.baselines.llamacpp_lib import window_nll
-
 # Calibration windows per forward pass of Model Optimizer's calibration loop.
 CALIB_BATCH = 8
+# Rows of a window's logits scored together, which bounds the float32 copies.
+SCORE_ROWS = 256
+
+
+def window_nll(logits: Any, ids: list[int]) -> float:
+    """Summed NLL in nats of ids[1:] under logits[:-1] (a torch tensor [n, vocab]):
+    kvbound.evals.perplexity.window_nll's arithmetic, logsumexp in float32 and the sum in
+    float64, on the logits' device."""
+    import torch  # noqa: PLC0415
+
+    targets = torch.tensor(ids[1:], dtype=torch.int64, device=logits.device)
+    total = torch.zeros((), dtype=torch.float64, device=logits.device)
+    for start in range(0, len(ids) - 1, SCORE_ROWS):
+        rows = logits[start : min(start + SCORE_ROWS, len(ids) - 1)].float()
+        picked = targets[start : start + len(rows)]
+        nll = torch.logsumexp(rows, dim=-1) - rows.gather(-1, picked[:, None])[:, 0]
+        total += nll.double().sum()
+    return float(total.item())
 
 
 def nll(args: argparse.Namespace) -> None:
-    import torch  # noqa: PLC0415
     from tensorrt_llm import LLM, SamplingParams  # noqa: PLC0415
     from tensorrt_llm.llmapi import KvCacheConfig  # noqa: PLC0415
 
     ids = np.load(args.folder / "ids.npy")
     spans = np.load(args.folder / "spans.npy")
-    # One window plus the token generate() must produce, in whole blocks of 32 tokens.
-    kv_tokens = -(-(args.window + 1) // 32) * 32
+    kv_tokens = args.kv_tokens
     settings: dict[str, Any] = {
         "dtype": "float16",
         "max_batch_size": 1,
@@ -71,8 +85,7 @@ def nll(args: argparse.Namespace) -> None:
             if logits is None or logits.shape[0] != len(window):
                 shape = None if logits is None else tuple(logits.shape)
                 raise RuntimeError(f"context logits of shape {shape} for {len(window)} tokens")
-            rows = logits.to(torch.float32).cpu().numpy()
-            sums.append(window_nll(rows, window))
+            sums.append(window_nll(logits, window.tolist()))
             counts.append(end - start - 1)
     finally:
         llm.shutdown()
@@ -169,6 +182,7 @@ def main() -> None:
     p.add_argument("--model-dir", type=Path, required=True)
     p.add_argument("--tokenizer", type=Path, required=True)
     p.add_argument("--window", type=int, required=True)
+    p.add_argument("--kv-tokens", type=int, required=True, help="KV cache size in tokens")
     p.add_argument("--kv", default="auto")
     p = sub.add_parser("quantize")
     p.add_argument("folder", type=Path)

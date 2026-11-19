@@ -124,9 +124,9 @@ def test_bits_per_weight_counts_every_stored_byte_over_the_models_weights(tmp_pa
 def test_bench_cache_holds_one_sequence_in_whole_blocks():
     arch = Arch.from_table(models.load_spec("tinyllama-1.1b").arch)
     cfg = bench_config("tensorrt-llm", arch, 1152, "f16")
-    assert (cfg.kv_tokens, cfg.kv_bytes) == (1184, 1184 * 22528)
+    assert (cfg.kv_tokens, cfg.kv_bytes) == (1216, 1216 * 22528)
     assert (cfg.max_seqs, cfg.max_step_tokens) == (1, 1152)
-    assert bench_config("vllm", arch, 1000, "fp8").kv_tokens == 1008
+    assert bench_config("vllm", arch, 1000, "fp8").kv_tokens == 1024
 
 
 def test_serving_pool_holds_kvbounds_bytes_in_whole_blocks():
@@ -212,6 +212,17 @@ def test_prompt_logprobs_give_the_windows_nll():
     assert linux_stacks_eval.nll_from_prompt_logprobs(window, entries) == pytest.approx(1.75)
     with pytest.raises(RuntimeError, match="2 prompt logprobs for 3 tokens"):
         linux_stacks_eval.nll_from_prompt_logprobs(window, entries[:2])
+
+
+def test_worker_nll_is_kvbounds_rule():
+    import torch
+
+    from kvbound.baselines.linux_stacks_worker import window_nll
+    from kvbound.evals.perplexity import window_nll as kvbound_window_nll
+
+    logits = torch.randn(600, 50, generator=torch.Generator().manual_seed(0)).half()
+    ids = torch.randint(50, (600,), generator=torch.Generator().manual_seed(1))
+    assert window_nll(logits, ids.tolist()) == pytest.approx(kvbound_window_nll(logits, ids))
 
 
 def test_vllm_pass_counts_come_from_counter_differences_and_gauge_peaks():

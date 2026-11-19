@@ -72,7 +72,7 @@ def vllm_scores(
 ) -> tuple[list[float], list[int], float, dict[str, Any]]:
     """Per-window NLL sums and counts, the seconds the loop took and the server's settings."""
     arch = Arch.from_table(load_spec(model).arch)
-    tokens = ls.round_up(window + 1, ls.KV_BLOCK_TOKENS["vllm"])
+    tokens = ls.sequence_kv_tokens("vllm", window + 1)
     cfg = ls.ServerConfig(
         max_ctx=window + 1,
         max_seqs=1,
@@ -124,6 +124,7 @@ def trtllm_scores(
                 [str(python), "-E", "-s", "-m", "kvbound.baselines.linux_stacks_worker", "nll",
                  str(folder), "--model-dir", str(model_dir),
                  "--tokenizer", str(load_spec(model).checkpoint_dir), "--window", str(window),
+                 "--kv-tokens", str(ls.sequence_kv_tokens("tensorrt-llm", window + 1)),
                  "--kv", ls.KV_TYPES["tensorrt-llm"][kv]],
                 check=True, cwd=REPO_ROOT / "python", env=ls.runtime_env(), stdout=log,
                 stderr=subprocess.STDOUT,
