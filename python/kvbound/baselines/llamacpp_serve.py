@@ -10,7 +10,8 @@ come from kvbound.serve.latency_metrics, the code kvbound's own records use, ove
 client receives each token, counted from the start of the pass and from each request's scheduled
 arrival. send_lag is how late the client sent each request after its arrival; a request the
 server answers with an error, or with fewer tokens than asked, counts as failed and leaves the
-latency figures.
+latency figures. Tokens the server held back inside a UTF-8 character arrive with the closing
+event and take its time (held_tokens, see llamacpp_bench.read_stream).
 
 The server is llama-server with --parallel slots, a unified KV cache shared by all of them
 (--kv-unified) and continuous batching. The cache holds the bytes of kvbound.serve's pool,
@@ -164,10 +165,11 @@ def run_pass(port: int, trace: dict[str, Any]) -> list[dict[str, Any]]:
 def pass_metrics(trace: dict[str, Any], results: list[dict[str, Any]]) -> dict[str, float]:
     """kvbound.serve.latency_metrics over the requests that completed, plus send lag and the
     failed count. The pass ends with the last token received."""
-    done, failed = [], 0
+    done, failed, held = [], 0, 0
     lags = []
     for req, out in zip(trace["requests"], results, strict=True):
         lags.append(out["sent_s"] - req["arrival_s"])
+        held += out.get("held_tokens", 0)
         if out["error"] is not None or len(out["times"]) != req["max_new_tokens"]:
             failed += 1
             continue
@@ -178,6 +180,7 @@ def pass_metrics(trace: dict[str, Any], results: list[dict[str, Any]]) -> dict[s
     return {
         **serve.latency_metrics(done, total),
         "failed": failed,
+        "held_tokens": held,
         "send_lag_p50_s": statistics.median(lags),
         "send_lag_max_s": max(lags),
     }
@@ -305,7 +308,8 @@ def summary_line(result: dict[str, Any]) -> str:
         f" | TPOT p50 {ms['tpot_p50_s']:.1f} ms p90 {ms['tpot_p90_s']:.1f} ms"
         f" | latency p50 {m['latency_p50_s']['p50']:.2f} s p90 {m['latency_p90_s']['p50']:.2f} s"
         f" | up to {m['processing_peak']['max']:.0f} processing,"
-        f" {m['busy_slots_per_step']['p50']:.1f} per step | {m['failed']['max']:.0f} failed"
+        f" {m['busy_slots_per_step']['p50']:.1f} per step"
+        f" | {m['failed']['max']:.0f} failed, {m['held_tokens']['max']:.0f} held"
         f" | send lag max {m['send_lag_max_s']['max'] * 1e3:.1f} ms"
         f" | GPU memory +{m['gpu_memory_mib']:.0f} MiB"
     )

@@ -225,6 +225,14 @@ def test_tokens_sharing_an_event_take_its_time():
     assert out["error"] is None
 
 
+def test_tokens_held_inside_a_character_arrive_with_the_closing_event():
+    clock = iter([1.0, 2.0]).__next__
+    lines = _events({"tokens": [5]}, {"tokens": [], "stop": True, "tokens_predicted": 3})
+    out = read_stream(lines, 0.0, clock)
+    assert out["times"] == [1.0, 2.0, 2.0]
+    assert (out["tokens"], out["held_tokens"]) == ([5], 2)
+
+
 def test_an_error_event_ends_the_stream():
     out = read_stream(_events({"tokens": [5]}, {"error": {"message": "full"}}), 0.0, lambda: 1.0)
     assert out["error"] == {"message": "full"}

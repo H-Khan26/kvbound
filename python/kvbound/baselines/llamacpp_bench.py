@@ -135,10 +135,15 @@ def read_stream(
 ) -> dict[str, Any]:
     """The server-sent events of one completion: the ids received, the seconds from origin to
     the event that carried each, the closing event, and the error the server sent, if any. Ids
-    that arrive together take their event's time; multi_token_events counts such events."""
+    that arrive together take their event's time; multi_token_events counts such events.
+
+    The server holds back a token that ends inside a UTF-8 character; when a completion ends
+    there, its last ids never arrive and only the closing event's tokens_predicted counts them.
+    Those tokens become available with the closing event and take its time; held_tokens counts
+    them, and tokens holds only the ids received."""
     times: list[float] = []
     tokens: list[int] = []
-    multi = 0
+    multi = held = 0
     final: dict[str, Any] = {}
     error = None
     for line in lines:
@@ -155,12 +160,15 @@ def read_stream(
         multi += len(ids) > 1
         if event.get("stop"):
             final = event
+            held = max(0, int(event.get("tokens_predicted", len(times))) - len(times))
+            times += [now] * held
             break
     return {
         "times": times,
         "tokens": tokens,
         "final": final,
         "multi_token_events": multi,
+        "held_tokens": held,
         "error": error,
     }
 
@@ -261,8 +269,8 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             outs = [server.complete(body) for _ in range(args.iters)]
             log = server.log()
     for out in outs:
-        if len(out["tokens"]) != args.new_tokens:
-            raise RuntimeError(f"expected {args.new_tokens} tokens, received {len(out['tokens'])}")
+        if len(out["times"]) != args.new_tokens:
+            raise RuntimeError(f"expected {args.new_tokens} tokens, received {len(out['times'])}")
         prompt_n = out["final"]["timings"]["prompt_n"]
         if prompt_n != args.prompt_len:
             raise RuntimeError(
@@ -280,6 +288,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     }
     metrics["server"] = {name: record.summarize(v) for name, v in server_samples.items()}
     metrics["multi_token_events"] = sum(out["multi_token_events"] for out in outs)
+    metrics["held_tokens"] = sum(out["held_tokens"] for out in outs)
     used = sampler.samples["mem_used_mib"]
     metrics["gpu_memory_mib"] = max(used) - min(used)
     metrics["buffers_mib"] = buffers_mib(log)
