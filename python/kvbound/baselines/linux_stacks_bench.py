@@ -20,10 +20,11 @@ sends without their ids in an event are counted from the usage it reports; held_
 tokens that only the closing usage revealed, which take its time.
 
 One server process per run, sized like kvbound's bench: the longest sequence is prompt + new
-tokens, the KV cache holds that many tokens (rounded up to the stack's block) at the chosen KV
-type, one sequence at a time, the whole prompt in one step (no chunked prefill), CUDA graphs
-for batch 1. GPU memory is NVML's device memory in use, sampled once a second from before the
-server starts to after it ends: gpu_memory_mib is the largest sample less the smallest, as
+tokens, the KV cache holds one more (rounded up to the stack's block) at the chosen KV
+type, one sequence at a time, the whole prompt in one step, CUDA graphs for batch 1 (vLLM
+captures its own set, batch 1 among them). GPU memory is NVML's device memory in use, sampled
+once a second from before the server starts to after it ends: gpu_memory_mib is the largest
+sample less the smallest, as
 kvbound.bench prints for kvb-bench. It includes what the stack reserves beyond the model and
 the cache (CUDA graphs, torch.compile workspaces, the sampler); the lines of the server log that
 report memory are kept in server_log.
@@ -228,8 +229,10 @@ class ServerTimings:
 
 
 def bench_config(stack: str, arch: Arch, max_ctx: int, kv: str) -> ls.ServerConfig:
-    """One sequence of max_ctx tokens, its whole prompt in one step, a KV cache that holds it."""
-    tokens = ls.round_up(max_ctx, ls.KV_BLOCK_TOKENS[stack])
+    """One sequence of max_ctx tokens, its whole prompt in one step (a step takes max_ctx
+    tokens, so chunked prefill never splits it), a KV cache that holds it plus the one token
+    TensorRT-LLM's attention window reserves beyond the sequence, in whole blocks."""
+    tokens = ls.round_up(max_ctx + 1, ls.KV_BLOCK_TOKENS[stack])
     per_token = kv_bytes_per_token(arch, ls.KV_VALUE_BYTES[kv])
     return ls.ServerConfig(
         max_ctx=max_ctx,
@@ -238,7 +241,6 @@ def bench_config(stack: str, arch: Arch, max_ctx: int, kv: str) -> ls.ServerConf
         kv_tokens=tokens,
         kv_bytes=int(tokens * per_token),
         kv=kv,
-        chunked_prefill=False,
         cuda_graph_batch_sizes=(1,),
     )
 

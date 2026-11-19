@@ -103,6 +103,8 @@ QUANT_TOOL = {"vllm": LLMCOMPRESSOR, "tensorrt-llm": TRTLLM}
 KV_TYPES = {"vllm": {"f16": "auto", "fp8": "fp8"}, "tensorrt-llm": {"f16": "auto", "fp8": "fp8"}}
 # Bytes of one cached value of each KV type.
 KV_VALUE_BYTES = {"f16": 2.0, "fp8": 1.0}
+# The share of the card vLLM requires free at start-up (see vllm_settings).
+GPU_MEMORY_UTILIZATION = 0.6
 # Tokens per KV block: vLLM's default for these models and TensorRT-LLM's tokens_per_block.
 KV_BLOCK_TOKENS = {"vllm": 16, "tensorrt-llm": 32}
 
@@ -279,6 +281,7 @@ class ServerConfig:
     kv_bytes: int  # bytes of those tokens at kv
     kv: str = "f16"  # KV cache element type, a key of KV_VALUE_BYTES
     chunked_prefill: bool = True
+    # Batch sizes TensorRT-LLM captures CUDA graphs for; vLLM picks its own from max_seqs.
     cuda_graph_batch_sizes: tuple[int, ...] = (1,)
 
 
@@ -293,11 +296,13 @@ def vllm_settings(model_dir: Path, tokenizer: Path, model: str, cfg: ServerConfi
         "--max-num-seqs": cfg.max_seqs,
         "--max-num-batched-tokens": cfg.max_step_tokens,
         "--kv-cache-memory-bytes": cfg.kv_bytes,
+        # With the KV bytes given, the utilization only gates start-up: vLLM refuses to start
+        # unless this share of the card is free, and the desktop holds part of it.
+        "--gpu-memory-utilization": GPU_MEMORY_UTILIZATION,
         "--kv-cache-dtype": KV_TYPES["vllm"][cfg.kv],
         "--block-size": KV_BLOCK_TOKENS["vllm"],
         "--disable-prefix-caching": True,
         "--enable-chunked-prefill" if cfg.chunked_prefill else "--disable-chunked-prefill": True,
-        "--cudagraph-capture-sizes": " ".join(str(b) for b in cfg.cuda_graph_batch_sizes),
         # Sampling defaults come from requests only, not from a generation_config.json.
         "--generation-config": "vllm",
         "--seed": 0,
@@ -327,6 +332,7 @@ def trtllm_settings(model_dir: Path, tokenizer: Path, model: str, cfg: ServerCon
             "cuda_graph_config": {"batch_sizes": list(cfg.cuda_graph_batch_sizes)},
             # Per-request server timings at /perf_metrics, per-iteration stats at /metrics.
             "return_perf_metrics": True,
+            "perf_metrics_max_requests": 10000,
             "enable_iter_perf_stats": True,
         },
     }
@@ -356,8 +362,6 @@ def command_line(stack: str, settings: dict[str, Any], options_file: Path, port:
             command += ["--extra_llm_api_options", str(options_file)]
         elif value is True:
             command.append(flag)
-        elif flag == "--cudagraph-capture-sizes":
-            command += [flag, *str(value).split()]
         else:
             command += [flag, str(value)]
     return [*command, "--host", HOST, "--port", str(port)]

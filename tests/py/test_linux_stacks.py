@@ -124,8 +124,8 @@ def test_bits_per_weight_counts_every_stored_byte_over_the_models_weights(tmp_pa
 def test_bench_cache_holds_one_sequence_in_whole_blocks():
     arch = Arch.from_table(models.load_spec("tinyllama-1.1b").arch)
     cfg = bench_config("tensorrt-llm", arch, 1152, "f16")
-    assert (cfg.kv_tokens, cfg.kv_bytes) == (1152, 1152 * 22528)
-    assert (cfg.max_seqs, cfg.max_step_tokens, cfg.chunked_prefill) == (1, 1152, False)
+    assert (cfg.kv_tokens, cfg.kv_bytes) == (1184, 1184 * 22528)
+    assert (cfg.max_seqs, cfg.max_step_tokens) == (1, 1152)
     assert bench_config("vllm", arch, 1000, "fp8").kv_tokens == 1008
 
 
@@ -150,7 +150,7 @@ def test_vllm_command_line(tmp_path):
     joined = " ".join(command)
     assert "--kv-cache-memory-bytes 184549376" in joined and "--kv-cache-dtype fp8" in joined
     assert "--disable-prefix-caching" in command and "--enable-chunked-prefill" in command
-    assert command[command.index("--cudagraph-capture-sizes") + 1] == "1"
+    assert command[command.index("--gpu-memory-utilization") + 1] == "0.6"
     assert command[-4:] == ["--host", "127.0.0.1", "--port", "1234"]
     assert not (tmp_path / "x.yaml").exists()
 

@@ -80,7 +80,6 @@ def vllm_scores(
         kv_tokens=tokens,
         kv_bytes=int(tokens * kv_bytes_per_token(arch, ls.KV_VALUE_BYTES[kv])),
         kv=kv,
-        chunked_prefill=False,
     )
     settings = ls.server_settings("vllm", model, weights, cfg)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
