@@ -1,4 +1,4 @@
-.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters step-counters microbench quantize eval precision eval-asr bench-asr qaihub fetch-llamacpp bench-llamacpp eval-llamacpp report predict lint format typecheck clean
+.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters step-counters microbench quantize eval precision eval-asr bench-asr qaihub fetch-llamacpp bench-llamacpp serve-llamacpp eval-llamacpp report predict lint format typecheck clean
 
 # torch wheel: cu128 on GPU machines, cpu in CI and on machines without a GPU
 TORCH ?= cu128
@@ -78,8 +78,9 @@ bench:            ## kvbound engine: batch 1 decode and a long prompt, like benc
 	uv run python -m kvbound.bench --model $(MODEL) --prompt-len 128 --no-graph
 	uv run python -m kvbound.bench --model $(MODEL) --prompt-len 1024
 
-# The KV pool of every serve run: 8 sequences of 1,024 tokens.
-SERVE = uv run python -m kvbound.serve --model $(MODEL) --pool-seqs 8
+# The KV pool of every serve run, kvbound's and llama.cpp's: this many sequences of 1,024 tokens.
+POOL_SEQS ?= 8
+SERVE = uv run python -m kvbound.serve --model $(MODEL) --pool-seqs $(POOL_SEQS)
 # The paged design: the same pool in 16-token blocks, shared by up to this many sequences.
 PAGED = --policy continuous --kv-block-size 16 --slots $(PAGED_SLOTS)
 PAGED_SLOTS ?= 64
@@ -167,7 +168,12 @@ qaihub:           ## re-download AI Hub profile jobs and summarize them into res
 	uv run python -m kvbound.baselines.qai_hub summarize --raw "$(QAIHUB_RAW)"
 
 # llama.cpp at the release pinned in kvbound.baselines.llamacpp, under $KVBOUND_EXT (default ext/).
-LLAMACPP_FORMATS ?= F16 Q8_0 Q4_K_M Q4_0
+LLAMACPP_FORMATS ?= F16 Q8_0 Q4_K_M Q4_0 Q4_0_PURE
+# Formats and KV cache types of serve-llamacpp; q8_0 is the analog of kvbound's INT8 cache.
+LLAMACPP_SERVE_FORMATS ?= F16 Q4_K_M Q4_0
+LLAMACPP_SERVE_KV ?= f16 q8_0
+# The pool of make serve: 8 sequences of 1,024 tokens, in bytes.
+LLAMACPP_SERVE = uv run python -m kvbound.baselines.llamacpp_serve --model $(MODEL) --pool-seqs $(POOL_SEQS)
 
 fetch-llamacpp:   ## pinned llama.cpp release and the GGUF files of a model under $KVBOUND_EXT (MODEL=...)
 	uv run python -m kvbound.baselines.llamacpp fetch
@@ -177,9 +183,18 @@ bench-llamacpp:   ## llama.cpp through llama-server: batch 1 decode and a long p
 	for f in $(LLAMACPP_FORMATS); do \
 	  uv run python -m kvbound.baselines.llamacpp_bench --model $(MODEL) --weights $$f --prompt-len 128 || exit 1; \
 	  uv run python -m kvbound.baselines.llamacpp_bench --model $(MODEL) --weights $$f --prompt-len 1024 || exit 1; \
+	  uv run python -m kvbound.baselines.llamacpp_bench --model $(MODEL) --weights $$f --prompt-len 1024 --ubatch-size 1024 || exit 1; \
 	done
 
-eval-llamacpp:    ## WikiText-2 perplexity of each GGUF format under kvbound's protocol (MODEL=...)
+serve-llamacpp:   ## llama.cpp through llama-server: serve-load's longtail arrivals and precision's 96 fixed requests, same KV bytes (MODEL=...)
+	for f in $(LLAMACPP_SERVE_FORMATS); do for k in $(LLAMACPP_SERVE_KV); do \
+	  for r in $(RATES); do \
+	    $(LLAMACPP_SERVE) --weights $$f --kv $$k --workload longtail --rate $$r --parallel 64 || exit 1; \
+	  done; \
+	  $(LLAMACPP_SERVE) --weights $$f --kv $$k --workload fixed --requests 96 || exit 1; \
+	done; done
+
+eval-llamacpp:   ## WikiText-2 perplexity of each GGUF format under kvbound's protocol (MODEL=...)
 	for f in $(LLAMACPP_FORMATS); do \
 	  uv run python -m kvbound.baselines.llamacpp_eval --model $(MODEL) --weights $$f || exit 1; \
 	done
