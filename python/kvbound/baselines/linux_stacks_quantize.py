@@ -52,6 +52,7 @@ def quantize(stack: str, model: str, fmt: str, device: str = "cuda") -> Path:
         shutil.rmtree(partial)  # a folder this function made and did not finish
     partial.mkdir(parents=True)
     log_path = ls.STACKS[stack].root / "logs" / f"quantize-{model}-{fmt}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     env = ls.runtime_env()
     if device == "cpu":
         env["CUDA_VISIBLE_DEVICES"] = ""

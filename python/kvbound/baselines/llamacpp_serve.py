@@ -199,7 +199,9 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
                 if i < args.warmup:
                     continue
                 passes.append(results)
-                steps.append(step_counts(before, poller.read()))
+                steps.append(
+                    {**step_counts(before, poller.read()), "failed_reads": poller.failed_reads}
+                )
                 processing.append(
                     max((s["requests_processing"] for s in poller.samples), default=0.0)
                 )

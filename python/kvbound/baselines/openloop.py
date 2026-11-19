@@ -8,7 +8,6 @@ kvbound.serve.latency_metrics, the code kvbound's own records use, over the requ
 completed, with send lag and the failed count beside it.
 """
 
-import contextlib
 import http.client
 import statistics
 import threading
@@ -52,19 +51,23 @@ def run_pass(trace: dict[str, Any], send: Send) -> list[dict[str, Any]]:
 
 class Poller:
     """Calls read() every interval_s on a thread between start() and stop(), keeping what it
-    returns in samples; a read that fails with OSError is skipped."""
+    returns in samples. A read that raises is skipped and counted in failed_reads, so the
+    thread keeps sampling and the caller can tell whether samples are missing."""
 
     def __init__(self, read: Callable[[], Any], interval_s: float = 0.1) -> None:
         self.read = read
         self.interval_s = interval_s
         self.samples: list[Any] = []
+        self.failed_reads = 0
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def _run(self) -> None:
         while not self._stop.wait(self.interval_s):
-            with contextlib.suppress(OSError):  # a missed sample is not worth stopping for
+            try:
                 self.samples.append(self.read())
+            except Exception:  # any failure is one missed sample
+                self.failed_reads += 1
 
     def start(self) -> None:
         self._thread.start()

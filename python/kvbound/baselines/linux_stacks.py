@@ -105,6 +105,20 @@ KV_TYPES = {"vllm": {"f16": "auto", "fp8": "fp8"}, "tensorrt-llm": {"f16": "auto
 KV_VALUE_BYTES = {"f16": 2.0, "fp8": 1.0}
 # The share of the card vLLM requires free at start-up (see vllm_settings).
 GPU_MEMORY_UTILIZATION = 0.6
+# Settings of the servers here that differ from the stack's own defaults, with those defaults;
+# records carry them so a reader does not take them for the stack out of the box.
+NOT_STACK_DEFAULTS = {
+    "vllm": {
+        "--disable-prefix-caching": "prefix caching is on by default",
+        "--gpu-memory-utilization": f"{GPU_MEMORY_UTILIZATION} (default 0.92); with the KV bytes"
+        " given it only gates start-up",
+    },
+    "tensorrt-llm": {
+        "cuda_graph_config.enable_padding": "true (default false): batches between captured"
+        " sizes are padded up instead of run without a CUDA graph",
+        "kv_cache_config.enable_block_reuse": "false (default true)",
+    },
+}
 # Tokens per KV block: vLLM's default for these models and TensorRT-LLM's tokens_per_block.
 KV_BLOCK_TOKENS = {"vllm": 16, "tensorrt-llm": 32}
 

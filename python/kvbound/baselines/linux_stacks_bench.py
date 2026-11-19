@@ -280,9 +280,12 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
                 out = stream_completion(server.port, body)
                 if out["error"] is not None:
                     raise RuntimeError(f"/v1/completions failed: {out['error']}")
+                # Read after warmup requests too, so each measured read starts from a server that
+                # has recorded every earlier request.
+                server_timing = timings.timings(args.new_tokens)
                 if i >= args.warmup:
                     outs.append(out)
-                    server_samples.append(timings.timings(args.new_tokens))
+                    server_samples.append(server_timing)
             log = server.log()
     for out in outs:
         if len(out["times"]) != args.new_tokens:
@@ -320,6 +323,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "kv_tokens": cfg.kv_tokens,
             "kv_bytes": cfg.kv_bytes,
             "server": settings,
+            "not_stack_defaults": ls.NOT_STACK_DEFAULTS[args.stack],
             "request": {k: v for k, v in body.items() if k != "prompt"},
             "server_log": ls.log_facts(args.stack, log),
         },

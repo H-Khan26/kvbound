@@ -284,6 +284,40 @@ def test_poller_keeps_readings_until_stopped():
     assert n >= 2 and len(poller.samples) == n and poller.samples[:2] == [0, 1]
 
 
+def test_poller_counts_failed_reads_and_keeps_sampling():
+    calls = iter(range(1000))
+
+    def read():
+        n = next(calls)
+        if n % 2:
+            raise (RuntimeError if n % 4 == 1 else ValueError)(f"read {n} failed")
+        return n
+
+    poller = openloop.Poller(read, interval_s=0.01)
+    poller.start()
+    time.sleep(0.15)
+    poller.stop()
+    assert poller.failed_reads >= 2 and len(poller.samples) >= 2
+    assert all(s % 2 == 0 for s in poller.samples)
+
+
+def _serve_metrics(failed, failed_reads):
+    return {"failed": {"max": failed}, "failed_reads": {"max": failed_reads}}
+
+
+def test_a_trtllm_pass_that_missed_a_counter_read_is_not_recorded():
+    refusal = linux_stacks_serve.refusal
+    assert refusal("tensorrt-llm", _serve_metrics(0, 0)) is None
+    assert "reads of /metrics failed" in refusal("tensorrt-llm", _serve_metrics(0, 1))
+    assert refusal("vllm", _serve_metrics(0, 3)) is None  # cumulative counters
+    assert "2 requests failed" in refusal("vllm", _serve_metrics(2, 0))
+
+
+def test_records_state_the_settings_that_are_not_the_stacks_defaults():
+    assert "cuda_graph_config.enable_padding" in ls.NOT_STACK_DEFAULTS["tensorrt-llm"]
+    assert "--disable-prefix-caching" in ls.NOT_STACK_DEFAULTS["vllm"]
+
+
 def test_server_process_waits_for_health_and_ends_the_server(tmp_path):
     port = free_port()
     command = [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"]

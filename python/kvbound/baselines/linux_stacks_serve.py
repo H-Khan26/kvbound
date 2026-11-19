@@ -18,7 +18,8 @@ prefill chunks included: kvbound's --slots and --max-step-tokens. Prefix caching
 During each pass the server's counters are read 10 times a second: vLLM's Prometheus gauges
 (requests running and waiting, KV use) and counters (preemptions, engine steps and the tokens
 they processed), TensorRT-LLM's per-iteration stats at /metrics (active and queued requests,
-requests per iteration, KV blocks in use). GPU memory is sampled by NVML.
+requests per iteration, KV blocks in use); failed_reads counts the readings that failed, and a
+TensorRT-LLM pass that missed one is not recorded. GPU memory is sampled by NVML.
 
 Not comparable with kvbound.serve:
   admission    vLLM admits by free blocks and preempts the newest request when the cache runs
@@ -180,10 +181,11 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
                     continue
                 passes.append(results)
                 if args.stack == "vllm":
-                    counts.append(vllm_counts(before, after, poller.samples))
+                    c = vllm_counts(before, after, poller.samples)
                 else:
                     iterations = [it for s in [*poller.samples, after] for it in s]
-                    counts.append(trtllm_counts(iterations))
+                    c = trtllm_counts(iterations)
+                counts.append({**c, "failed_reads": float(poller.failed_reads)})
             log = server.log()
 
     runs = [
@@ -229,12 +231,26 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "iters": args.iters,
             **weights,
             "server": settings,
+            "not_stack_defaults": ls.NOT_STACK_DEFAULTS[args.stack],
             "server_log": ls.log_facts(args.stack, log),
         },
         "metrics": metrics,
         "samples": samples,
         "nvml": sampler.summary(),
     }
+
+
+def refusal(stack: str, metrics: dict[str, Any]) -> str | None:
+    """Why a result must not be recorded, or None. A pass that lost requests is not the
+    workload kvbound's records measure. TensorRT-LLM's /metrics hands out each iteration's
+    stats once, so a missed read loses iterations and its step counts and peaks are partial;
+    vLLM's counters are cumulative and its peaks are gauges, so a missed read costs one
+    sample."""
+    if failed := metrics["failed"]["max"]:
+        return f"{failed:.0f} requests failed in a measured pass"
+    if stack == "tensorrt-llm" and (missed := metrics["failed_reads"]["max"]):
+        return f"{missed:.0f} reads of /metrics failed in a measured pass; its counts are partial"
+    return None
 
 
 def summary_line(result: dict[str, Any]) -> str:
@@ -249,7 +265,8 @@ def summary_line(result: dict[str, Any]) -> str:
         f" | TPOT p50 {ms['tpot_p50_s']:.1f} ms p90 {ms['tpot_p90_s']:.1f} ms"
         f" | latency p50 {m['latency_p50_s']['p50']:.2f} s p90 {m['latency_p90_s']['p50']:.2f} s"
         f" | up to {m['running_peak']['max']:.0f} running, {m['waiting_peak']['max']:.0f} waiting"
-        f" | {m['failed']['max']:.0f} failed, {m['held_tokens']['max']:.0f} held"
+        f" | {m['failed']['max']:.0f} failed, {m['held_tokens']['max']:.0f} held,"
+        f" {m['failed_reads']['max']:.0f} missed counter reads"
         f" | send lag max {m['send_lag_max_s']['max'] * 1e3:.1f} ms"
         f" | GPU memory +{m['gpu_memory_mib']:.0f} MiB"
     )
@@ -284,8 +301,8 @@ def main() -> None:
     if args.no_record:
         print(json.dumps({"metrics": result["metrics"]}, indent=1))
         return
-    if failed := result["metrics"]["failed"]["max"]:
-        raise SystemExit(f"not recorded: {failed:.0f} requests failed in a measured pass")
+    if reason := refusal(args.stack, result["metrics"]):
+        raise SystemExit(f"not recorded: {reason}")
     print(record.write_record(**result))
 
 
