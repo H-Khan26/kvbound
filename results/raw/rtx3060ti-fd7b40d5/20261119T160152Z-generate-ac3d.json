@@ -1,0 +1,488 @@
+{
+  "schema_version": 1,
+  "run_id": "20261119T160152Z-generate-ac3d",
+  "kind": "generate",
+  "created_utc": "2026-11-19T16:01:52+00:00",
+  "tags": [
+    "os=wsl"
+  ],
+  "engine": {
+    "name": "tensorrt-llm",
+    "version": "1.2.1",
+    "external": true,
+    "route": "openai-completions",
+    "requirements": "configs/stacks/tensorrt-llm/requirements.txt",
+    "requirements_sha256": "d0a9da006be52c14aa0dae4d6ccec0e7ef9a57036bff0e0e27f7aa7ba0ef8626"
+  },
+  "model": {
+    "name": "llama-3.2-1b",
+    "hf_repo": "meta-llama/Llama-3.2-1B",
+    "revision": "4e20de362430cd3b72f300e6b0f18e50e7166e08",
+    "family": "llama"
+  },
+  "params": {
+    "batch": 1,
+    "prompt_len": 128,
+    "new_tokens": 128,
+    "max_ctx": 256,
+    "warmup": 2,
+    "iters": 10,
+    "seed": 0,
+    "sampling": "greedy",
+    "prompt": "kvbound.bench.random_prompt",
+    "weights": "F16",
+    "bits_per_weight": 16.0,
+    "checkpoint": {
+      "bits_per_weight": 16.0,
+      "weights": 1235814400,
+      "folder": "/home/kvb/kvbound/data/models/llama-3.2-1b"
+    },
+    "kv": "f16",
+    "kv_tokens": 320,
+    "kv_bytes": 10485760,
+    "server": {
+      "model": "/home/kvb/kvbound/data/models/llama-3.2-1b",
+      "--tokenizer": "/home/kvb/kvbound/data/models/llama-3.2-1b",
+      "--backend": "pytorch",
+      "--max_batch_size": 1,
+      "--max_num_tokens": 256,
+      "--max_seq_len": 256,
+      "extra_llm_api_options": {
+        "dtype": "float16",
+        "kv_cache_config": {
+          "max_tokens": 320,
+          "dtype": "auto",
+          "enable_block_reuse": false,
+          "tokens_per_block": 32
+        },
+        "enable_chunked_prefill": true,
+        "cuda_graph_config": {
+          "batch_sizes": [
+            1
+          ],
+          "enable_padding": true
+        },
+        "return_perf_metrics": true,
+        "perf_metrics_max_requests": 10000,
+        "enable_iter_perf_stats": true
+      }
+    },
+    "not_stack_defaults": {
+      "cuda_graph_config.enable_padding": "true (default false): batches between captured sizes are padded up instead of run without a CUDA graph",
+      "kv_cache_config.enable_block_reuse": "false (default true)"
+    },
+    "request": {
+      "model": "llama-3.2-1b",
+      "max_tokens": 128,
+      "temperature": 0.0,
+      "top_k": 1,
+      "ignore_eos": true,
+      "seed": 0,
+      "stream": true,
+      "stream_options": {
+        "include_usage": true,
+        "continuous_usage_stats": true
+      },
+      "detokenize": false
+    },
+    "server_log": [
+      "[TensorRT-LLM][INFO] [MemUsageChange] Allocated 0.01 GiB for max tokens in paged KV cache (320).",
+      "[11/19/2026-08:01:38] [TRT-LLM] [I] max_tokens=320 is provided, max_memory is set to 0.01 GiB",
+      "[11/19/2026-08:01:38] [TRT-LLM] [W] Both free_gpu_memory_fraction and max_tokens are set (to 0.9 and 320 with free memory 4.43359375GiB of total memory 7.99951171875GiB, respectively). The smaller value will be used.",
+      ")) tokenizer_mode='auto' custom_tokenizer=None skip_tokenizer_init=False trust_remote_code=False tensor_parallel_size=1 dtype='float16' revision=None tokenizer_revision=None pipeline_parallel_size=1 context_parallel_size=1 gpus_per_node=1 moe_cluster_parallel_size=-1 moe_tensor_parallel_size=-1 moe_expert_parallel_size=-1 enable_attention_dp=False enable_lm_head_tp_in_adp=False pp_partition=None cp_config={} load_format=<LoadFormat.AUTO: 0> fail_fast_on_attention_window_too_large=False enable_lora=False lora_config=None kv_cache_config=KvCacheConfig(enable_block_reuse=False, max_tokens=320, max_attention_window=None, sink_token_length=None, free_gpu_memory_fraction=0.9, host_cache_size=None, onboard_blocks=True, cross_kv_cache_fraction=None, secondary_offload_min_priority=None, event_buffer_max_size=0, attention_dp_events_gather_period_ms=5, enable_partial_reuse=True, copy_on_partial_reuse=True, use_uvm=False, max_gpu_total_bytes=10485760, dtype='auto', mamba_ssm_cache_dtype='auto', tokens_per_block=32) enable_chunked_prefill=True guided_decoding_backend=None batched_logits_processor=None iter_stats_max_iterations=None request_stats_max_iterations=None peft_cache_config=None scheduler_config=SchedulerConfig(capacity_scheduler_policy=<CapacitySchedulerPolicy.GUARANTEED_NO_EVICT: 'GUARANTEED_NO_EVICT'>, context_chunking_policy=None, dynamic_batch_config=DynamicBatchConfig(enable_batch_size_tuning=True, enable_max_num_tokens_tuning=False, dynamic_batch_moving_average_window=128)) cache_transceiver_config=None sparse_attention_config=None speculative_config=None max_batch_size=1 max_input_len=1024 max_seq_len=256 max_beam_width=1 max_num_tokens=256 gather_generation_logits=False num_postprocess_workers=0 postprocess_tokenizer_dir='/home/kvb/kvbound/data/models/llama-3.2-1b' reasoning_parser=None decoding_config=None mpi_session=None otlp_traces_endpoint=None backend='pytorch' return_perf_metrics=True orchestrator_type=None env_overrides=None garbage_collection_gen0_threshold=20000 cuda_graph_config=CudaGraphConfig(batch_sizes=[1], max_batch_size=1, enable_padding=True) attention_dp_config=None disable_overlap_scheduler=False moe_config=MoeConfig(backend='CUTLASS', max_num_tokens=None, load_balancer=None, disable_finalize_fusion=False, use_low_precision_moe_combine=False) nvfp4_gemm_config=Nvfp4GemmConfig(allowed_backends=['cutlass', 'cublaslt', 'cuda_core']) attn_backend='TRTLLM' sampler_type=<SamplerType.auto: 'auto'> sampler_force_async_worker=False enable_iter_perf_stats=True enable_iter_req_stats=False print_iter_log=False perf_metrics_max_requests=10000 batch_wait_timeout_ms=0 batch_wait_timeout_iters=0 batch_wait_max_tokens_ratio=0 torch_compile_config=None enable_autotuner=True enable_layerwise_nvtx_marker=False enable_min_latency=False stream_interval=1 force_dynamic_quantization=False allreduce_strategy='AUTO' checkpoint_loader=None checkpoint_format='HF' kv_connector_config=None mm_encoder_only=False ray_worker_extension_cls=None ray_placement_config=None enable_sleep=False disable_flashinfer_sampling=False max_stats_len=1000"
+    ]
+  },
+  "metrics": {
+    "ttft_s": {
+      "n": 10,
+      "mean": 0.017536180100023557,
+      "stdev": 0.0006814200500941189,
+      "min": 0.01708890099985183,
+      "p50": 0.017294750000132808,
+      "p90": 0.01792559000007259,
+      "max": 0.019368200000144498
+    },
+    "tpot_s": {
+      "n": 10,
+      "mean": 0.006916589584251576,
+      "stdev": 2.5791579254895105e-05,
+      "min": 0.00689541418110162,
+      "p50": 0.0069092441574797,
+      "p90": 0.006924148724408407,
+      "max": 0.006987926834646828
+    },
+    "decode_tok_s": {
+      "n": 10,
+      "mean": 144.58171876496164,
+      "stdev": 0.5346331581992768,
+      "min": 143.10395968113198,
+      "p50": 144.73363477441336,
+      "p90": 144.82902158059926,
+      "max": 145.02392078792266
+    },
+    "e2e_tok_s": {
+      "n": 10,
+      "mean": 142.86779946559892,
+      "stdev": 0.4984677754133959,
+      "min": 141.5059491383908,
+      "p50": 142.97997032745954,
+      "p90": 143.1640651825,
+      "max": 143.27271351775178
+    },
+    "decode_step_p50_s": {
+      "n": 10,
+      "mean": 0.006900000099972203,
+      "stdev": 1.8116385465319204e-05,
+      "min": 0.0068696999999247055,
+      "p50": 0.0068994499999917025,
+      "p90": 0.0069136200998855205,
+      "max": 0.0069354009999642585
+    },
+    "server": {
+      "ttft_s": {
+        "n": 10,
+        "mean": 0.01605800000002091,
+        "stdev": 0.0006582189774069188,
+        "min": 0.01561400000014146,
+        "p50": 0.015812999999980093,
+        "p90": 0.016484100000025138,
+        "max": 0.017826000000013664
+      },
+      "tpot_s": {
+        "n": 10,
+        "mean": 0.006917259055117708,
+        "stdev": 2.579267280624637e-05,
+        "min": 0.0068966614173215325,
+        "p50": 0.0069098543307094095,
+        "p90": 0.006926201574802819,
+        "max": 0.006988464566927901
+      },
+      "queue_s": {
+        "n": 10,
+        "mean": 0.0010806999999886102,
+        "stdev": 7.730466421618206e-05,
+        "min": 0.0009689999999409338,
+        "p50": 0.001071000000024469,
+        "p90": 0.0011888999999655424,
+        "max": 0.0012329999999565189
+      }
+    },
+    "multi_token_events": 0,
+    "held_tokens": 0,
+    "gpu_memory_mib": 3777
+  },
+  "samples": {
+    "ttft_s": [
+      0.017239499999959662,
+      0.01708890099985183,
+      0.01728650000018206,
+      0.0177653000000646,
+      0.017109200000049896,
+      0.017303000000083557,
+      0.017197299999907045,
+      0.019368200000144498,
+      0.01732040000001689,
+      0.017683499999975538
+    ],
+    "tpot_s": [
+      0.006916166984251325,
+      0.006987926834646828,
+      0.006917062267715249,
+      0.006911755968504142,
+      0.00690586856692818,
+      0.006910232346456716,
+      0.006907486677166133,
+      0.006905726047242873,
+      0.006908255968502684,
+      0.00689541418110162
+    ],
+    "decode_tok_s": [
+      144.588758813528,
+      143.10395968113198,
+      144.5700445212714,
+      144.6810339596556,
+      144.8043776548173,
+      144.71293436504476,
+      144.7704565693437,
+      144.8073661131189,
+      144.754335183782,
+      145.02392078792266
+    ],
+    "e2e_tok_s": [
+      142.92211068665776,
+      141.5059491383908,
+      142.89647000706395,
+      142.9276004215094,
+      143.1519931452498,
+      143.03234023340968,
+      143.1050039182364,
+      142.79412729878857,
+      143.06968628893085,
+      143.27271351775178
+    ],
+    "decode_step_p50_s": [
+      0.006893499999932828,
+      0.006895299999996496,
+      0.0069354009999642585,
+      0.006908800000019255,
+      0.006903599999986909,
+      0.006910500000003594,
+      0.006885799999963638,
+      0.0069111999998767715,
+      0.006886200000053577,
+      0.0068696999999247055
+    ],
+    "server": [
+      {
+        "ttft_s": 0.015879000000040833,
+        "tpot_s": 0.006916834645668977,
+        "queue_s": 0.0010740000000168948
+      },
+      {
+        "ttft_s": 0.015722999999979947,
+        "tpot_s": 0.006988464566927901,
+        "queue_s": 0.0010959999999613501
+      },
+      {
+        "ttft_s": 0.01573099999995975,
+        "tpot_s": 0.0069192834645666985,
+        "queue_s": 0.0010379999998804124
+      },
+      {
+        "ttft_s": 0.01633500000002641,
+        "tpot_s": 0.00691195275590499,
+        "queue_s": 0.0009689999999409338
+      },
+      {
+        "ttft_s": 0.015702000000146654,
+        "tpot_s": 0.00690668503936943,
+        "queue_s": 0.0010680000000320433
+      },
+      {
+        "ttft_s": 0.015746999999919353,
+        "tpot_s": 0.006911779527558971,
+        "queue_s": 0.0011839999999665451
+      },
+      {
+        "ttft_s": 0.01561400000014146,
+        "tpot_s": 0.00690636220472368,
+        "queue_s": 0.0010130000000572181
+      },
+      {
+        "ttft_s": 0.017826000000013664,
+        "tpot_s": 0.00690663779527506,
+        "queue_s": 0.0012329999999565189
+      },
+      {
+        "ttft_s": 0.01590999999984888,
+        "tpot_s": 0.006907929133859849,
+        "queue_s": 0.0010749999999006832
+      },
+      {
+        "ttft_s": 0.01611300000013216,
+        "tpot_s": 0.0068966614173215325,
+        "queue_s": 0.0010570000001735025
+      }
+    ],
+    "tokens": [
+      198,
+      1,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330,
+      83,
+      1,
+      330
+    ],
+    "same_tokens_every_iteration": true
+  },
+  "nvml": {
+    "interval_s": 1.0,
+    "n_samples": 108,
+    "sm_clock_mhz": {
+      "min": 210,
+      "mean": 668.6111111111111,
+      "max": 1980
+    },
+    "mem_clock_mhz": {
+      "min": 405,
+      "mean": 2200.4166666666665,
+      "max": 6801
+    },
+    "temp_c": {
+      "min": 40,
+      "mean": 41.851851851851855,
+      "max": 55
+    },
+    "power_w": {
+      "min": 12.534,
+      "mean": 36.82597222222222,
+      "max": 188.906
+    },
+    "util_pct": {
+      "min": 0,
+      "mean": 10.148148148148149,
+      "max": 98
+    },
+    "mem_used_mib": {
+      "min": 672,
+      "mean": 1567.4351851851852,
+      "max": 4449
+    },
+    "sm_clock_mhz_busy": {
+      "min": 1965,
+      "max": 1980,
+      "n": 11
+    }
+  },
+  "fingerprint": {
+    "device_id": "rtx3060ti-fd7b40d5",
+    "device_config": "rtx3060ti",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3060 Ti",
+      "uuid": "GPU-fd7b40d5-161e-fadf-f3ad-10e7ae835d42",
+      "compute_capability": "8.6",
+      "memory_total_mib": 8192,
+      "driver_version": "621.24",
+      "sm_clock_max_mhz": 2100,
+      "pcie_gen_max": 3,
+      "pcie_width_max": 16,
+      "power_limit_w": 220.0,
+      "persistence_mode": true
+    },
+    "software": {
+      "os_class": "wsl",
+      "os": "Linux 6.18.58.1-microsoft-standard-WSL2 (#1 SMP PREEMPT_DYNAMIC Tue Oct 27 00:24:11 UTC 2026)",
+      "cpu": "x86_64",
+      "python": "3.12.16",
+      "torch": "2.11.0+cu128",
+      "torch_cuda": "12.8",
+      "nvcc": null,
+      "cmake": "3.28.3"
+    },
+    "git": {
+      "sha": "52963bea98e6cdbc7e0774daf4c175c33a528aa3",
+      "dirty": false
+    }
+  }
+}

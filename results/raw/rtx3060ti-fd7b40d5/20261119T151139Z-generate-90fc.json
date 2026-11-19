@@ -1,0 +1,502 @@
+{
+  "schema_version": 1,
+  "run_id": "20261119T151139Z-generate-90fc",
+  "kind": "generate",
+  "created_utc": "2026-11-19T15:11:39+00:00",
+  "tags": [
+    "os=wsl",
+    "clock_varied"
+  ],
+  "engine": {
+    "name": "vllm",
+    "version": "0.34.0",
+    "external": true,
+    "route": "openai-completions",
+    "requirements": "configs/stacks/vllm/requirements.txt",
+    "requirements_sha256": "f0f02bbc1f90ac01182e91ee598331f958883e340928deb762aa116b256c8dc7"
+  },
+  "model": {
+    "name": "tinyllama-1.1b",
+    "hf_repo": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    "revision": "fe8a4ea1ffedaf415f4da2f062534de366a451e6",
+    "family": "llama"
+  },
+  "params": {
+    "batch": 1,
+    "prompt_len": 128,
+    "new_tokens": 128,
+    "max_ctx": 256,
+    "warmup": 2,
+    "iters": 10,
+    "seed": 0,
+    "sampling": "greedy",
+    "prompt": "kvbound.bench.random_prompt",
+    "weights": "F16",
+    "bits_per_weight": 16.0,
+    "checkpoint": {
+      "bits_per_weight": 16.0,
+      "weights": 1100048384,
+      "folder": "/home/kvb/kvbound/data/models/tinyllama-1.1b"
+    },
+    "kv": "f16",
+    "kv_tokens": 288,
+    "kv_bytes": 6488064,
+    "server": {
+      "model": "/home/kvb/kvbound/data/models/tinyllama-1.1b",
+      "--tokenizer": "/home/kvb/kvbound/data/models/tinyllama-1.1b",
+      "--served-model-name": "tinyllama-1.1b",
+      "--dtype": "float16",
+      "--max-model-len": 256,
+      "--max-num-seqs": 1,
+      "--max-num-batched-tokens": 256,
+      "--kv-cache-memory-bytes": 6488064,
+      "--gpu-memory-utilization": 0.6,
+      "--kv-cache-dtype": "auto",
+      "--block-size": 16,
+      "--disable-prefix-caching": true,
+      "--enable-chunked-prefill": true,
+      "--generation-config": "vllm",
+      "--seed": 0,
+      "--disable-uvicorn-access-log": true
+    },
+    "not_stack_defaults": {
+      "--disable-prefix-caching": "prefix caching is on by default",
+      "--gpu-memory-utilization": "0.6 (default 0.92); with the KV bytes given it only gates start-up"
+    },
+    "request": {
+      "model": "tinyllama-1.1b",
+      "max_tokens": 128,
+      "temperature": 0.0,
+      "top_k": 1,
+      "ignore_eos": true,
+      "seed": 0,
+      "stream": true,
+      "stream_options": {
+        "include_usage": true,
+        "continuous_usage_stats": true
+      },
+      "return_token_ids": true
+    },
+    "server_log": [
+      "Pinned host memory is not available on this platform; UVA buffers fall back to pageable host memory with explicit host-to-device copies.",
+      "Using FLASH_ATTN attention backend out of potential backends: ['FLASH_ATTN', 'FLASHINFER', 'TRITON_ATTN', 'FLEX_ATTENTION'].",
+      "Model loading took 2.05 GiB memory and 20.651417 seconds",
+      "Using FlashInfer for top-p & top-k sampling.",
+      "Initial free memory 6.9 GiB, reserved 0.01 GiB memory for KV Cache as specified by kv_cache_memory_bytes config and skipped memory profiling. This does not respect the gpu_memory_utilization config. Only use kv_cache_memory_bytes config when you want manual control of KV cache memory size. If OOM'ed, check the difference of initial free memory between the current run and the previous run where kv_cache_memory_bytes is suggested and update it correspondingly.",
+      "GPU KV cache size: 288 tokens, Maximum concurrency for 256 tokens per request: 1.12x",
+      "Graph capturing finished in 1 secs, took 0.03 GiB"
+    ]
+  },
+  "metrics": {
+    "ttft_s": {
+      "n": 10,
+      "mean": 0.02199803129999651,
+      "stdev": 0.00030601409578815384,
+      "min": 0.021626701000002413,
+      "p50": 0.02193495049998262,
+      "p90": 0.0222376618999931,
+      "max": 0.02272150099997816
+    },
+    "tpot_s": {
+      "n": 10,
+      "mean": 0.006680588122047258,
+      "stdev": 5.932551750981429e-05,
+      "min": 0.006624846937007876,
+      "p50": 0.006658356763779574,
+      "p90": 0.006765094637007839,
+      "max": 0.0067874994566927745
+    },
+    "decode_tok_s": {
+      "n": 10,
+      "mean": 149.6979837301448,
+      "stdev": 1.3217745297245922,
+      "min": 147.32966188512262,
+      "p50": 150.188821311776,
+      "p90": 150.88766697049712,
+      "max": 150.94688368025174
+    },
+    "e2e_tok_s": {
+      "n": 10,
+      "mean": 147.0631542677042,
+      "stdev": 1.2657611724264046,
+      "min": 144.77924373096096,
+      "p50": 147.54870119672051,
+      "p90": 148.1883004022814,
+      "max": 148.22715751208318
+    },
+    "decode_step_p50_s": {
+      "n": 10,
+      "mean": 0.006725620500003515,
+      "stdev": 3.6909174113909775e-05,
+      "min": 0.006679900000008843,
+      "p50": 0.006721349999992299,
+      "p90": 0.006751051000014741,
+      "max": 0.006814501000008022
+    },
+    "server": {
+      "ttft_s": {
+        "n": 10,
+        "mean": 0.020912790298461915,
+        "stdev": 0.0002798036175020604,
+        "min": 0.02056264877319336,
+        "p50": 0.02087223529815674,
+        "p90": 0.021150374412536622,
+        "max": 0.021538972854614258
+      },
+      "tpot_s": {
+        "n": 10,
+        "mean": 0.006684451035433081,
+        "stdev": 5.855359650845691e-05,
+        "min": 0.006630253228346497,
+        "p50": 0.006662668972440961,
+        "p90": 0.006765798101574785,
+        "max": 0.006792500244094432
+      },
+      "prefill_s": {
+        "n": 10,
+        "mean": 0.019246441099997468,
+        "stdev": 0.0002319609423348287,
+        "min": 0.018981502000002592,
+        "p50": 0.01921290149999777,
+        "p90": 0.019355700999997793,
+        "max": 0.019851600999999164
+      },
+      "decode_s": {
+        "n": 10,
+        "mean": 0.8489252815000015,
+        "stdev": 0.007436306756574081,
+        "min": 0.8420421600000054,
+        "p50": 0.8461589595000021,
+        "p90": 0.859256358899998,
+        "max": 0.8626475309999933
+      }
+    },
+    "multi_token_events": 0,
+    "held_tokens": 0,
+    "gpu_memory_mib": 2391
+  },
+  "samples": {
+    "ttft_s": [
+      0.021918000999988863,
+      0.021843801000002827,
+      0.02209220100002085,
+      0.021951899999976376,
+      0.021863002000003462,
+      0.02206860199999028,
+      0.021626701000002413,
+      0.02272150099997816,
+      0.02218390199999476,
+      0.02171070200000713
+    ],
+    "tpot_s": [
+      0.006636290000000078,
+      0.006634264015748099,
+      0.0067874994566927745,
+      0.006636521708661504,
+      0.006680191818897644,
+      0.006627735905511809,
+      0.006762605212598402,
+      0.0067138516692914095,
+      0.006624846937007876,
+      0.006702074496062982
+    ],
+    "decode_tok_s": [
+      150.6866035088865,
+      150.7326204724816,
+      147.32966188512262,
+      150.6813424108706,
+      149.6963002126814,
+      150.88108733607993,
+      147.872006211016,
+      148.94579881380395,
+      150.94688368025174,
+      149.20753277025386
+    ],
+    "e2e_tok_s": [
+      148.02362481568494,
+      148.08039262766252,
+      144.77924373096096,
+      148.0127854878,
+      147.08461690564107,
+      148.18398294563679,
+      145.3756522356721,
+      146.22210132142465,
+      148.22715751208318,
+      146.64198509447593
+    ],
+    "decode_step_p50_s": [
+      0.006708299999999667,
+      0.006679900000008843,
+      0.006814501000008022,
+      0.006723899999997229,
+      0.006718799999987368,
+      0.006706901000001153,
+      0.006738601000023436,
+      0.006744001000015487,
+      0.00669310000000678,
+      0.006728200999987166
+    ],
+    "server": [
+      {
+        "ttft_s": 0.020861387252807617,
+        "tpot_s": 0.006639360866141777,
+        "prefill_s": 0.01930060099999764,
+        "decode_s": 0.8431988300000057
+      },
+      {
+        "ttft_s": 0.02078723907470703,
+        "tpot_s": 0.006638911259842624,
+        "prefill_s": 0.019158100999987937,
+        "decode_s": 0.8431417300000135
+      },
+      {
+        "ttft_s": 0.021016597747802734,
+        "tpot_s": 0.006792500244094432,
+        "prefill_s": 0.019248500999992757,
+        "decode_s": 0.8626475309999933
+      },
+      {
+        "ttft_s": 0.02088308334350586,
+        "tpot_s": 0.0066416870629921534,
+        "prefill_s": 0.01915549999998234,
+        "decode_s": 0.8434942570000032
+      },
+      {
+        "ttft_s": 0.020807981491088867,
+        "tpot_s": 0.006683650881889769,
+        "prefill_s": 0.019256600999995044,
+        "decode_s": 0.8488236620000009
+      },
+      {
+        "ttft_s": 0.020977020263671875,
+        "tpot_s": 0.006632722519685066,
+        "prefill_s": 0.019192901999986134,
+        "decode_s": 0.8423557600000038
+      },
+      {
+        "ttft_s": 0.02056264877319336,
+        "tpot_s": 0.00676283119685038,
+        "prefill_s": 0.019086201000021674,
+        "decode_s": 0.8588795619999985
+      },
+      {
+        "ttft_s": 0.021538972854614258,
+        "tpot_s": 0.006716176866141843,
+        "prefill_s": 0.019851600999999164,
+        "decode_s": 0.8529544620000138
+      },
+      {
+        "ttft_s": 0.021107196807861328,
+        "tpot_s": 0.006630253228346497,
+        "prefill_s": 0.019232901000009406,
+        "decode_s": 0.8420421600000054
+      },
+      {
+        "ttft_s": 0.02058577537536621,
+        "tpot_s": 0.006706416228346265,
+        "prefill_s": 0.018981502000002592,
+        "decode_s": 0.8517148609999765
+      }
+    ],
+    "tokens": [
+      279,
+      29871,
+      29896,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900
+    ],
+    "same_tokens_every_iteration": true
+  },
+  "nvml": {
+    "interval_s": 1.0,
+    "n_samples": 111,
+    "sm_clock_mhz": {
+      "min": 210,
+      "mean": 529.7297297297297,
+      "max": 1980
+    },
+    "mem_clock_mhz": {
+      "min": 405,
+      "mean": 1683.981981981982,
+      "max": 7001
+    },
+    "temp_c": {
+      "min": 40,
+      "mean": 41.450450450450454,
+      "max": 53
+    },
+    "power_w": {
+      "min": 12.702,
+      "mean": 31.9587027027027,
+      "max": 170.646
+    },
+    "util_pct": {
+      "min": 0,
+      "mean": 10.08108108108108,
+      "max": 99
+    },
+    "mem_used_mib": {
+      "min": 622,
+      "mean": 1584.8018018018017,
+      "max": 3013
+    },
+    "sm_clock_mhz_busy": {
+      "min": 210,
+      "max": 1980,
+      "n": 12
+    }
+  },
+  "fingerprint": {
+    "device_id": "rtx3060ti-fd7b40d5",
+    "device_config": "rtx3060ti",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3060 Ti",
+      "uuid": "GPU-fd7b40d5-161e-fadf-f3ad-10e7ae835d42",
+      "compute_capability": "8.6",
+      "memory_total_mib": 8192,
+      "driver_version": "621.24",
+      "sm_clock_max_mhz": 2100,
+      "pcie_gen_max": 3,
+      "pcie_width_max": 16,
+      "power_limit_w": 220.0,
+      "persistence_mode": true
+    },
+    "software": {
+      "os_class": "wsl",
+      "os": "Linux 6.18.58.1-microsoft-standard-WSL2 (#1 SMP PREEMPT_DYNAMIC Tue Oct 27 00:24:11 UTC 2026)",
+      "cpu": "x86_64",
+      "python": "3.12.16",
+      "torch": "2.11.0+cu128",
+      "torch_cuda": "12.8",
+      "nvcc": null,
+      "cmake": "3.28.3"
+    },
+    "git": {
+      "sha": "52963bea98e6cdbc7e0774daf4c175c33a528aa3",
+      "dirty": false
+    }
+  }
+}

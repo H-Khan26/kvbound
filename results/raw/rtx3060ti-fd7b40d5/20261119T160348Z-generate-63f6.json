@@ -1,0 +1,522 @@
+{
+  "schema_version": 1,
+  "run_id": "20261119T160348Z-generate-63f6",
+  "kind": "generate",
+  "created_utc": "2026-11-19T16:03:48+00:00",
+  "tags": [
+    "os=wsl",
+    "clock_varied"
+  ],
+  "engine": {
+    "name": "tensorrt-llm",
+    "version": "1.2.1",
+    "external": true,
+    "route": "openai-completions",
+    "requirements": "configs/stacks/tensorrt-llm/requirements.txt",
+    "requirements_sha256": "d0a9da006be52c14aa0dae4d6ccec0e7ef9a57036bff0e0e27f7aa7ba0ef8626"
+  },
+  "model": {
+    "name": "llama-3.2-1b",
+    "hf_repo": "meta-llama/Llama-3.2-1B",
+    "revision": "4e20de362430cd3b72f300e6b0f18e50e7166e08",
+    "family": "llama"
+  },
+  "params": {
+    "batch": 1,
+    "prompt_len": 128,
+    "new_tokens": 128,
+    "max_ctx": 256,
+    "warmup": 2,
+    "iters": 10,
+    "seed": 0,
+    "sampling": "greedy",
+    "prompt": "kvbound.bench.random_prompt",
+    "weights": "W4A16_AWQ",
+    "bits_per_weight": 6.750187678667606,
+    "checkpoint": {
+      "bits_per_weight": 6.750187678667606,
+      "weights": 1235814400,
+      "tensor_bytes": 1042747392,
+      "bytes_by_dtype": {
+        "F16": 525799424,
+        "F32": 30408704,
+        "U8": 486539264
+      },
+      "folder": "/home/kvb/kvbound/ext/tensorrt-llm/1.2.1/checkpoints/llama-3.2-1b/W4A16_AWQ",
+      "quantization": {
+        "format": "W4A16_AWQ",
+        "source": {
+          "hf_repo": "meta-llama/Llama-3.2-1B",
+          "revision": "4e20de362430cd3b72f300e6b0f18e50e7166e08"
+        },
+        "tool": "nvidia-modelopt",
+        "version": "0.37.0",
+        "config": "INT4_AWQ_CFG",
+        "algorithm": {
+          "method": "awq_lite",
+          "alpha_step": 0.1
+        },
+        "seconds": 129.35375092699996,
+        "torch": "2.9.1+cu130",
+        "transformers": "4.57.3",
+        "device": "cuda",
+        "calibration": {
+          "kvbound.calib_dataset": "Salesforce/wikitext/wikitext-2-raw-v1/train-00000-of-00001.parquet",
+          "kvbound.calib_revision": "b08601e04326c79dfdd32d625aee71d232d685c3",
+          "kvbound.calib_sha256": "e83889baabc497075506f91975be5fac0d45c5290b6b20582c8cd1e853d0c9f7",
+          "kvbound.calib_windows": "128",
+          "kvbound.calib_window": "512",
+          "kvbound.calib_seed": "0"
+        },
+        "log": "/home/kvb/kvbound/ext/tensorrt-llm/1.2.1/logs/quantize-llama-3.2-1b-W4A16_AWQ.log"
+      }
+    },
+    "kv": "f16",
+    "kv_tokens": 320,
+    "kv_bytes": 10485760,
+    "server": {
+      "model": "/home/kvb/kvbound/ext/tensorrt-llm/1.2.1/checkpoints/llama-3.2-1b/W4A16_AWQ",
+      "--tokenizer": "/home/kvb/kvbound/data/models/llama-3.2-1b",
+      "--backend": "pytorch",
+      "--max_batch_size": 1,
+      "--max_num_tokens": 256,
+      "--max_seq_len": 256,
+      "extra_llm_api_options": {
+        "dtype": "float16",
+        "kv_cache_config": {
+          "max_tokens": 320,
+          "dtype": "auto",
+          "enable_block_reuse": false,
+          "tokens_per_block": 32
+        },
+        "enable_chunked_prefill": true,
+        "cuda_graph_config": {
+          "batch_sizes": [
+            1
+          ],
+          "enable_padding": true
+        },
+        "return_perf_metrics": true,
+        "perf_metrics_max_requests": 10000,
+        "enable_iter_perf_stats": true
+      }
+    },
+    "not_stack_defaults": {
+      "cuda_graph_config.enable_padding": "true (default false): batches between captured sizes are padded up instead of run without a CUDA graph",
+      "kv_cache_config.enable_block_reuse": "false (default true)"
+    },
+    "request": {
+      "model": "llama-3.2-1b",
+      "max_tokens": 128,
+      "temperature": 0.0,
+      "top_k": 1,
+      "ignore_eos": true,
+      "seed": 0,
+      "stream": true,
+      "stream_options": {
+        "include_usage": true,
+        "continuous_usage_stats": true
+      },
+      "detokenize": false
+    },
+    "server_log": [
+      "[TensorRT-LLM][INFO] [MemUsageChange] Allocated 0.01 GiB for max tokens in paged KV cache (320).",
+      "[11/19/2026-08:03:40] [TRT-LLM] [I] max_tokens=320 is provided, max_memory is set to 0.01 GiB",
+      "[11/19/2026-08:03:40] [TRT-LLM] [W] Both free_gpu_memory_fraction and max_tokens are set (to 0.9 and 320 with free memory 5.67578125GiB of total memory 7.99951171875GiB, respectively). The smaller value will be used.",
+      ")) tokenizer_mode='auto' custom_tokenizer=None skip_tokenizer_init=False trust_remote_code=False tensor_parallel_size=1 dtype='float16' revision=None tokenizer_revision=None pipeline_parallel_size=1 context_parallel_size=1 gpus_per_node=1 moe_cluster_parallel_size=-1 moe_tensor_parallel_size=-1 moe_expert_parallel_size=-1 enable_attention_dp=False enable_lm_head_tp_in_adp=False pp_partition=None cp_config={} load_format=<LoadFormat.AUTO: 0> fail_fast_on_attention_window_too_large=False enable_lora=False lora_config=None kv_cache_config=KvCacheConfig(enable_block_reuse=False, max_tokens=320, max_attention_window=None, sink_token_length=None, free_gpu_memory_fraction=0.9, host_cache_size=None, onboard_blocks=True, cross_kv_cache_fraction=None, secondary_offload_min_priority=None, event_buffer_max_size=0, attention_dp_events_gather_period_ms=5, enable_partial_reuse=True, copy_on_partial_reuse=True, use_uvm=False, max_gpu_total_bytes=10485760, dtype='auto', mamba_ssm_cache_dtype='auto', tokens_per_block=32) enable_chunked_prefill=True guided_decoding_backend=None batched_logits_processor=None iter_stats_max_iterations=None request_stats_max_iterations=None peft_cache_config=None scheduler_config=SchedulerConfig(capacity_scheduler_policy=<CapacitySchedulerPolicy.GUARANTEED_NO_EVICT: 'GUARANTEED_NO_EVICT'>, context_chunking_policy=None, dynamic_batch_config=DynamicBatchConfig(enable_batch_size_tuning=True, enable_max_num_tokens_tuning=False, dynamic_batch_moving_average_window=128)) cache_transceiver_config=None sparse_attention_config=None speculative_config=None max_batch_size=1 max_input_len=1024 max_seq_len=256 max_beam_width=1 max_num_tokens=256 gather_generation_logits=False num_postprocess_workers=0 postprocess_tokenizer_dir='/home/kvb/kvbound/data/models/llama-3.2-1b' reasoning_parser=None decoding_config=None mpi_session=None otlp_traces_endpoint=None backend='pytorch' return_perf_metrics=True orchestrator_type=None env_overrides=None garbage_collection_gen0_threshold=20000 cuda_graph_config=CudaGraphConfig(batch_sizes=[1], max_batch_size=1, enable_padding=True) attention_dp_config=None disable_overlap_scheduler=False moe_config=MoeConfig(backend='CUTLASS', max_num_tokens=None, load_balancer=None, disable_finalize_fusion=False, use_low_precision_moe_combine=False) nvfp4_gemm_config=Nvfp4GemmConfig(allowed_backends=['cutlass', 'cublaslt', 'cuda_core']) attn_backend='TRTLLM' sampler_type=<SamplerType.auto: 'auto'> sampler_force_async_worker=False enable_iter_perf_stats=True enable_iter_req_stats=False print_iter_log=False perf_metrics_max_requests=10000 batch_wait_timeout_ms=0 batch_wait_timeout_iters=0 batch_wait_max_tokens_ratio=0 torch_compile_config=None enable_autotuner=True enable_layerwise_nvtx_marker=False enable_min_latency=False stream_interval=1 force_dynamic_quantization=False allreduce_strategy='AUTO' checkpoint_loader=None checkpoint_format='HF' kv_connector_config=None mm_encoder_only=False ray_worker_extension_cls=None ray_placement_config=None enable_sleep=False disable_flashinfer_sampling=False max_stats_len=1000"
+    ]
+  },
+  "metrics": {
+    "ttft_s": {
+      "n": 10,
+      "mean": 0.02265247059997364,
+      "stdev": 0.0016292190134983566,
+      "min": 0.02107030100000884,
+      "p50": 0.021986950500036073,
+      "p90": 0.025265481000019463,
+      "max": 0.025527200999931665
+    },
+    "tpot_s": {
+      "n": 10,
+      "mean": 0.003630358286614134,
+      "stdev": 1.9268613348423367e-05,
+      "min": 0.003608250409448503,
+      "p50": 0.003626537421259998,
+      "p90": 0.0036574934811027574,
+      "max": 0.0036655913622046605
+    },
+    "decode_tok_s": {
+      "n": 10,
+      "mean": 275.46186817048783,
+      "stdev": 1.45752534479572,
+      "min": 272.8072775134849,
+      "p50": 275.745135914634,
+      "p90": 277.0532298324271,
+      "max": 277.14262773487593
+    },
+    "e2e_tok_s": {
+      "n": 10,
+      "mean": 264.6324297207961,
+      "stdev": 1.7112225797542895,
+      "min": 262.4889348866468,
+      "p50": 264.54298395360246,
+      "p90": 266.4410715078153,
+      "max": 266.95453096741625
+    },
+    "decode_step_p50_s": {
+      "n": 10,
+      "mean": 0.0036081500000591403,
+      "stdev": 1.2725935913919717e-05,
+      "min": 0.003587299999935567,
+      "p50": 0.0036126500000364103,
+      "p90": 0.0036172800001168072,
+      "max": 0.003627000000051339
+    },
+    "server": {
+      "ttft_s": {
+        "n": 10,
+        "mean": 0.020508599999948272,
+        "stdev": 0.0016577027746251891,
+        "min": 0.019145999999864216,
+        "p50": 0.019767999999885433,
+        "p90": 0.02345339999992575,
+        "max": 0.023466000000098575
+      },
+      "tpot_s": {
+        "n": 10,
+        "mean": 0.0036372385826771423,
+        "stdev": 2.183359550723425e-05,
+        "min": 0.003613889763780716,
+        "p50": 0.0036327677165350607,
+        "p90": 0.0036651133858270003,
+        "max": 0.0036723700787414004
+      },
+      "queue_s": {
+        "n": 10,
+        "mean": 0.001099399999952766,
+        "stdev": 0.00012931889956376585,
+        "min": 0.0009529999999813299,
+        "p50": 0.001069999999913307,
+        "p90": 0.0012531000000535642,
+        "max": 0.001389000000017404
+      }
+    },
+    "multi_token_events": 0,
+    "held_tokens": 0,
+    "gpu_memory_mib": 1967
+  },
+  "samples": {
+    "ttft_s": [
+      0.02160849999995662,
+      0.02158929999995962,
+      0.023176499999863154,
+      0.021623099999942497,
+      0.02107030100000884,
+      0.02235080100012965,
+      0.025527200999931665,
+      0.02523640100002922,
+      0.02325220099987746,
+      0.021090401000037673
+    ],
+    "tpot_s": [
+      0.0036133921496063455,
+      0.003627381125984966,
+      0.003641549629921829,
+      0.0036655913622046605,
+      0.003609544110236308,
+      0.003608250409448503,
+      0.0036318543464557746,
+      0.0036237322992120446,
+      0.0036565937165358793,
+      0.00362569371653503
+    ],
+    "decode_tok_s": [
+      276.74826273947133,
+      275.6809845087518,
+      274.608367762783,
+      272.8072775134849,
+      277.04329673215506,
+      277.14262773487593,
+      275.3414384516472,
+      275.95857459378084,
+      273.47856434741203,
+      275.80928732051615
+    ],
+    "e2e_tok_s": [
+      266.38402045674854,
+      265.41330596482555,
+      263.5625027346247,
+      262.7510179790756,
+      266.95453096741625,
+      266.334523656483,
+      262.95640493228035,
+      263.67266194237936,
+      262.4889348866468,
+      265.8063936874811
+    ],
+    "decode_step_p50_s": [
+      0.0036127000000760745,
+      0.0035969000000477536,
+      0.003587299999935567,
+      0.0036155000000235304,
+      0.003627000000051339,
+      0.0036162000001240813,
+      0.0035901000001103966,
+      0.0036156000001028588,
+      0.003607600000123057,
+      0.003612599999996746
+    ],
+    "server": [
+      {
+        "ttft_s": 0.02023800000006304,
+        "tpot_s": 0.0036149921259844473,
+        "queue_s": 0.0009959999999864522
+      },
+      {
+        "ttft_s": 0.019145999999864216,
+        "tpot_s": 0.0036369370078734114,
+        "queue_s": 0.0009529999999813299
+      },
+      {
+        "ttft_s": 0.019373000000086904,
+        "tpot_s": 0.003662322834645424,
+        "queue_s": 0.0009939999999915017
+      },
+      {
+        "ttft_s": 0.01951999999982945,
+        "tpot_s": 0.0036723700787414004,
+        "queue_s": 0.0010629999999309803
+      },
+      {
+        "ttft_s": 0.01933399999984431,
+        "tpot_s": 0.003613889763780716,
+        "queue_s": 0.0011009999998350395
+      },
+      {
+        "ttft_s": 0.020015999999941414,
+        "tpot_s": 0.0036151181102360977,
+        "queue_s": 0.0010579999998299172
+      },
+      {
+        "ttft_s": 0.023451999999906548,
+        "tpot_s": 0.0036357795275586873,
+        "queue_s": 0.0010769999998956337
+      },
+      {
+        "ttft_s": 0.023466000000098575,
+        "tpot_s": 0.003626913385825514,
+        "queue_s": 0.001238000000057582
+      },
+      {
+        "ttft_s": 0.021103999999922962,
+        "tpot_s": 0.0036643070866142894,
+        "queue_s": 0.001125000000001819
+      },
+      {
+        "ttft_s": 0.01943699999992532,
+        "tpot_s": 0.0036297559055114338,
+        "queue_s": 0.001389000000017404
+      }
+    ],
+    "tokens": [
+      198,
+      82,
+      23635,
+      198,
+      128001,
+      128000,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198,
+      14924,
+      198
+    ],
+    "same_tokens_every_iteration": true
+  },
+  "nvml": {
+    "interval_s": 1.0,
+    "n_samples": 71,
+    "sm_clock_mhz": {
+      "min": 210,
+      "mean": 1440.0,
+      "max": 1995
+    },
+    "mem_clock_mhz": {
+      "min": 405,
+      "mean": 5106.788732394366,
+      "max": 7001
+    },
+    "temp_c": {
+      "min": 41,
+      "mean": 48.63380281690141,
+      "max": 59
+    },
+    "power_w": {
+      "min": 13.284,
+      "mean": 92.54076056338029,
+      "max": 205.535
+    },
+    "util_pct": {
+      "min": 0,
+      "mean": 35.76056338028169,
+      "max": 96
+    },
+    "mem_used_mib": {
+      "min": 671,
+      "mean": 1710.7605633802816,
+      "max": 2638
+    },
+    "sm_clock_mhz_busy": {
+      "min": 405,
+      "max": 1995,
+      "n": 26
+    }
+  },
+  "fingerprint": {
+    "device_id": "rtx3060ti-fd7b40d5",
+    "device_config": "rtx3060ti",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3060 Ti",
+      "uuid": "GPU-fd7b40d5-161e-fadf-f3ad-10e7ae835d42",
+      "compute_capability": "8.6",
+      "memory_total_mib": 8192,
+      "driver_version": "621.24",
+      "sm_clock_max_mhz": 2100,
+      "pcie_gen_max": 3,
+      "pcie_width_max": 16,
+      "power_limit_w": 220.0,
+      "persistence_mode": true
+    },
+    "software": {
+      "os_class": "wsl",
+      "os": "Linux 6.18.58.1-microsoft-standard-WSL2 (#1 SMP PREEMPT_DYNAMIC Tue Oct 27 00:24:11 UTC 2026)",
+      "cpu": "x86_64",
+      "python": "3.12.16",
+      "torch": "2.11.0+cu128",
+      "torch_cuda": "12.8",
+      "nvcc": null,
+      "cmake": "3.28.3"
+    },
+    "git": {
+      "sha": "52963bea98e6cdbc7e0774daf4c175c33a528aa3",
+      "dirty": false
+    }
+  }
+}

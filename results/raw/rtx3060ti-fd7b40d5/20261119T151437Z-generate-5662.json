@@ -1,0 +1,543 @@
+{
+  "schema_version": 1,
+  "run_id": "20261119T151437Z-generate-5662",
+  "kind": "generate",
+  "created_utc": "2026-11-19T15:14:37+00:00",
+  "tags": [
+    "os=wsl",
+    "clock_varied"
+  ],
+  "engine": {
+    "name": "vllm",
+    "version": "0.34.0",
+    "external": true,
+    "route": "openai-completions",
+    "requirements": "configs/stacks/vllm/requirements.txt",
+    "requirements_sha256": "f0f02bbc1f90ac01182e91ee598331f958883e340928deb762aa116b256c8dc7"
+  },
+  "model": {
+    "name": "tinyllama-1.1b",
+    "hf_repo": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    "revision": "fe8a4ea1ffedaf415f4da2f062534de366a451e6",
+    "family": "llama"
+  },
+  "params": {
+    "batch": 1,
+    "prompt_len": 1024,
+    "new_tokens": 128,
+    "max_ctx": 1152,
+    "warmup": 2,
+    "iters": 10,
+    "seed": 0,
+    "sampling": "greedy",
+    "prompt": "kvbound.bench.random_prompt",
+    "weights": "W4A16_GPTQ",
+    "bits_per_weight": 5.540932366843966,
+    "checkpoint": {
+      "bits_per_weight": 5.540932366843966,
+      "weights": 1100048384,
+      "tensor_bytes": 761911712,
+      "bytes_by_dtype": {
+        "F16": 277467136,
+        "I32": 484442112,
+        "I64": 2464
+      },
+      "folder": "/home/kvb/kvbound/ext/vllm/0.34.0/checkpoints/tinyllama-1.1b/W4A16_GPTQ",
+      "quantization": {
+        "format": "W4A16_GPTQ",
+        "source": {
+          "hf_repo": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+          "revision": "fe8a4ea1ffedaf415f4da2f062534de366a451e6"
+        },
+        "tool": "llmcompressor",
+        "version": "0.15.0",
+        "compressed_tensors": "0.20.1",
+        "recipe": [
+          "GPTQModifier"
+        ],
+        "scheme": {
+          "targets": [
+            "Linear"
+          ],
+          "scheme": "W4A16",
+          "ignore": [
+            "lm_head"
+          ]
+        },
+        "seconds": 63.500429792000006,
+        "torch": "2.14.1+cu130",
+        "transformers": "5.21.0",
+        "device": "cuda",
+        "calibration": {
+          "kvbound.calib_dataset": "Salesforce/wikitext/wikitext-2-raw-v1/train-00000-of-00001.parquet",
+          "kvbound.calib_revision": "b08601e04326c79dfdd32d625aee71d232d685c3",
+          "kvbound.calib_sha256": "e83889baabc497075506f91975be5fac0d45c5290b6b20582c8cd1e853d0c9f7",
+          "kvbound.calib_windows": "128",
+          "kvbound.calib_window": "512",
+          "kvbound.calib_seed": "0"
+        },
+        "log": "/home/kvb/kvbound/ext/vllm/0.34.0/logs/quantize-tinyllama-1.1b-W4A16_GPTQ.log"
+      }
+    },
+    "kv": "f16",
+    "kv_tokens": 1184,
+    "kv_bytes": 26673152,
+    "server": {
+      "model": "/home/kvb/kvbound/ext/vllm/0.34.0/checkpoints/tinyllama-1.1b/W4A16_GPTQ",
+      "--tokenizer": "/home/kvb/kvbound/data/models/tinyllama-1.1b",
+      "--served-model-name": "tinyllama-1.1b",
+      "--dtype": "float16",
+      "--max-model-len": 1152,
+      "--max-num-seqs": 1,
+      "--max-num-batched-tokens": 1152,
+      "--kv-cache-memory-bytes": 26673152,
+      "--gpu-memory-utilization": 0.6,
+      "--kv-cache-dtype": "auto",
+      "--block-size": 16,
+      "--disable-prefix-caching": true,
+      "--enable-chunked-prefill": true,
+      "--generation-config": "vllm",
+      "--seed": 0,
+      "--disable-uvicorn-access-log": true
+    },
+    "not_stack_defaults": {
+      "--disable-prefix-caching": "prefix caching is on by default",
+      "--gpu-memory-utilization": "0.6 (default 0.92); with the KV bytes given it only gates start-up"
+    },
+    "request": {
+      "model": "tinyllama-1.1b",
+      "max_tokens": 128,
+      "temperature": 0.0,
+      "top_k": 1,
+      "ignore_eos": true,
+      "seed": 0,
+      "stream": true,
+      "stream_options": {
+        "include_usage": true,
+        "continuous_usage_stats": true
+      },
+      "return_token_ids": true
+    },
+    "server_log": [
+      "Pinned host memory is not available on this platform; UVA buffers fall back to pageable host memory with explicit host-to-device copies.",
+      "Using FLASH_ATTN attention backend out of potential backends: ['FLASH_ATTN', 'FLASHINFER', 'TRITON_ATTN', 'FLEX_ATTENTION'].",
+      "Model loading took 0.73 GiB memory and 2.302376 seconds",
+      "Using FlashInfer for top-p & top-k sampling.",
+      "Initial free memory 6.9 GiB, reserved 0.02 GiB memory for KV Cache as specified by kv_cache_memory_bytes config and skipped memory profiling. This does not respect the gpu_memory_utilization config. Only use kv_cache_memory_bytes config when you want manual control of KV cache memory size. If OOM'ed, check the difference of initial free memory between the current run and the previous run where kv_cache_memory_bytes is suggested and update it correspondingly.",
+      "GPU KV cache size: 1,184 tokens, Maximum concurrency for 1,152 tokens per request: 1.03x",
+      "Graph capturing finished in 1 secs, took 0.01 GiB"
+    ]
+  },
+  "metrics": {
+    "ttft_s": {
+      "n": 10,
+      "mean": 0.07707038099999863,
+      "stdev": 0.0003229472230737747,
+      "min": 0.07663340099998095,
+      "p50": 0.07709250149997615,
+      "p90": 0.07747031010000001,
+      "max": 0.07761440100000527
+    },
+    "tpot_s": {
+      "n": 10,
+      "mean": 0.003176435803936918,
+      "stdev": 3.280048088640676e-05,
+      "min": 0.0031471646377954094,
+      "p50": 0.0031638354842517566,
+      "p90": 0.0032065724299210467,
+      "max": 0.0032540094881887745
+    },
+    "decode_tok_s": {
+      "n": 10,
+      "mean": 314.84806617920765,
+      "stdev": 3.207102567811997,
+      "min": 307.3131789042857,
+      "p50": 316.07206032466013,
+      "p90": 317.4423538377352,
+      "max": 317.7463256896851
+    },
+    "e2e_tok_s": {
+      "n": 10,
+      "mean": 266.4194421613595,
+      "stdev": 2.2880809154385395,
+      "min": 260.8446653613229,
+      "p50": 267.25481805578937,
+      "p90": 268.15003920150514,
+      "max": 268.47968199253415
+    },
+    "decode_step_p50_s": {
+      "n": 10,
+      "mean": 0.003204959999982293,
+      "stdev": 3.860581994401577e-05,
+      "min": 0.0031409999999709726,
+      "p50": 0.003205600000001141,
+      "p90": 0.0032464599999741496,
+      "max": 0.0032605000000103246
+    },
+    "server": {
+      "ttft_s": {
+        "n": 10,
+        "mean": 0.0750917673110962,
+        "stdev": 0.00028580831616668834,
+        "min": 0.0747518539428711,
+        "p50": 0.07511389255523682,
+        "p90": 0.07536311149597168,
+        "max": 0.07558369636535645
+      },
+      "tpot_s": {
+        "n": 10,
+        "mean": 0.003188142576378035,
+        "stdev": 3.265217186615037e-05,
+        "min": 0.003158299283464519,
+        "p50": 0.0031763752677165472,
+        "p90": 0.0032185029023622507,
+        "max": 0.003265434685039415
+      },
+      "prefill_s": {
+        "n": 10,
+        "mean": 0.07332831090000128,
+        "stdev": 0.00019172482409520185,
+        "min": 0.07311500100001922,
+        "p50": 0.07328985099999841,
+        "p90": 0.0735715009999808,
+        "max": 0.07364080100001047
+      },
+      "decode_s": {
+        "n": 10,
+        "mean": 0.40489410720001046,
+        "stdev": 0.0041468258270011635,
+        "min": 0.40110400899999377,
+        "p50": 0.4033996590000015,
+        "p90": 0.40874986860000606,
+        "max": 0.41471020500000577
+      }
+    },
+    "multi_token_events": 0,
+    "held_tokens": 0,
+    "gpu_memory_mib": 1067
+  },
+  "samples": {
+    "ttft_s": [
+      0.07663340099998095,
+      0.07672990100002153,
+      0.07745429999999942,
+      0.077156801000001,
+      0.07711630199997899,
+      0.077294701000028,
+      0.07761440100000527,
+      0.07679790100002037,
+      0.07683740099997749,
+      0.07706870099997332
+    ],
+    "tpot_s": [
+      0.0031710244409450788,
+      0.003196840188976028,
+      0.0032540094881887745,
+      0.003163816574802842,
+      0.0031638543937006713,
+      0.0031505134566927385,
+      0.003152042590551084,
+      0.003201301645669077,
+      0.0031637906220474744,
+      0.0031471646377954094
+    ],
+    "decode_tok_s": [
+      315.35550060344667,
+      312.8088802963615,
+      307.3131789042857,
+      316.0739494078656,
+      316.0701712414547,
+      317.40857918751857,
+      317.25459643144166,
+      312.3729378494723,
+      316.0765421805446,
+      317.7463256896851
+    ],
+    "e2e_tok_s": [
+      267.0263149530917,
+      265.15934351975284,
+      260.8446653613229,
+      267.2448587131555,
+      267.26477739842323,
+      268.11341222472413,
+      267.82511630881476,
+      264.81121722110754,
+      267.42503392066806,
+      268.47968199253415
+    ],
+    "decode_step_p50_s": [
+      0.0032057000000236258,
+      0.00324489999997013,
+      0.0032605000000103246,
+      0.0032024000000205888,
+      0.003205499999978656,
+      0.0031409999999709726,
+      0.0031500999999707346,
+      0.0032351999999491454,
+      0.003220799999951396,
+      0.0031834999999773572
+    ],
+    "server": [
+      {
+        "ttft_s": 0.0747518539428711,
+        "tpot_s": 0.003182300818897742,
+        "prefill_s": 0.07317850100002943,
+        "decode_s": 0.40415220400001317
+      },
+      {
+        "ttft_s": 0.07481241226196289,
+        "tpot_s": 0.0032077401889763473,
+        "prefill_s": 0.07317010100001653,
+        "decode_s": 0.40738300399999616
+      },
+      {
+        "ttft_s": 0.07530999183654785,
+        "tpot_s": 0.003265434685039415,
+        "prefill_s": 0.07337599999999611,
+        "decode_s": 0.41471020500000577
+      },
+      {
+        "ttft_s": 0.07526922225952148,
+        "tpot_s": 0.003174486653543543,
+        "prefill_s": 0.07364080100001047,
+        "decode_s": 0.4031598050000298
+      },
+      {
+        "ttft_s": 0.07514572143554688,
+        "tpot_s": 0.0031766654251969804,
+        "prefill_s": 0.07324340100001336,
+        "decode_s": 0.4034365090000165
+      },
+      {
+        "ttft_s": 0.07533860206604004,
+        "tpot_s": 0.0031615189685040845,
+        "prefill_s": 0.0735235009999542,
+        "decode_s": 0.4015129090000187
+      },
+      {
+        "ttft_s": 0.07558369636535645,
+        "tpot_s": 0.0031656063700790417,
+        "prefill_s": 0.0735638009999775,
+        "decode_s": 0.4020320090000382
+      },
+      {
+        "ttft_s": 0.07480573654174805,
+        "tpot_s": 0.0032132882598425658,
+        "prefill_s": 0.07311500100001922,
+        "decode_s": 0.40808760900000607
+      },
+      {
+        "ttft_s": 0.07481837272644043,
+        "tpot_s": 0.003176085110236114,
+        "prefill_s": 0.07313570100001243,
+        "decode_s": 0.40336280899998656
+      },
+      {
+        "ttft_s": 0.07508206367492676,
+        "tpot_s": 0.003158299283464519,
+        "prefill_s": 0.07333630099998345,
+        "decode_s": 0.40110400899999377
+      }
+    ],
+    "tokens": [
+      29871,
+      29896,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900,
+      29900
+    ],
+    "same_tokens_every_iteration": true
+  },
+  "nvml": {
+    "interval_s": 1.0,
+    "n_samples": 31,
+    "sm_clock_mhz": {
+      "min": 210,
+      "mean": 968.2258064516129,
+      "max": 1980
+    },
+    "mem_clock_mhz": {
+      "min": 405,
+      "mean": 3932.1935483870966,
+      "max": 7001
+    },
+    "temp_c": {
+      "min": 43,
+      "mean": 46.225806451612904,
+      "max": 53
+    },
+    "power_w": {
+      "min": 13.376,
+      "mean": 52.31638709677419,
+      "max": 151.97
+    },
+    "util_pct": {
+      "min": 0,
+      "mean": 16.129032258064516,
+      "max": 79
+    },
+    "mem_used_mib": {
+      "min": 632,
+      "mean": 1041.967741935484,
+      "max": 1699
+    },
+    "sm_clock_mhz_busy": {
+      "min": 1740,
+      "max": 1980,
+      "n": 6
+    }
+  },
+  "fingerprint": {
+    "device_id": "rtx3060ti-fd7b40d5",
+    "device_config": "rtx3060ti",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3060 Ti",
+      "uuid": "GPU-fd7b40d5-161e-fadf-f3ad-10e7ae835d42",
+      "compute_capability": "8.6",
+      "memory_total_mib": 8192,
+      "driver_version": "621.24",
+      "sm_clock_max_mhz": 2100,
+      "pcie_gen_max": 3,
+      "pcie_width_max": 16,
+      "power_limit_w": 220.0,
+      "persistence_mode": true
+    },
+    "software": {
+      "os_class": "wsl",
+      "os": "Linux 6.18.58.1-microsoft-standard-WSL2 (#1 SMP PREEMPT_DYNAMIC Tue Oct 27 00:24:11 UTC 2026)",
+      "cpu": "x86_64",
+      "python": "3.12.16",
+      "torch": "2.11.0+cu128",
+      "torch_cuda": "12.8",
+      "nvcc": null,
+      "cmake": "3.28.3"
+    },
+    "git": {
+      "sha": "52963bea98e6cdbc7e0774daf4c175c33a528aa3",
+      "dirty": false
+    }
+  }
+}
