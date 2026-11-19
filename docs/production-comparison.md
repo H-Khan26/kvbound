@@ -34,14 +34,15 @@ there. The other three GPU stacks were recorded later the same day, and kvbound 
 - **One request at a time, kvbound decodes fastest of the five**: by 8 to 20% with FP16 weights against llama.cpp,
   vLLM and TensorRT-LLM, and by 1.3 to 2.1 times at 4 bits against all four. Its 4-bit format is also the smallest
   of the scalar ones, since it quantizes the embedding and the vocabulary matrix with everything else.
-- **Under load, kvbound and vLLM are level**, both paging the cache in 16-token blocks and preempting. TensorRT-LLM
-  is 5 to 14% behind with 96 requests at once and llama.cpp 26 to 46% behind.
+- **Under load, kvbound and vLLM are within 1% of each other on TinyLlama**, both paging the cache in 16-token
+  blocks and preempting; on Llama 3.2 kvbound serves 6% more. TensorRT-LLM is 5 to 14% behind with 96 requests at
+  once and llama.cpp 26 to 46% behind.
 - **On a long prompt llama.cpp is ahead of kvbound**, and kvbound is ahead of the other three.
-- **In accuracy per bit kvbound is behind.** At 4 bits ExLlamaV3's format loses about a third as much perplexity as
-  kvbound's on TinyLlama, and a quarter as much on Llama 3.2 with 4.9 bits against 4.1. Against the scalar formats
-  kvbound's calibrated checkpoint holds its own at fewer bits, and the same methods in vLLM and TensorRT-LLM give
-  the same numbers, but it has nothing between 4 and 8 bits, where llama.cpp's Q4_K_M and vLLM's GPTQ file with an
-  FP16 vocabulary matrix score better.
+- **In accuracy per bit kvbound is behind.** At 4 bits ExLlamaV3's format loses 0.12 of perplexity on TinyLlama
+  where kvbound's best checkpoint loses 0.32, and 0.30 against 1.14 on Llama 3.2 with 4.9 bits against 4.1. Against
+  the scalar formats kvbound's calibrated checkpoint holds its own at fewer bits, and AWQ in vLLM and TensorRT-LLM
+  scores within 0.07 of kvbound's AWQ. But kvbound has nothing between 4 and 8 bits, where llama.cpp's Q4_K_M scores
+  better on both models and vLLM's GPTQ file, with an FP16 vocabulary matrix, on Llama 3.2.
 
 ## Summary against llama.cpp
 
@@ -54,22 +55,22 @@ there. The other three GPU stacks were recorded later the same day, and kvbound 
 - *More requests than the KV memory holds.* With 96 requests at once kvbound serves 1.3 to 1.5 times the tokens per
   second on TinyLlama and 1.9 to 2.1 times on Llama 3.2. It admits by free blocks and runs 30 sequences where
   llama.cpp's slots must be sized for 21, and its step for 30 rows is shorter than llama.cpp's for 21.
-- *First token under load.* 9 to 16 ms at the median while requests arrive at 2 to 16 per second, against 25 to 35
+- *First token under load.* 9 to 16 ms at the median while requests arrive at 2 to 16 per second, against 25 to 34
   ms.
 
 **Level.**
 
 - *Accuracy at 16 and 8 bits.* From the same FP16 weights the two engines score the same perplexity within 0.05%,
   and each one's 8-bit format costs at most 0.3%.
-- *Serving below saturation.* At 2 to 8 requests per second both engines deliver what arrives, and throughput is the
-  offered load.
+- *Serving well below saturation.* At 2 and 4 requests per second both engines deliver what arrives, within 3% of
+  each other. At 8 per second llama.cpp is 2% behind on TinyLlama and 5% on Llama 3.2 with FP16 weights.
 - *Accuracy at 4 bits per weight, with a caveat.* kvbound's best 4.13-bit checkpoint scores between llama.cpp's
   4.63-bit and 4.85-bit files on TinyLlama and better than its 4.50 and 4.94-bit files on Llama 3.2. kvbound's is
   calibrated on text from the same corpus as the test; llama.cpp's files here use no calibration at all.
 
 **Behind.**
 
-- *A long prompt.* llama.cpp evaluates a 1,024-token prompt in 59 to 68 ms where kvbound's first token takes 70 to
+- *A long prompt.* llama.cpp evaluates a 1,024-token prompt in 59 to 68 ms where kvbound's first token takes 69 to
   73 ms. kvbound accumulates its products in FP32 because its accuracy contract failed with FP16 accumulation;
   llama.cpp's FP16 products use FP16 accumulation.
 - *Accuracy between 4 and 8 bits.* Q4_K_M spends 5.18 bits per weight on Llama 3.2 and scores 11.44 where
@@ -109,8 +110,9 @@ differences between a server and a benchmark binary, and the serving section say
 
 ## Accuracy per bit
 
-WikiText-2 perplexity, FP16 KV cache, RTX 3060 Ti. kvbound's rows are the engine's logits; `int4_g` and
-`int4_g.awq` are records of 2026-11-17, the rest of this session.
+WikiText-2 perplexity, FP16 KV cache, RTX 3060 Ti. kvbound's rows are the engine's logits. Its FP16, INT8,
+`int4_g` and `int4_g.awq` rows are records of 2026-11-17, from the same checkpoint files; the rest are of this
+session.
 
 | Weights | Bits per weight | TinyLlama 1.1B | Bits per weight | Llama 3.2 1B |
 | --- | --- | --- | --- | --- |
@@ -161,7 +163,8 @@ and 83% of the same ceilings.
 Both engines replay a decode step from a CUDA graph, which hides its kernels from Nsight Systems, so each was traced
 with graphs off: 255 or 256 decode steps of TinyLlama after a prompt of one or two tokens (`make profile`, `make
 profile-llamacpp`; summaries under `results/profiles/`, the runs of 2026-11-19 from 10:50 UTC on). The first four rows
-are GPU time per step by kind of kernel.
+are GPU time per step by kind of kernel; the kernels of llama.cpp's two-token prompt, 0.02 ms per step or less, are
+left out.
 
 | ms per decode step, TinyLlama | kvbound FP16 | llama.cpp F16 | kvbound INT4 | llama.cpp Q4_0 |
 | --- | --- | --- | --- | --- |
@@ -213,10 +216,10 @@ activations, a denser 4-bit format, and one synchronization per step.
 
 The 4-bit column is `int4_g` against Q4_0, and all values are medians of 10 runs. kvbound's figure is the whole wait
 for the first token. llama.cpp's server figure is the prompt evaluation alone, and its client figure the whole wait
-including HTTP. The client's medians are noisy on this machine; its fastest run is 0.6 to 1.2 ms above the server's
+including HTTP. The client's medians are noisy on this machine; its fastest run is 0.6 to 1.3 ms above the server's
 fastest prompt time in every row. The 1,024-token rows give llama.cpp one batch of 1,024 (`--ubatch-size 1024`), as
-kvbound runs it; in batches of 512, the server's default, its prompt times are 68 to 71 ms on TinyLlama and 61 to 66
-ms on Llama 3.2.
+kvbound runs it; in batches of 512, the server's default, its median prompt times are 68.0 to 70.5 ms on TinyLlama
+and 60.8 to 65.5 ms on Llama 3.2.
 
 For a short prompt kvbound is 1 to 4 ms ahead. For a long one llama.cpp is ahead, by 4 to 6 ms with FP16 weights and
 by up to 12 ms with 8-bit ones. Reading its source at the tag gives a likely reason, which this project did not
@@ -255,14 +258,15 @@ time zero. No request failed in any run.
 | kvbound FP16 / INT4 | 13.8 / 9.8 | 13.1 / 10.2 | 14.2 / 10.5 | 15.7 / 11.6 |
 | llama.cpp F16 / Q4_0 | 33.2 / 26.0 | 33.3 / 25.8 | 33.6 / 28.6 | 33.9 / 27.6 |
 
-Up to 8 requests per second the trace sets the throughput: both engines finish requests about as fast as they
-arrive, and the difference shows in latency instead. kvbound's median time per output token with FP16 weights is 5.9
-to 6.6 ms on TinyLlama against 7.0 to 7.7 ms, the batch-1 decode gap carried into small batches. At 16 per second
-llama.cpp falls behind on throughput: by 7% (FP16) and 1 to 3% (4-bit) on TinyLlama, and by 17% and 11 to 14% on
-Llama 3.2.
+At 2 and 4 requests per second the trace sets the throughput: both engines finish requests about as fast as they
+arrive, within 3% of each other, and the difference shows in latency instead. kvbound's median time per output token
+with FP16 weights is 5.9 to 6.6 ms on TinyLlama against 7.0 to 7.7 ms up to 8 per second, the batch-1 decode gap
+carried into small batches. At 8 per second llama.cpp's FP16 throughput is 2% lower on TinyLlama and 5% lower on
+Llama 3.2. At 16 per second it is 7% lower (FP16) and 1 to 3% lower (4-bit) on TinyLlama, and 17% and 11 to 14%
+lower on Llama 3.2.
 
 The first token takes llama.cpp 25 to 34 ms at every rate, two to three times as long as kvbound, although the
-median prompt here is 64 tokens and the same server evaluates a 128-token prompt in 12 to 15 ms. A request that
+median prompt of this trace is 68 tokens and the same server evaluates a 128-token prompt in 12 to 15 ms. A request that
 arrives while a step is running waits for it in both engines. Where the rest goes was not measured; the HTTP path
 is part of it, and `kvb-bench` has none.
 
@@ -330,9 +334,9 @@ kept beside them, and perplexity from the stack's log-probabilities or logits un
 - **Settings that are not the stack's default**, each named in the records: prefix caching and block reuse are off,
   so that no pass reuses another's prompt, and TensorRT-LLM pads batches to the sizes it captured CUDA graphs for.
   Without the padding its median time per token under load was about twice as long in a trial run.
-- **4-bit weights.** Each stack's own tool made them, on the 128 calibration windows kvbound's AWQ and GPTQ use:
-  llm-compressor (AWQ and GPTQ) for vLLM and NVIDIA Model Optimizer (AWQ) for TensorRT-LLM, in groups of 128 like
-  `int4_g`. Both tools leave the embedding and the vocabulary matrix in FP16, so these files hold 5.5 to 6.8 bits
+- **4-bit weights** (W4A16 in the tables: 4-bit weights, 16-bit activations). Each stack's own tool made them, on
+  the 128 calibration windows kvbound's AWQ and GPTQ use: llm-compressor (AWQ and GPTQ) for vLLM and NVIDIA Model
+  Optimizer (its `awq_lite` search) for TensorRT-LLM, in groups of 128 like `int4_g`. Both tools leave the embedding and the vocabulary matrix in FP16, so these files hold 5.5 to 6.8 bits
   per weight where `int4_g` holds 4.13. TensorRT-LLM 1.2.1 loads no GPTQ checkpoint.
 - **WSL2.** kvbound built and run inside WSL decoded within 3% of its Windows figures in a trial run that was not
   recorded; kvbound's numbers below are its Windows records.
@@ -401,22 +405,25 @@ What the two tables say about these stacks:
 - **One request, FP16: kvbound is 17 to 20% faster on TinyLlama and 8 to 15% on Llama 3.2.** Neither stack was
   profiled, so this document does not say where their step goes.
 - **One request, 4 bits: kvbound is 1.5 to 1.8 times faster.** Part of it is bytes. These files keep the vocabulary
-  matrix in FP16, and a decode step reads it whole: 631 MB per token on TinyLlama against `int4_g`'s 533, and 1,027
-  MB against 637 on Llama 3.2, whose vocabulary is four times larger. That ratio is 1.18 on TinyLlama and 1.61 on
-  Llama 3.2, so it accounts for most of the gap on the second model and the smaller part on the first.
+  matrix in FP16, and a decode step reads it whole: 631 to 646 MB per token on TinyLlama against `int4_g`'s 533, and
+  1,027 to 1,043 MB against 637 on Llama 3.2, whose vocabulary is four times larger. That ratio is about 1.2 on
+  TinyLlama and 1.6 on Llama 3.2, so it accounts for most of the gap on the second model and the smaller part on
+  the first.
 - **The first token takes them about twice as long for a short prompt** (17 to 29 ms against 10 to 11) and 3 to 14
   ms longer for a 1,024-token one. Unlike llama.cpp, neither is ahead on the long prompt.
-- **Serving: vLLM is level with kvbound.** On TinyLlama it is within 1% at every arrival rate and with 96 requests
-  at once, where it runs the same 30 sequences from the same bytes: it pages its cache in 16-token blocks and
-  preempts, as kvbound does. On Llama 3.2 kvbound serves 6% more at 16 requests per second and with 96 at once.
+- **Serving: vLLM is the closest to kvbound.** On TinyLlama it is within 1% at every arrival rate and with 96
+  requests at once, where it runs the same 30 sequences from the same bytes: it pages its cache in 16-token blocks
+  and preempts, as kvbound does. On Llama 3.2 kvbound serves 3% more at 8 requests per second and 6% more at 16 per
+  second and with 96 at once.
   TensorRT-LLM is within 3% of kvbound while requests arrive and 5% and 14% behind with 96 at once; its default
   admission reserves a request's full length and does not preempt. Both stacks answer the first token in 23 to 42
   ms under load where kvbound takes 12 to 16.
-- **Accuracy: the same method on the same data gives the same number.** AWQ scores 9.46 and 9.44 in the two stacks
-  and 9.40 in kvbound on TinyLlama, and 12.90, 12.90 and 12.91 on Llama 3.2. GPTQ in vLLM scores 9.20 on TinyLlama,
-  where kvbound's GPTQ scores 9.31 alone and 9.20 on top of AWQ. On Llama 3.2 vLLM's GPTQ is ahead, 11.88 against
-  12.37 and 12.13, with the vocabulary matrix kept in FP16 at a cost of 2.5 more bits per weight. Calibration is
-  not a caveat here: all three use the same 128 windows.
+- **Accuracy: AWQ on the same data gives nearly the same number everywhere.** It scores 9.46 and 9.44 in the two
+  stacks and 9.40 in kvbound on TinyLlama, and 12.90, 12.90 and 12.91 on Llama 3.2, although the three searches
+  differ in detail. GPTQ does not match as closely. vLLM's scores 9.20 on TinyLlama and 11.88 on Llama 3.2, better
+  than kvbound's GPTQ alone on both (9.31 and 12.37). kvbound's GPTQ on top of AWQ equals it on TinyLlama (9.20) and
+  stays behind on Llama 3.2 (12.13). vLLM's files keep the vocabulary matrix in FP16, 1.4 and 2.5 more bits per
+  weight on the two models. Calibration is not a caveat here: all three use the same 128 windows.
 
 ## ExLlamaV3
 
@@ -449,7 +456,7 @@ Its rows are in the two one-request tables above. Loading the unquantized checkp
   head and embedding differ by 1% on TinyLlama. A step of a 1B model there is bound by something other than memory
   bandwidth; what was not profiled. Its unquantized path, at 62 and 77 tokens/s, is there for the perplexity check
   and is not a speed baseline.
-- **First token:** 19 to 22 ms for a 128-token prompt and 79 to 88 ms for 1,024 tokens with the 4-bit files, against
+- **First token:** 19 to 22 ms for a 128-token prompt and 79 to 87 ms for 1,024 tokens with the 4-bit files, against
   11 and 70 to 71 ms.
 
 Serving was not measured for ExLlamaV3.
@@ -470,12 +477,12 @@ In short:
   token, one sequence at a time. Each step attends over all 4,096 positions under a mask, so attention costs the
   same at position 10 as at position 4,000, and `softmax` and attention's `matmul` are the costliest operators in the
   profiles.
-- kvbound's decode step is the opposite: 90% of it is weights streaming through the products, and attention grows
-  with the sequence's real length.
+- kvbound's decode step is the opposite: with FP16 weights, 90% of a TinyLlama step is weights streaming through
+  the products, and attention grows with the sequence's real length.
 
-The same checkpoint decodes at 472 tokens/s on the RTX 3060 Ti with kvbound's INT4 weights. The two numbers are not
-a comparison of engines: one is a phone NPU under a power budget of a few watts running one sequence, the other a
-200 W desktop card. What carries over is the design lesson, that a compiler which needs every shape fixed pays for
+Llama 3.2 1B (the base model; Qualcomm's export is the Instruct variant) decodes at 472 tokens/s on the RTX 3060 Ti
+with kvbound's INT4 weights. The two numbers are not a comparison of engines: one is a phone NPU running one
+sequence, the other a desktop card with a 220 W power limit. What carries over is the design lesson, that a compiler which needs every shape fixed pays for
 the full context on every step.
 
 ## What was not done

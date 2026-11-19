@@ -20,7 +20,7 @@ flowchart TB
     LOAD["io, model, memory<br/>loaders, the op program of a Llama or a Whisper,<br/>activations planned into one arena"]
     SCHED["sched<br/>static batches or continuous batching"]
     ALLOC["kv<br/>whole slots or 16-token blocks"]
-    SAMP["runtime<br/>sampler, beam search"]
+    SAMP["runtime<br/>sampler and beam search on the host"]
   end
   subgraph GPU["kvbound_cuda: CUDA"]
     ENG["Engine, AsrEngine<br/>one step runs the program once, replayed from a CUDA graph"]
@@ -40,15 +40,16 @@ flowchart TB
   ENG --> KERN
   ENG --> BLAS
   KERN <--> POOL
-  ENG -->|logits| SAMP
+  ENG -->|greedy tokens from an argmax kernel, or logits| SAMP
   SAMP -->|tokens| SCHED
   GOLD -.->|tests compare every site| ENG
 ```
 
 A checkpoint is loaded once into device memory, and its layers become a flat program of ops whose intermediate
 tensors share one arena planned by lifetime. Each step, the scheduler picks the rows to run (prompt tokens of newly
-admitted requests, one token of every running one), the engine runs the program over them, and the sampled tokens go
-back to the scheduler. The two memory designs differ only in the scheduler's policy and in how the KV pool is cut:
+admitted requests, one token of every running one), the engine runs the program over them, and the next tokens go
+back to the scheduler: the argmax taken on the GPU when decoding greedily, the host sampler's or the beam search's
+choice from the logits otherwise. The two memory designs differ only in the scheduler's policy and in how the KV pool is cut:
 whole 1,024-token slots, or 16-token blocks found through a block table.
 [`docs/static-vs-paged-memory.md`](docs/static-vs-paged-memory.md) describes both and what each costs. The PyTorch
 reference models define what correct means: the engine is tested against their activations at every capture site and
@@ -146,7 +147,8 @@ Ti the DRAM writes of `gemm_quantized` are not explained; the step-counter profi
 Four GPU stacks ran on the RTX 3060 Ti with the same token ids, the same requests and the same KV bytes as kvbound:
 llama.cpp `b12503` and ExLlamaV3 1.6.7 on Windows, vLLM 0.34.0 and TensorRT-LLM 1.2.1 under WSL2 (2026-11-19, driver
 621.24). [`docs/production-comparison.md`](docs/production-comparison.md) has the method, every table, the profiles
-and what was not done.
+and what was not done. In the table, `longtail` is 48 requests with long-tailed prompt and output lengths arriving
+as a Poisson process, and `fixed` is requests of 256 prompt tokens and 128 output tokens, all at time zero.
 
 | RTX 3060 Ti | kvbound | llama.cpp | vLLM | TensorRT-LLM | ExLlamaV3 |
 | --- | --- | --- | --- | --- | --- |
@@ -165,19 +167,19 @@ and what was not done.
   weight, a kernel that quantizes the activations before each quantized product, and twenty stream synchronizations
   per step against one. vLLM's and TensorRT-LLM's 4-bit files keep the vocabulary matrix in FP16 and read 1.2 to 1.6
   times the bytes per token; the three other stacks were not profiled.
-- **Level with vLLM under load.** Both page the KV cache in 16-token blocks and preempt, and both run 30 sequences
-  from the same bytes. TensorRT-LLM is 5 to 14% behind with 96 requests at once. llama.cpp is 26 to 46% behind, for
+- **Within 1% of vLLM under load on TinyLlama**, and 6% ahead of it on Llama 3.2. Both page the KV cache in
+  16-token blocks and preempt, and both run 30 sequences from the same bytes. TensorRT-LLM is 5 to 14% behind with 96 requests at once. llama.cpp is 26 to 46% behind, for
   two reasons that are not kernels: its slots must be sized for 21 sequences, and its server's work around the
   engine adds 4 to 8 ms to a 21-row step.
 - **Behind llama.cpp on a long prompt.** llama.cpp accumulates wide FP16 products in FP16; kvbound's accuracy
   contract needs FP32, which the tensor cores run at 33 TFLOPS against 58. The other three are slower than kvbound
   here.
-- **Behind in accuracy per bit.** ExLlamaV3's trellis-coded format loses about a third as much perplexity as
-  kvbound's best 4-bit checkpoint, with calibration text that is not from the test corpus. Against the scalar
-  formats kvbound's calibrated checkpoint scores better than llama.cpp's Q4_0 at fewer bits, though kvbound
-  calibrates on the test corpus's train split and llama.cpp's files use no calibration; AWQ and GPTQ in vLLM and
-  TensorRT-LLM, on the same calibration windows, give the numbers kvbound's give. kvbound has no format between 4
-  and 8 bits, where Q4_K_M and vLLM's GPTQ file score better.
+- **Behind in accuracy per bit.** ExLlamaV3's trellis-coded format is 0.12 of perplexity above FP16 on TinyLlama
+  at 4 bits where kvbound's best checkpoint is 0.32 above, with calibration text that is not from the test corpus.
+  Against the scalar formats kvbound's calibrated checkpoint scores better than llama.cpp's Q4_0 at fewer bits,
+  though kvbound calibrates on the test corpus's train split and llama.cpp's files use no calibration; AWQ in vLLM
+  and TensorRT-LLM, on the same calibration windows, scores within 0.07 of kvbound's AWQ. kvbound has no format
+  between 4 and 8 bits, where Q4_K_M scores better on both models and vLLM's GPTQ file on Llama 3.2.
 
 Qualcomm's stock export of Llama 3.2 1B was profiled on the Hexagon NPU of two phones through Qualcomm AI Hub as a
 production example of the static memory design: 58 to 60 tokens/s from per-graph latencies, with every step

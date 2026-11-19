@@ -75,7 +75,7 @@ them in memory:
 | TinyLlama 1.1B | Weights on device | Decode, batch 1 | WikiText-2 perplexity |
 | --- | --- | --- | --- |
 | FP16 | 2,098 MiB | 177 tokens/s | 8.87 |
-| INT8 | 1,050 MiB | 314 tokens/s | 8.87 |
+| INT8 | 1,050 MiB | 312 tokens/s | 8.87 |
 | INT4, round to nearest | 541 MiB | 507 tokens/s | 9.96 |
 
 INT8 is free in accuracy. INT4 is not: rounding each weight to the nearest of 15 levels raises perplexity by 12%
@@ -126,16 +126,17 @@ token ids, the same requests and the same bytes of KV memory.
 (both engines measured in one later session on a newer driver, so kvbound's figures sit a little above the table's).
 Profiles of both engines show that llama.cpp's decode step is about 0.7 ms longer at either precision, and what the
 0.7 ms is made of. It multiplies the query, key and value matrices as three products where kvbound stacks them into
-one. Its 4-bit format spends 4.5 bits per weight where kvbound's spends 4.125. It quantizes the activations to 8 bits
+one. Its 4-bit file spends 4.6 bits per weight where kvbound's spends 4.1. It quantizes the activations to 8 bits
 before every quantized product, a second kernel each time. It waits on the GPU twenty times in a step where kvbound
 waits once. None of these is a deep difference, and each is what the roofline says to look for: bytes read per
 token, and time not spent reading them.
 
 **A long prompt.** Here llama.cpp is ahead. It evaluates 1,024 tokens in 59 to 68 ms where kvbound's first token
-takes 70 to 73. kvbound sums its matrix products in FP32, the price of the accuracy contract from the second
+takes 69 to 73. kvbound sums its matrix products in FP32, the price of the accuracy contract from the second
 section; llama.cpp sums in FP16, which the tensor cores do almost twice as fast.
 
-**Serving.** While requests arrive at up to 8 per second, both engines keep up and deliver the same throughput.
+**Serving.** While requests arrive at up to 4 per second, both engines keep up and deliver the same throughput
+within 3%.
 With 96 requests at once kvbound serves 1,819 tokens per second against 1,340, and 1,917 against 1,026 on Llama
 3.2. Faster kernels are not the reason: llama.cpp's engine alone steps 21 sequences in 10 ms, and kvbound steps 30
 in 12. One reason is admission. llama.cpp never preempts, so its slots must be few enough that every
@@ -157,14 +158,15 @@ attention products are the costliest operators; on the GPU engine, attention is 
 Three more GPU stacks went through the same protocol that day: vLLM and TensorRT-LLM under WSL2, and ExLlamaV3.
 
 - **vLLM is the closest in design**, a cache paged in 16-token blocks with preemption, and under load it is level
-  with kvbound: 1,834 tokens per second against 1,819 with 96 requests at once, both running 30 sequences from the
-  same memory.
-- **For one request kvbound is faster than all of them**, by 8 to 20% in FP16 and by 1.5 to 2.1 times at 4 bits.
+  with kvbound on TinyLlama: 1,834 tokens per second against 1,819 with 96 requests at once, both running 30
+  sequences from the same memory. On Llama 3.2 kvbound serves 6% more.
+- **For one request kvbound is faster than all of them**: by 8 to 20% in FP16 against vLLM and TensorRT-LLM
+  (ExLlamaV3's unquantized path is far slower and not what it is built for), and by 1.5 to 2.1 times at 4 bits.
   Part of the 4-bit gap is bytes again: vLLM's and TensorRT-LLM's 4-bit files keep the vocabulary matrix in FP16
   and read it whole on every token.
 - **ExLlamaV3 is far ahead in accuracy per bit.** Its format is not a grid of levels per weight: it rotates each
-  matrix and codes the weights with a trellis. With every matrix near 4 bits it scores 9.00 on TinyLlama, a third
-  of the loss of kvbound's best checkpoint, and its calibration text is not from the test corpus. AWQ and GPTQ on
+  matrix and codes the weights with a trellis. With every matrix near 4 bits it scores 9.00 on TinyLlama, 0.12
+  above FP16 where kvbound's best checkpoint is 0.32 above, and its calibration text is not from the test corpus. AWQ and GPTQ on
   a scalar format did not close that gap.
 
 ## The same engine, a different model
