@@ -14,7 +14,7 @@ with nothing cached:
                 context logits as JSON, would carry 33 million (TinyLlama) to 131 million (Llama
                 3.2) numbers per window. Its LLM API returns them as a tensor instead:
                 linux_stacks_worker feeds each window through it in TensorRT-LLM's environment
-                and applies kvbound's rule to the logits in float64.
+                and applies kvbound's rule to the logits (float32 logsumexp, float64 sum).
 
 Neither stack tokenizes here: ids go in, so the Hugging Face tokenizer of the checkpoint is the
 only one involved, as in kvbound's own evaluation.
