@@ -11,7 +11,8 @@ DEVICE ?= rtx3060ti
 # Arrival rates of serve-load, in requests per second
 RATES ?= 2 4 8 16
 # Weight variant and KV dtype for `make eval`:
-# fp16 | int8_pc | int4_g | int4_g.mse | int4_g.awq | int4_g.awq-noclip, fp16 | int8
+# fp16 | int8_pc | int4_g | int4_g.mse | int4_g.awq | int4_g.awq-noclip | int4_g.gptq |
+# int4_g.awq-gptq | int4_g.awq-noclip-gptq, fp16 | int8
 WEIGHTS ?= fp16
 KV ?= fp16
 # The weights:kv pairs `make precision` measures

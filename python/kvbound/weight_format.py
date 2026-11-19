@@ -19,6 +19,10 @@ act_scales "awq" marks an int4_g file whose matrices were quantized after rescal
 channels by activation statistics (kvbound.awq). The inverse scales are folded into the norm
 weights and up_proj, so the file reads and runs like any other int4_g file.
 
+rounding "gptq" marks an int4_g file whose integers were chosen by GPTQ (kvbound.gptq) instead of
+round-to-nearest: on the same grid and against the same kind of F16 scales, so it too reads and
+runs like any other int4_g file. Without the key the integers are rounded to nearest.
+
 Usage: WeightFormat.from_metadata(safe_open(path, "pt").metadata())
 """
 
@@ -33,6 +37,7 @@ SCHEMES = (FP16, INT8_PC, INT4_G)
 
 CLIPS = ("minmax", "mse", "awq")
 ACT_SCALES = ("", "awq")
+ROUNDINGS = ("", "gptq")
 PACK_ORDER = "lo_nibble_first"
 SCALE_DTYPE = "F16"
 SCALE_SUFFIX = ".scale"
@@ -48,9 +53,10 @@ KEY_PACK_ORDER = "kvbound.pack_order"
 KEY_SCALE_DTYPE = "kvbound.scale_dtype"
 KEY_CLIP = "kvbound.clip"
 KEY_ACT_SCALES = "kvbound.act_scales"
+KEY_ROUNDING = "kvbound.rounding"
 KEY_SOURCE = "kvbound.source"
 KEY_SOURCE_SHA256 = "kvbound.source_sha256"
-# Where the calibration tokens of an act_scales file came from.
+# Where the calibration tokens of an act_scales or gptq file came from.
 KEY_CALIB_DATASET = "kvbound.calib_dataset"
 KEY_CALIB_REVISION = "kvbound.calib_revision"
 KEY_CALIB_SHA256 = "kvbound.calib_sha256"
@@ -67,7 +73,17 @@ CALIB_KEYS = (
 )
 
 # Weight variants by directory suffix (see ModelSpec.variant_dir).
-VARIANTS = (FP16, INT8_PC, INT4_G, f"{INT4_G}.mse", f"{INT4_G}.awq", f"{INT4_G}.awq-noclip")
+VARIANTS = (
+    FP16,
+    INT8_PC,
+    INT4_G,
+    f"{INT4_G}.mse",
+    f"{INT4_G}.awq",
+    f"{INT4_G}.awq-noclip",
+    f"{INT4_G}.gptq",
+    f"{INT4_G}.awq-gptq",
+    f"{INT4_G}.awq-noclip-gptq",
+)
 
 
 @dataclass(frozen=True)
@@ -78,6 +94,7 @@ class WeightFormat:
     scale_dtype: str = ""
     clip: str = ""
     act_scales: str = ""
+    rounding: str = ""
 
     def __post_init__(self) -> None:
         if self.scheme not in SCHEMES:
@@ -101,6 +118,12 @@ class WeightFormat:
             consistent = self.clip != "awq"
         if not consistent:
             raise ValueError(f"inconsistent weight format: {self}")
+        # GPTQ chooses int4_g integers against min-max or awq clip scales; the mse clip picks
+        # scales by the rounding error of each weight alone, which GPTQ does not keep.
+        if self.rounding and (
+            self.rounding not in ROUNDINGS or self.scheme != INT4_G or self.clip == "mse"
+        ):
+            raise ValueError(f"inconsistent weight format: {self}")
         # The kernels read 32 weights per load and find a load's scale with a shift.
         if self.scheme == INT4_G and (
             self.group_size < 32 or self.group_size & (self.group_size - 1)
@@ -117,13 +140,14 @@ class WeightFormat:
         group_size: int = DEFAULT_GROUP_SIZE,
         clip: str = "minmax",
         act_scales: str = "",
+        rounding: str = "",
     ) -> "WeightFormat":
         """The format of a scheme with the fields it does not use filled in."""
         if scheme == INT4_G:
-            return cls(INT4_G, group_size, PACK_ORDER, SCALE_DTYPE, clip, act_scales)
+            return cls(INT4_G, group_size, PACK_ORDER, SCALE_DTYPE, clip, act_scales, rounding)
         if scheme == INT8_PC:
-            return cls(INT8_PC, 0, "", SCALE_DTYPE, clip, act_scales)
-        return cls(act_scales=act_scales)
+            return cls(INT8_PC, 0, "", SCALE_DTYPE, clip, act_scales, rounding)
+        return cls(act_scales=act_scales, rounding=rounding)
 
     @property
     def quantized(self) -> bool:
@@ -132,10 +156,15 @@ class WeightFormat:
     @property
     def variant(self) -> str:
         """Directory suffix of checkpoints in this format: the scheme, then ".mse" for the mse
-        clip, ".awq" for activation scales with the awq clip and ".awq-noclip" for scales alone."""
+        clip, ".awq" for activation scales with the awq clip and ".awq-noclip" for scales alone;
+        GPTQ rounding adds ".gptq" to a bare scheme and "-gptq" to the rest (".awq-gptq")."""
         if self.act_scales:
-            return f"{self.scheme}.awq" if self.clip == "awq" else f"{self.scheme}.awq-noclip"
-        return f"{self.scheme}.mse" if self.clip == "mse" else self.scheme
+            variant = f"{self.scheme}.awq" if self.clip == "awq" else f"{self.scheme}.awq-noclip"
+        else:
+            variant = f"{self.scheme}.mse" if self.clip == "mse" else self.scheme
+        if self.rounding:
+            variant += f"-{self.rounding}" if "." in variant else f".{self.rounding}"
+        return variant
 
     def to_metadata(self) -> dict[str, str]:
         """The header keys of this format; empty for a plain checkpoint."""
@@ -149,9 +178,11 @@ class WeightFormat:
             KEY_SCALE_DTYPE: self.scale_dtype,
             KEY_CLIP: self.clip,
         }
-        # Written only when set, so files without activation scales keep their header.
+        # Written only when set, so files without activation scales or GPTQ keep their header.
         if self.act_scales:
             metadata[KEY_ACT_SCALES] = self.act_scales
+        if self.rounding:
+            metadata[KEY_ROUNDING] = self.rounding
         return metadata
 
     @classmethod
@@ -171,6 +202,7 @@ class WeightFormat:
                 scale_dtype=metadata[KEY_SCALE_DTYPE],
                 clip=metadata[KEY_CLIP],
                 act_scales=metadata.get(KEY_ACT_SCALES, ""),
+                rounding=metadata.get(KEY_ROUNDING, ""),
             )
         except KeyError as e:
             raise ValueError(f"quantized checkpoint lacks metadata key {e}") from e

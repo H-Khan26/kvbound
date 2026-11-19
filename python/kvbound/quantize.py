@@ -9,18 +9,24 @@ With --awq, int4_g weights are rescaled by activation statistics of calibration 
 are rounded, and clipped by their effect on the output (kvbound.awq). That search runs text
 through a Llama, so it does not apply to a Whisper checkpoint.
 
+With --gptq, int4_g integers are chosen by GPTQ instead of round-to-nearest, on the same grid
+(kvbound.gptq), alone or after the AWQ scales and clip ranges of --awq. It too calibrates on text
+through a Llama.
+
 Usage: python -m kvbound.quantize tinyllama-1.1b --scheme int4_g --group-size 128
+       python -m kvbound.quantize tinyllama-1.1b --scheme int4_g --awq --gptq
        python -m kvbound.quantize whisper-base-ar-quran --scheme int8_pc
 """
 
 import argparse
+import dataclasses
 import json
 import math
 import shutil
 import statistics
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from safetensors import safe_open
@@ -41,6 +47,9 @@ from kvbound.weight_format import (
     SCALE_SUFFIX,
     WeightFormat,
 )
+
+if TYPE_CHECKING:
+    from kvbound.gptq import GptqConfig
 
 WEIGHTS_FILE = "model.safetensors"
 MANIFEST_FILE = "quantize_manifest.json"
@@ -201,6 +210,12 @@ def quantize_tensor(
     return torch.cat(qs), torch.cat(scales), sqnr
 
 
+def sqnr_db(w: Tensor, w_hat: Tensor) -> float | None:
+    """10 log10(|w|^2 / |w - w_hat|^2), None when w_hat is exact."""
+    noise = (w.double() - w_hat.double()).pow(2).sum().item()
+    return 10 * math.log10(w.double().pow(2).sum().item() / noise) if noise > 0 else None
+
+
 def is_matrix(name: str, shape: tuple[int, ...] | list[int]) -> bool:
     """Whether a checkpoint tensor is a matrix activations are multiplied by: the tensors that
     are quantized. Biases, norm parameters, convolution weights [out, in, kernel] and position
@@ -225,6 +240,8 @@ def convert(
     device: str | None = None,
     awq: Tensor | None = None,
     calib_meta: dict[str, str] | None = None,
+    gptq: Tensor | None = None,
+    gptq_config: "GptqConfig | None" = None,
 ) -> dict[str, Any]:
     """Writes a quantized copy of the plain checkpoint in src_dir to out_dir; returns its manifest.
 
@@ -240,17 +257,33 @@ def convert(
     search finds. SQNR is then relative to the scaled weights. out_dir also gets
     awq_scales.safetensors and the manifest an "awq" section; calib_meta holds the header keys
     that say where the tokens came from. A Whisper checkpoint takes no awq.
+
+    gptq, calibration token ids [n, len] (the same as awq's when both are set), chooses the
+    int4_g integers of every matrix but the embedding and a tied lm_head by GPTQ
+    (kvbound.gptq.quantize_model, run with gptq_config, a kvbound.gptq.GptqConfig), on the AWQ
+    scales and clip scales when awq is set too. The manifest gets a "gptq" section.
     """
-    fmt = WeightFormat.make(scheme, group_size, clip, "awq" if awq is not None else "")
+    fmt = WeightFormat.make(
+        scheme,
+        group_size,
+        clip,
+        "awq" if awq is not None else "",
+        "gptq" if gptq is not None else "",
+    )
     if not fmt.quantized:
         raise ValueError(f"{scheme!r} is not a quantized scheme")
-    if set(calib_meta or {}) - set(CALIB_KEYS) or (calib_meta and awq is None):
-        raise ValueError(f"calib_meta takes the keys {CALIB_KEYS}, with awq only")
+    calibrated = awq is not None or gptq is not None
+    if set(calib_meta or {}) - set(CALIB_KEYS) or (calib_meta and not calibrated):
+        raise ValueError(f"calib_meta takes the keys {CALIB_KEYS}, with awq or gptq only")
+    if awq is not None and gptq is not None and not torch.equal(awq, gptq):
+        raise ValueError("awq and gptq calibrate on the same tokens")
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     src_dir, out_dir = Path(src_dir), Path(out_dir)
     config = json.loads((src_dir / "config.json").read_text(encoding="utf-8"))
-    if awq is not None and config.get("model_type") == "whisper":
-        raise ValueError("awq calibrates on text through a Llama; a Whisper checkpoint takes none")
+    if calibrated and config.get("model_type") == "whisper":
+        raise ValueError(
+            "awq and gptq calibrate on text through a Llama; a Whisper checkpoint takes none"
+        )
     src = src_dir / WEIGHTS_FILE
     started = time.perf_counter()
 
@@ -261,6 +294,8 @@ def convert(
     # search found.
     scaled: dict[str, Tensor] = {}
     awq_result = awq_report = None
+    # With gptq: the integers and scales GPTQ chose, and its report.
+    gptq_result = gptq_report = None
     with safe_open(str(src), framework="pt") as f:
         if WeightFormat.from_metadata(f.metadata()).quantized:
             raise ValueError(f"{src} is already quantized")
@@ -270,6 +305,8 @@ def convert(
             if is_matrix(name, shape):
                 fmt.check_shape(shape, name)
 
+        on_cuda = torch.device(device).type == "cuda"
+        model = load_llama(src_dir, "fp16") if calibrated else None
         if awq is not None:
             # Imported here because kvbound.awq builds on this module.
             from kvbound.awq import (  # noqa: PLC0415
@@ -279,12 +316,10 @@ def convert(
                 scale_layer,
             )
 
-            on_cuda = torch.device(device).type == "cuda"
+            assert model is not None
             if on_cuda:
                 torch.cuda.reset_peak_memory_stats(device)
-            awq_result = collect_and_search(
-                load_llama(src_dir, "fp16"), awq, group_size, device, clip == "awq"
-            )
+            awq_result = collect_and_search(model, awq, group_size, device, clip == "awq")
             awq_report = {
                 "calib_windows": awq.shape[0],
                 "calib_window": awq.shape[1],
@@ -293,6 +328,36 @@ def convert(
             }
             if on_cuda:
                 awq_report["cuda_max_memory_allocated"] = torch.cuda.max_memory_allocated(device)
+        if gptq is not None:
+            # Imported here because kvbound.gptq builds on this module.
+            from kvbound.gptq import GptqConfig, fold_awq, quantize_model  # noqa: PLC0415
+
+            assert model is not None
+            gptq_config = gptq_config or GptqConfig()
+            gptq_started = time.perf_counter()
+            if on_cuda:
+                torch.cuda.reset_peak_memory_stats(device)
+            if awq_result:
+                fold_awq(model, awq_result.s_attn, awq_result.s_mlp, awq_result.s_down)
+            gptq_result = quantize_model(
+                model,
+                gptq,
+                group_size,
+                device,
+                gptq_config,
+                awq_result.clip_scales if awq_result else None,
+            )
+            gptq_report = {
+                "config": dataclasses.asdict(gptq_config),
+                "calib_windows": gptq.shape[0],
+                "calib_window": gptq.shape[1],
+                "seconds": time.perf_counter() - gptq_started,
+                "layers": gptq_result.report,
+            }
+            if on_cuda:
+                gptq_report["cuda_max_memory_allocated"] = torch.cuda.max_memory_allocated(device)
+                gptq_report["cuda_max_memory_reserved"] = torch.cuda.max_memory_reserved(device)
+        del model
         # The scales of a tensor the clip search did not visit are min-max ones.
         clip_scales = awq_result.clip_scales if awq_result else {}
         unclipped = WeightFormat.make(scheme, group_size) if awq_result else fmt
@@ -310,7 +375,11 @@ def convert(
             if not is_matrix(name, shapes[name]):
                 tensors[name] = to_f16(w, name)
                 continue
-            q, scale, sqnr = quantize_tensor(w, unclipped, device, clip_scales.get(name))
+            if gptq_result and name in gptq_result.quantized:
+                q, scale = gptq_result.quantized.pop(name)
+                sqnr = sqnr_db(w.float(), dequantize_int4_g(q, scale, group_size))
+            else:
+                q, scale, sqnr = quantize_tensor(w, unclipped, device, clip_scales.get(name))
             tensors[name], tensors[name + SCALE_SUFFIX] = q, scale
             n_params += w.numel()
             n_bytes += q.nbytes + scale.nbytes
@@ -352,6 +421,8 @@ def convert(
     }
     if awq_report is not None:
         manifest["awq"] = awq_report
+    if gptq_report is not None:
+        manifest["gptq"] = gptq_report
     with (out_dir / MANIFEST_FILE).open("w", encoding="utf-8", newline="\n") as out:
         out.write(json.dumps(manifest, indent=2) + "\n")
     return manifest
@@ -418,26 +489,52 @@ def main() -> None:
     parser.add_argument(
         "--awq", action="store_true", help="int4_g only: activation-aware scales (kvbound.awq)"
     )
-    parser.add_argument("--calib-windows", type=int, default=128, help="--awq: windows of text")
-    parser.add_argument("--calib-len", type=int, default=512, help="--awq: tokens per window")
-    parser.add_argument("--calib-seed", type=int, default=0, help="--awq: which windows")
+    parser.add_argument(
+        "--gptq", action="store_true", help="int4_g only: GPTQ rounding (kvbound.gptq)"
+    )
+    parser.add_argument(
+        "--gptq-damp", type=float, default=None, help="--gptq: damping, of mean diag H"
+    )
+    parser.add_argument(
+        "--gptq-input-order",
+        action="store_true",
+        help="--gptq: round columns in input order with group scales set as reached",
+    )
+    parser.add_argument("--calib-windows", type=int, default=128, help="--awq, --gptq: windows")
+    parser.add_argument("--calib-len", type=int, default=512, help="--awq, --gptq: window length")
+    parser.add_argument("--calib-seed", type=int, default=0, help="--awq, --gptq: which windows")
     parser.add_argument("--device", default=None, help="default: cuda when available")
     args = parser.parse_args()
     clip = args.clip or ("awq" if args.awq else "minmax")
-    if args.scheme == INT8_PC and (args.awq or clip != "minmax"):
-        parser.error("--clip and --awq apply to int4_g only")
-    if args.awq and clip == "mse":
-        parser.error("--awq takes --clip awq or --clip minmax")
+    if args.scheme == INT8_PC and (args.awq or args.gptq or clip != "minmax"):
+        parser.error("--clip, --awq and --gptq apply to int4_g only")
+    if (args.awq or args.gptq) and clip == "mse":
+        parser.error("--awq and --gptq take --clip awq or --clip minmax")
+    if (args.gptq_damp is not None or args.gptq_input_order) and not args.gptq:
+        parser.error("--gptq-damp and --gptq-input-order need --gptq")
     if clip == "awq" and not args.awq:
         parser.error("--clip awq needs --awq")
 
     spec = load_spec(args.model)
-    if args.awq and spec.family != "llama":
-        parser.error(f"--awq calibrates on text through a Llama; {spec.name} is a {spec.family}")
-    fmt = WeightFormat.make(args.scheme, args.group_size, clip, "awq" if args.awq else "")
+    if (args.awq or args.gptq) and spec.family != "llama":
+        parser.error(
+            f"--awq and --gptq calibrate on text through a Llama; {spec.name} is a {spec.family}"
+        )
+    fmt = WeightFormat.make(
+        args.scheme,
+        args.group_size,
+        clip,
+        "awq" if args.awq else "",
+        "gptq" if args.gptq else "",
+    )
     out_dir = spec.variant_dir(fmt.variant)
-    windows = calib_meta = None
-    if args.awq:
+    windows = calib_meta = gptq_config = None
+    if args.gptq:
+        from kvbound.gptq import DEFAULT_DAMP, GptqConfig  # noqa: PLC0415
+
+        damp = DEFAULT_DAMP if args.gptq_damp is None else args.gptq_damp
+        gptq_config = GptqConfig(damp=damp, act_order=not args.gptq_input_order)
+    if args.awq or args.gptq:
         # Imported here because kvbound.awq builds on this module.
         from kvbound.awq import calibration_meta, calibration_windows  # noqa: PLC0415
 
@@ -451,8 +548,10 @@ def main() -> None:
         clip,
         source=f"{spec.hf_repo}@{spec.revision}",
         device=args.device,
-        awq=windows,
+        awq=windows if args.awq else None,
         calib_meta=calib_meta,
+        gptq=windows if args.gptq else None,
+        gptq_config=gptq_config,
     )
     print(
         f"{spec.name} {fmt.variant}: SQNR mean {m['mean_sqnr_db']:.2f} dB, "
@@ -472,6 +571,16 @@ def main() -> None:
             )
         peak = m["awq"].get("cuda_max_memory_allocated", 0)
         print(f"awq search: {m['awq']['search_seconds']:.1f} s, peak {peak / 1e9:.2f} GB on GPU")
+    if args.gptq:
+        from kvbound.gptq import stage_summary  # noqa: PLC0415
+
+        for stage, (vs_rtn, vs_signal) in stage_summary(m["gptq"]["layers"]).items():
+            print(
+                f"gptq {stage}: output error {vs_rtn:.3f} of rounding to nearest's, "
+                f"{vs_signal:.2e} of the output"
+            )
+        peak = m["gptq"].get("cuda_max_memory_allocated", 0)
+        print(f"gptq: {m['gptq']['seconds']:.1f} s, peak {peak / 1e9:.2f} GB on GPU")
 
 
 if __name__ == "__main__":
