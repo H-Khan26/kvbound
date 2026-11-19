@@ -152,9 +152,10 @@ def require_gguf(model: str, fmt: str) -> Path:
     return path
 
 
-def _download(artifact: Artifact) -> Path:
-    """downloads/<name>/<file>, downloaded when it is missing or its sha256 differs."""
-    folder = ROOT / "downloads" / artifact.name
+def download(artifact: Artifact, root: Path | None = None) -> Path:
+    """<root>/downloads/<name>/<file>, downloaded when it is missing or its sha256 differs; root
+    is this release's folder by default."""
+    folder = (ROOT if root is None else root) / "downloads" / artifact.name
     path = folder / artifact.file
     if path.exists() and sha256_file(path) == artifact.sha256:
         return path
@@ -209,7 +210,7 @@ def fetch() -> None:
             continue
         if dest.exists():
             raise SystemExit(f"{dest} exists but was not completed; remove it and fetch again")
-        _extract(_download(artifact), dest)
+        _extract(download(artifact), dest)
         stamp = {"file": artifact.file, "url": artifact.url, "sha256": artifact.sha256}
         done.write_text(json.dumps(stamp, indent=2) + "\n", encoding="utf-8")
         print(f"{artifact.file} -> {dest}")

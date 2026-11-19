@@ -1,4 +1,4 @@
-.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters step-counters microbench quantize eval precision eval-asr bench-asr qaihub fetch-llamacpp bench-llamacpp serve-llamacpp eval-llamacpp profile-llamacpp report predict reproduce lint format typecheck clean
+.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters step-counters microbench quantize eval precision eval-asr bench-asr qaihub fetch-llamacpp bench-llamacpp serve-llamacpp eval-llamacpp profile-llamacpp fetch-exllamav3 bench-exllamav3 eval-exllamav3 report predict reproduce lint format typecheck clean
 
 # torch wheel: cu128 on GPU machines, cpu in CI and on machines without a GPU
 TORCH ?= cu128
@@ -210,6 +210,25 @@ profile-llamacpp: ## Nsight Systems decode profile of llama.cpp, with and withou
 	for f in $(LLAMACPP_PROFILE_FORMATS); do \
 	  uv run python -m kvbound.baselines.llamacpp_profile --model $(MODEL) --weights $$f --no-graph || exit 1; \
 	  uv run python -m kvbound.baselines.llamacpp_profile --model $(MODEL) --weights $$f || exit 1; \
+	done
+
+# ExLlamaV3 at the release pinned in kvbound.baselines.exllamav3, under $KVBOUND_EXT (default ext/).
+# FP16 is the fetched checkpoint loaded unquantized; the others are EXL3 conversions.
+EXLLAMAV3_FORMATS ?= FP16 EXL3_4.0 EXL3_4.5 EXL3_5.0 EXL3_4.0_H4_E4
+
+fetch-exllamav3:  ## pinned ExLlamaV3 wheel in its own environment and the EXL3 models of a model under $KVBOUND_EXT (MODEL=...)
+	uv run python -m kvbound.baselines.exllamav3 fetch
+	uv run python -m kvbound.baselines.exllamav3 convert --model $(MODEL) --formats $(EXLLAMAV3_FORMATS)
+
+bench-exllamav3:  ## ExLlamaV3 through its generator: batch 1 decode and a long prompt per format, like bench (MODEL=...)
+	for f in $(EXLLAMAV3_FORMATS); do \
+	  uv run python -m kvbound.baselines.exllamav3_bench --model $(MODEL) --weights $$f --prompt-len 128 || exit 1; \
+	  uv run python -m kvbound.baselines.exllamav3_bench --model $(MODEL) --weights $$f --prompt-len 1024 || exit 1; \
+	done
+
+eval-exllamav3:   ## WikiText-2 perplexity of each ExLlamaV3 format under kvbound's protocol (MODEL=...)
+	for f in $(EXLLAMAV3_FORMATS); do \
+	  uv run python -m kvbound.baselines.exllamav3_eval --model $(MODEL) --weights $$f || exit 1; \
 	done
 
 report:           ## roofline, bandwidth and latency figures from the records (MODEL=... DEVICE=...)
