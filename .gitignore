@@ -11,6 +11,9 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 
+# Outside stacks (binaries, converted weights, helper environments) when $KVBOUND_EXT is unset
+ext/
+
 # Model weights and real-model goldens (manifests are committed, golden ones per device)
 data/**
 !data/**/

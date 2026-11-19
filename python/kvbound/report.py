@@ -318,7 +318,7 @@ def latest_serve_records(
         params = rec["params"]
         if rec["fingerprint"]["device_config"] != device or rec["model"]["name"] != model:
             continue
-        if record.model_family(rec) != record.DEFAULT_FAMILY:
+        if record.model_family(rec) != record.DEFAULT_FAMILY or rec["engine"]["name"] != "kvbound":
             continue
         if (params.get("weights", "fp16"), params.get("kv_dtype", "fp16")) != (weights, kv):
             continue
