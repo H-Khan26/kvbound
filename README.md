@@ -454,7 +454,11 @@ residual stream by a random orthogonal matrix, folded into the weights, so that 
 it is worse than the unrotated model on both checkpoints (10.48 against 9.96, and 16.95 against 14.76), and with
 GPTQ it changes little: 9.30 against 9.31 on TinyLlama, 12.27 against 12.37 on Llama 3.2, where the rotation also
 unties the vocabulary matrix from the embedding and stores 263M more weights. AWQ's scales do not compose with it.
-<!-- ROTATION -->
+Why it does not help this format was not found. Two follow-up runs on Llama 3.2, not recorded, ruled out the
+explanations tried: swapping only the `down_proj` matrices into the FP16 model costs less perplexity rotated than
+unrotated (11.44 against 11.55), so the matrix with the massive activation is not where rotation loses; and leaving
+each window's first token out of GPTQ's calibration, to keep that activation from dominating, takes perplexity to
+131 unrotated and 143 rotated.
 
 Known gaps after Phase 6: INT4 decode on this card stops at 66% of its ceiling; FP16 steps of 5 to 64 rows still go
 through cuBLAS; decode attention still runs one block per head at long context; steps that mix prefill and decode
