@@ -78,8 +78,9 @@ bench:            ## kvbound engine: batch 1 decode and a long prompt, like benc
 	uv run python -m kvbound.bench --model $(MODEL) --prompt-len 128 --no-graph
 	uv run python -m kvbound.bench --model $(MODEL) --prompt-len 1024
 
-# The KV pool of every serve run: 8 sequences of 1,024 tokens.
-SERVE = uv run python -m kvbound.serve --model $(MODEL) --pool-seqs 8
+# The KV pool of every serve run, kvbound's and llama.cpp's: this many sequences of 1,024 tokens.
+POOL_SEQS ?= 8
+SERVE = uv run python -m kvbound.serve --model $(MODEL) --pool-seqs $(POOL_SEQS)
 # The paged design: the same pool in 16-token blocks, shared by up to this many sequences.
 PAGED = --policy continuous --kv-block-size 16 --slots $(PAGED_SLOTS)
 PAGED_SLOTS ?= 64
@@ -170,7 +171,7 @@ LLAMACPP_FORMATS ?= F16 Q8_0 Q4_K_M Q4_0 Q4_0_PURE
 LLAMACPP_SERVE_FORMATS ?= F16 Q4_K_M Q4_0
 LLAMACPP_SERVE_KV ?= f16 q8_0
 # The pool of make serve: 8 sequences of 1,024 tokens, in bytes.
-LLAMACPP_SERVE = uv run python -m kvbound.baselines.llamacpp_serve --model $(MODEL) --pool-seqs 8
+LLAMACPP_SERVE = uv run python -m kvbound.baselines.llamacpp_serve --model $(MODEL) --pool-seqs $(POOL_SEQS)
 
 fetch-llamacpp:   ## pinned llama.cpp release and the GGUF files of a model under $KVBOUND_EXT (MODEL=...)
 	uv run python -m kvbound.baselines.llamacpp fetch

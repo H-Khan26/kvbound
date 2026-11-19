@@ -277,6 +277,29 @@ def test_failed_requests_leave_the_latency_figures():
     assert m["send_lag_max_s"] == pytest.approx(0.003)
 
 
+def test_a_request_whose_connection_breaks_fails_alone(monkeypatch):
+    def stream(port, body, origin):
+        if body["prompt"] == [2]:
+            raise ConnectionResetError("reset")
+        return {"times": [0.1, 0.2], "error": None, "sent_s": 0.0}
+
+    monkeypatch.setattr(llamacpp_serve, "stream_completion", stream)
+    requests = [{"arrival_s": 0.0, "prompt": [i], "max_new_tokens": 2} for i in (1, 2)]
+    ok, broken = llamacpp_serve.run_pass(0, {"requests": requests})
+    assert ok["error"] is None
+    assert broken["times"] == [] and broken["error"] == "ConnectionResetError: reset"
+    assert llamacpp_serve.pass_metrics({"requests": requests}, [ok, broken])["failed"] == 1
+
+
+def test_failure_cause_gives_slot_advice_only_for_a_cache_overflow():
+    short = {"times": [0.1], "error": None}
+    assert "no error event" in llamacpp_serve.failure_cause([short])
+    http_error = {"times": [], "error": "HTTP 500: b'boom'"}
+    assert llamacpp_serve.failure_cause([short, http_error]) == "HTTP 500: b'boom'"
+    overflow = {"times": [], "error": "Context size has been exceeded."}
+    assert "lower --parallel" in llamacpp_serve.failure_cause([overflow])
+
+
 def test_server_counters_give_steps_and_busy_slots():
     page = "# HELP x\nllamacpp:n_decode_total 30\nllamacpp:n_busy_slots_per_decode 2.5\n"
     after = llamacpp_serve.parse_metrics(page)

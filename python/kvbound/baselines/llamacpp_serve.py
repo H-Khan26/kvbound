@@ -74,6 +74,8 @@ KV_VALUE_BYTES = {"f16": 2.0, "q8_0": 34 / 32}
 CELL_ROUND = 256
 MAX_SLOTS = 64
 METRICS_INTERVAL_S = 0.1
+# llama-server's error when a request no longer fits in the cache, in lower case.
+CONTEXT_EXCEEDED = "context size has been exceeded"
 
 
 def kv_cells(arch: Arch, pool_seqs: int, max_ctx: int, kv: str) -> tuple[int, float]:
@@ -152,7 +154,12 @@ def run_pass(port: int, trace: dict[str, Any]) -> list[dict[str, Any]]:
         if delay > 0:
             time.sleep(delay)
         body = request_body(req["prompt"], req["max_new_tokens"])
-        results[i] = stream_completion(port, body, origin=start)
+        sent = time.perf_counter() - start
+        try:
+            results[i] = stream_completion(port, body, origin=start)
+        except (OSError, http.client.HTTPException, ValueError) as e:
+            # A dropped connection, a timeout or a broken event fails this request only.
+            results[i] = {"times": [], "sent_s": sent, "error": f"{type(e).__name__}: {e}"}
 
     threads = [threading.Thread(target=send, args=(i, r)) for i, r in enumerate(requests)]
     for t in threads:
@@ -160,6 +167,19 @@ def run_pass(port: int, trace: dict[str, Any]) -> list[dict[str, Any]]:
     for t in threads:
         t.join()
     return results
+
+
+def failure_cause(results: list[dict[str, Any]]) -> str:
+    """The first error of a pass's requests, with what to change when the cache overflowed."""
+    error = next((out["error"] for out in results if out["error"] is not None), None)
+    if error is None:
+        return "streams ended before their last token, with no error event"
+    if CONTEXT_EXCEEDED in error.lower():
+        error += (
+            "; with more slots than the cache holds requests llama.cpp fails every request in "
+            "flight: lower --parallel, or pass 0 for the most slots that cannot overflow"
+        )
+    return error
 
 
 def pass_metrics(trace: dict[str, Any], results: list[dict[str, Any]]) -> dict[str, float]:
@@ -175,11 +195,7 @@ def pass_metrics(trace: dict[str, Any], results: list[dict[str, Any]]) -> dict[s
             continue
         done.append({"arrival_s": req["arrival_s"], "token_times_s": out["times"]})
     if not done:
-        raise RuntimeError(
-            f"all {failed} requests failed ({results[0]['error']}); with more slots than the "
-            "cache holds requests llama.cpp fails every request in flight: lower --parallel, "
-            "or pass 0 for the most slots that cannot overflow"
-        )
+        raise RuntimeError(f"all {failed} requests failed: {failure_cause(results)}")
     total = max(r["token_times_s"][-1] for r in done)
     return {
         **serve.latency_metrics(done, total),
@@ -350,8 +366,12 @@ def main() -> None:
     print(summary_line(result))
     if args.no_record:
         print(json.dumps({"metrics": result["metrics"]}, indent=1))
-    else:
-        print(record.write_record(**result))
+        return
+    # Throughput and latency of a pass cover its completed requests only, so a pass that lost
+    # requests is not the workload kvbound's records measure.
+    if failed := result["metrics"]["failed"]["max"]:
+        raise SystemExit(f"not recorded: {failed:.0f} requests failed in a measured pass")
+    print(record.write_record(**result))
 
 
 if __name__ == "__main__":
