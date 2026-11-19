@@ -78,11 +78,6 @@
   },
   "gpu_ms_per_step_total": 7.241470823529411,
   "api_per_step": {
-    "cudaMemcpyAsync": {
-      "ms": 73.6901546,
-      "calls": 7.811764705882353,
-      "median_us": 3.772
-    },
     "cudaStreamSynchronize": {
       "ms": 6.508935262745098,
       "calls": 19.886274509803922,

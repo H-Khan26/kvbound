@@ -1,4 +1,5 @@
 {
+  "weights": "int4_g",
   "steps": 256,
   "gpu_ms_per_step": {
     "linear_quantized": {
@@ -45,20 +46,10 @@
       "calls": 1.0078125,
       "median_us": 1520.045
     },
-    "cudaMemcpyAsync": {
-      "ms": 0.8554916171875,
-      "calls": 4.40234375,
-      "median_us": 6.927
-    },
     "cudaLaunchKernel": {
       "ms": 0.81370030078125,
       "calls": 204.00390625,
       "median_us": 3.018
-    },
-    "cudaMemcpy": {
-      "ms": 9.07109375e-05,
-      "calls": 0.00390625,
-      "median_us": 23.222
     }
   }
 }

@@ -1,4 +1,5 @@
 {
+  "weights": "int4_g",
   "steps": 256,
   "gpu_ms_per_step": {
     "linear_quantized": {
@@ -40,11 +41,6 @@
   },
   "gpu_ms_per_step_total": 1.88029165625,
   "api_per_step": {
-    "cudaMemcpyAsync": {
-      "ms": 2.115330171875,
-      "calls": 4.40234375,
-      "median_us": 6.294
-    },
     "cudaStreamSynchronize": {
       "ms": 1.56948808984375,
       "calls": 1.0078125,
@@ -54,11 +50,6 @@
       "ms": 0.74335115234375,
       "calls": 204.00390625,
       "median_us": 2.871
-    },
-    "cudaMemcpy": {
-      "ms": 8.226953125e-05,
-      "calls": 0.00390625,
-      "median_us": 21.061
     }
   }
 }

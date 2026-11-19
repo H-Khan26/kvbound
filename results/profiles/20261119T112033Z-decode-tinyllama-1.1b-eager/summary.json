@@ -1,4 +1,5 @@
 {
+  "weights": "fp16",
   "steps": 256,
   "gpu_ms_per_step": {
     "linear_f16": {
@@ -45,20 +46,10 @@
       "calls": 1.0078125,
       "median_us": 5084.768
     },
-    "cudaMemcpyAsync": {
-      "ms": 3.21916990234375,
-      "calls": 3.79296875,
-      "median_us": 7.022
-    },
     "cudaLaunchKernel": {
       "ms": 0.80076617578125,
       "calls": 204.7890625,
       "median_us": 2.926
-    },
-    "cudaMemcpy": {
-      "ms": 0.00014077734375,
-      "calls": 0.00390625,
-      "median_us": 36.039
     }
   }
 }
