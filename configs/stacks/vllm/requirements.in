@@ -1,0 +1,2 @@
+# vLLM's latest release; its torch comes from PyPI.
+vllm==0.34.0

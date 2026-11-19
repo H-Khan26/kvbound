@@ -1,4 +1,4 @@
-.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters step-counters microbench quantize eval precision eval-asr bench-asr qaihub fetch-llamacpp bench-llamacpp serve-llamacpp eval-llamacpp profile-llamacpp report predict reproduce lint format typecheck clean
+.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters step-counters microbench quantize eval precision eval-asr bench-asr qaihub fetch-llamacpp bench-llamacpp serve-llamacpp eval-llamacpp profile-llamacpp setup-stacks quantize-stacks bench-stacks serve-stacks eval-stacks report predict reproduce lint format typecheck clean
 
 # torch wheel: cu128 on GPU machines, cpu in CI and on machines without a GPU
 TORCH ?= cu128
@@ -211,6 +211,36 @@ profile-llamacpp: ## Nsight Systems decode profile of llama.cpp, with and withou
 	  uv run python -m kvbound.baselines.llamacpp_profile --model $(MODEL) --weights $$f --no-graph || exit 1; \
 	  uv run python -m kvbound.baselines.llamacpp_profile --model $(MODEL) --weights $$f || exit 1; \
 	done
+
+# vLLM and TensorRT-LLM (Linux or WSL2), from the environments pinned in configs/stacks/, under
+# $KVBOUND_EXT. Run from a clone inside the Linux file system (see kvbound.baselines.linux_stacks).
+STACKS ?= vllm tensorrt-llm
+# Weight formats of each stack: TensorRT-LLM has no GPTQ path.
+STACK_FORMATS_vllm ?= F16 W4A16_AWQ W4A16_GPTQ
+STACK_FORMATS_tensorrt-llm ?= F16 W4A16_AWQ
+# KV cache types of serve-stacks: f16 | fp8
+STACK_KV ?= f16
+STACK_SERVE = uv run python -m kvbound.baselines.linux_stacks_serve --model $(MODEL) --pool-seqs $(POOL_SEQS)
+
+setup-stacks:     ## the pinned environments of vLLM, TensorRT-LLM and llm-compressor (Linux)
+	uv run python -m kvbound.baselines.linux_stacks setup
+
+quantize-stacks:  ## each stack's 4-bit checkpoints, made with its own tooling (MODEL=...)
+	$(foreach s,$(STACKS),$(foreach f,$(filter-out F16,$(STACK_FORMATS_$(s))), \
+	  uv run python -m kvbound.baselines.linux_stacks_quantize --stack $(s) --model $(MODEL) --format $(f) &&)) true
+
+bench-stacks:     ## vLLM and TensorRT-LLM servers: batch 1 decode and a long prompt per format, like bench (MODEL=...)
+	$(foreach s,$(STACKS),$(foreach f,$(STACK_FORMATS_$(s)),$(foreach n,128 1024, \
+	  uv run python -m kvbound.baselines.linux_stacks_bench --stack $(s) --model $(MODEL) --weights $(f) --prompt-len $(n) &&))) true
+
+serve-stacks:     ## vLLM and TensorRT-LLM servers: serve-load's longtail arrivals and precision's 96 fixed requests, same KV bytes (MODEL=...)
+	$(foreach s,$(STACKS),$(foreach f,$(STACK_FORMATS_$(s)),$(foreach k,$(STACK_KV), \
+	  $(foreach r,$(RATES),$(STACK_SERVE) --stack $(s) --weights $(f) --kv $(k) --workload longtail --rate $(r) &&) \
+	  $(STACK_SERVE) --stack $(s) --weights $(f) --kv $(k) --workload fixed --requests 96 &&))) true
+
+eval-stacks:      ## WikiText-2 perplexity of each stack and format under kvbound's protocol (MODEL=...)
+	$(foreach s,$(STACKS),$(foreach f,$(STACK_FORMATS_$(s)), \
+	  uv run python -m kvbound.baselines.linux_stacks_eval --stack $(s) --model $(MODEL) --weights $(f) &&)) true
 
 report:           ## roofline, bandwidth and latency figures from the records (MODEL=... DEVICE=...)
 	uv run python -m kvbound.report --device $(DEVICE) --model $(MODEL)

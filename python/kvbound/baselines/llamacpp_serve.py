@@ -43,19 +43,15 @@ Usage: python -m kvbound.baselines.llamacpp_serve --model tinyllama-1.1b --weigh
 """
 
 import argparse
-import contextlib
 import dataclasses
 import http.client
 import json
 import os
-import statistics
-import threading
-import time
 from datetime import UTC, datetime
 from typing import Any
 
-from kvbound import record, serve, workload
-from kvbound.baselines import llamacpp
+from kvbound import record, workload
+from kvbound.baselines import llamacpp, openloop
 from kvbound.baselines.llamacpp_bench import (
     HOST,
     Server,
@@ -102,34 +98,14 @@ def parse_metrics(text: str) -> dict[str, float]:
     return values
 
 
-class MetricsPoller:
-    """Reads /metrics every METRICS_INTERVAL_S on a thread between start() and stop()."""
-
-    def __init__(self, port: int) -> None:
-        self.port = port
-        self.samples: list[dict[str, float]] = []
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-
-    def read(self) -> dict[str, float]:
-        conn = http.client.HTTPConnection(HOST, self.port, timeout=10)
-        try:
-            conn.request("GET", "/metrics")
-            return parse_metrics(conn.getresponse().read().decode())
-        finally:
-            conn.close()
-
-    def _run(self) -> None:
-        while not self._stop.wait(METRICS_INTERVAL_S):
-            with contextlib.suppress(OSError):  # a missed sample is not worth stopping for
-                self.samples.append(self.read())
-
-    def start(self) -> None:
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        self._thread.join()
+def read_metrics(port: int) -> dict[str, float]:
+    """llama-server's /metrics, parsed (parse_metrics)."""
+    conn = http.client.HTTPConnection(HOST, port, timeout=10)
+    try:
+        conn.request("GET", "/metrics")
+        return parse_metrics(conn.getresponse().read().decode())
+    finally:
+        conn.close()
 
 
 def step_counts(before: dict[str, float], after: dict[str, float]) -> dict[str, float]:
@@ -143,37 +119,19 @@ def step_counts(before: dict[str, float], after: dict[str, float]) -> dict[str, 
 
 
 def run_pass(port: int, trace: dict[str, Any]) -> list[dict[str, Any]]:
-    """Sends every request of the trace at its arrival time; returns what each received, with
-    times in seconds from the start of the pass."""
-    requests = trace["requests"]
-    results: list[dict[str, Any]] = [{} for _ in requests]
-    start = time.perf_counter() + 0.05  # every thread is waiting before the first arrival
+    """Sends every request of the trace at its arrival time (kvbound.baselines.openloop);
+    returns what each received, with times in seconds from the start of the pass."""
 
-    def send(i: int, req: dict[str, Any]) -> None:
-        delay = start + req["arrival_s"] - time.perf_counter()
-        if delay > 0:
-            time.sleep(delay)
+    def send(req: dict[str, Any], start: float) -> dict[str, Any]:
         body = request_body(req["prompt"], req["max_new_tokens"])
-        sent = time.perf_counter() - start
-        try:
-            results[i] = stream_completion(port, body, origin=start)
-        except (OSError, http.client.HTTPException, ValueError) as e:
-            # A dropped connection, a timeout or a broken event fails this request only.
-            results[i] = {"times": [], "sent_s": sent, "error": f"{type(e).__name__}: {e}"}
+        return stream_completion(port, body, origin=start)
 
-    threads = [threading.Thread(target=send, args=(i, r)) for i, r in enumerate(requests)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    return results
+    return openloop.run_pass(trace, send)
 
 
 def failure_cause(results: list[dict[str, Any]]) -> str:
     """The first error of a pass's requests, with what to change when the cache overflowed."""
-    error = next((out["error"] for out in results if out["error"] is not None), None)
-    if error is None:
-        return "streams ended before their last token, with no error event"
+    error = openloop.first_error(results)
     if CONTEXT_EXCEEDED in error.lower():
         error += (
             "; with more slots than the cache holds requests llama.cpp fails every request in "
@@ -183,27 +141,8 @@ def failure_cause(results: list[dict[str, Any]]) -> str:
 
 
 def pass_metrics(trace: dict[str, Any], results: list[dict[str, Any]]) -> dict[str, float]:
-    """kvbound.serve.latency_metrics over the requests that completed, plus send lag and the
-    failed count. The pass ends with the last token received."""
-    done, failed, held = [], 0, 0
-    lags = []
-    for req, out in zip(trace["requests"], results, strict=True):
-        lags.append(out["sent_s"] - req["arrival_s"])
-        held += out.get("held_tokens", 0)
-        if out["error"] is not None or len(out["times"]) != req["max_new_tokens"]:
-            failed += 1
-            continue
-        done.append({"arrival_s": req["arrival_s"], "token_times_s": out["times"]})
-    if not done:
-        raise RuntimeError(f"all {failed} requests failed: {failure_cause(results)}")
-    total = max(r["token_times_s"][-1] for r in done)
-    return {
-        **serve.latency_metrics(done, total),
-        "failed": failed,
-        "held_tokens": held,
-        "send_lag_p50_s": statistics.median(lags),
-        "send_lag_max_s": max(lags),
-    }
+    """kvbound.baselines.openloop.pass_metrics, with llama.cpp's failure advice."""
+    return openloop.pass_metrics(trace, results, failure_cause)
 
 
 def server_settings(args: argparse.Namespace, cells: int, slots: int, n_requests: int) -> dict:
@@ -252,7 +191,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
         server = Server(["--model", str(gguf), *command_line(settings)], log_path)
         with server:
             for i in range(args.warmup + args.iters):
-                poller = MetricsPoller(server.port)
+                poller = openloop.Poller(lambda: read_metrics(server.port), METRICS_INTERVAL_S)
                 before = poller.read()
                 poller.start()
                 results = run_pass(server.port, trace)

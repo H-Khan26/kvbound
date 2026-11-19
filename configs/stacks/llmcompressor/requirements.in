@@ -1,0 +1,2 @@
+# llm-compressor, the quantization tool vLLM documents, apart from vLLM: their pins conflict.
+llmcompressor==0.15.0
