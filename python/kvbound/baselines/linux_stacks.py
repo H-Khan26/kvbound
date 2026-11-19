@@ -338,7 +338,11 @@ def trtllm_settings(model_dir: Path, tokenizer: Path, model: str, cfg: ServerCon
                 "tokens_per_block": KV_BLOCK_TOKENS["tensorrt-llm"],
             },
             "enable_chunked_prefill": cfg.chunked_prefill,
-            "cuda_graph_config": {"batch_sizes": list(cfg.cuda_graph_batch_sizes)},
+            # Batches between captured sizes are padded up to one, as vLLM does, not run eagerly.
+            "cuda_graph_config": {
+                "batch_sizes": list(cfg.cuda_graph_batch_sizes),
+                "enable_padding": True,
+            },
             # Per-request server timings at /perf_metrics, per-iteration stats at /metrics.
             "return_perf_metrics": True,
             "perf_metrics_max_requests": 10000,

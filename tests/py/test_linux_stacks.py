@@ -166,7 +166,7 @@ def test_trtllm_command_line_writes_the_llm_api_options(tmp_path):
     assert options["dtype"] == "float16"
     assert options["kv_cache_config"]["max_tokens"] == 8192
     assert options["kv_cache_config"]["enable_block_reuse"] is False
-    assert options["cuda_graph_config"] == {"batch_sizes": [1, 2, 4]}
+    assert options["cuda_graph_config"] == {"batch_sizes": [1, 2, 4], "enable_padding": True}
     assert options["return_perf_metrics"] and options["enable_iter_perf_stats"]
 
 
