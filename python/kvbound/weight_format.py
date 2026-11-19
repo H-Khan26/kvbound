@@ -26,9 +26,11 @@ runs like any other int4_g file. Without the key the integers are rounded to nea
 rotation "hadamard" marks a checkpoint whose residual stream is rotated by a seeded randomized
 Hadamard matrix (kvbound.rotate): its norm gains are ones and folded into the matrices, and it
 stores lm_head even when the source tied it, with a config.json that says so. It computes the
-same function as its source, so it reads and runs like any other file. The key is the only
-kvbound key that also appears in a plain FP16 checkpoint, which is then the variant "fp16.rot";
-the engine reads a file without the scheme key as plain FP16 whatever else it holds.
+same function as its source, so it reads and runs like any other file. The key also appears in
+a plain FP16 checkpoint, which is then the variant "fp16.rot" and has no scheme key; beside it
+that header holds the provenance keys kvbound.rotation_seed, kvbound.source and
+kvbound.source_sha256. The engine reads a file without the scheme key as plain FP16 whatever
+else its header holds.
 
 Usage: WeightFormat.from_metadata(safe_open(path, "pt").metadata())
 """

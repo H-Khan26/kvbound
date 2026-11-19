@@ -10,21 +10,41 @@ An AWQ checkpoint (kvbound.awq) divides the output of every layer norm by its ac
 Those sites are multiplied by the scales again before the comparison, so they are measured
 against the goldens of the unscaled model like every other site.
 
+A rotated checkpoint (kvbound.rotate) is refused: its residual stream and norm outputs are in
+another basis, so only its logits are comparable with the goldens.
+
 The record ends with a greedy continuation of each golden prompt as text, for spot checks.
 
 Usage: python -m kvbound.evals.sites --model tinyllama-1.1b --weights int4_g --kv int8
 """
 
 import argparse
+from pathlib import Path
 from typing import Any
 
 import torch
+from safetensors import safe_open
 from transformers import AutoTokenizer
 
 from kvbound import bench, golden, native, record, tolerance
 from kvbound.awq import norm_site_scales
 from kvbound.models import load_spec, model_entry
-from kvbound.weight_format import VARIANTS
+from kvbound.quantize import WEIGHTS_FILE
+from kvbound.weight_format import VARIANTS, WeightFormat
+
+# Variants whose sites are in the goldens' basis.
+SITE_VARIANTS = tuple(v for v in VARIANTS if ".rot" not in v)
+
+
+def refuse_rotated(model_dir: Path) -> None:
+    """Raises for a rotated checkpoint, whose internal sites the goldens do not describe."""
+    with safe_open(str(model_dir / WEIGHTS_FILE), framework="pt") as f:
+        fmt = WeightFormat.from_metadata(f.metadata())
+    if fmt.rotation:
+        raise ValueError(
+            f"{model_dir} is rotated ({fmt.variant}): its residual stream is in another basis "
+            "than the goldens'; compare it by perplexity instead"
+        )
 
 
 def evaluate(
@@ -33,6 +53,7 @@ def evaluate(
     """Per-site errors and sample text of one model at one precision, as write_record arguments."""
     spec = load_spec(model)
     model_dir = bench.checkpoint_dir(model, weights)
+    refuse_rotated(model_dir)
     manifest, tensors = golden.load_for_model(model)
     n_layers = manifest["model"]["config"]["n_layers"]
     tokenizer = AutoTokenizer.from_pretrained(spec.checkpoint_dir)
@@ -98,7 +119,7 @@ def evaluate(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True)
-    parser.add_argument("--weights", choices=VARIANTS, default="fp16")
+    parser.add_argument("--weights", choices=SITE_VARIANTS, default="fp16")
     parser.add_argument("--kv", choices=bench.KV_DTYPES, default="fp16")
     parser.add_argument("--new-tokens", type=int, default=48)
     parser.add_argument("--preset", default="cuda")

@@ -181,7 +181,8 @@ def rotate_checkpoint(
     returns its manifest, also written to rotate_manifest.json.
 
     The header holds kvbound.rotation, the seed of the signs and the source's name and hash;
-    config.json is the source's with tie_word_embeddings false.
+    config.json is the source's with tie_word_embeddings false. The manifest is written last
+    (and any old one removed first), so its presence marks a complete checkpoint.
     """
     started = time.perf_counter()
     src_dir, out_dir = Path(src_dir), Path(out_dir)
@@ -203,6 +204,7 @@ def rotate_checkpoint(
     if source:
         metadata[KEY_SOURCE] = source
     out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / ROTATE_MANIFEST_FILE).unlink(missing_ok=True)
     save_file(rotated, str(out_dir / WEIGHTS_FILE), metadata=metadata)
     write_json(out_dir / "config.json", config | {"tie_word_embeddings": False})
     for file in COPIED_FILES:
@@ -228,13 +230,32 @@ def rotate_checkpoint(
     return manifest
 
 
-def rotation_seed(model_dir: Path) -> int | None:
-    """The seed of a rotated checkpoint's signs; None for a file that is not rotated."""
-    with safe_open(str(Path(model_dir) / WEIGHTS_FILE), framework="pt") as f:
+def reuse_rotated(src_dir: Path, out_dir: Path, seed: int, source: str = "") -> bool:
+    """Whether out_dir holds a complete rotation of src_dir's checkpoint with this seed (and
+    this source name, when given); False when it holds none. Raises for anything else: an
+    incomplete folder, another seed, another source."""
+    src_dir, out_dir = Path(src_dir), Path(out_dir)
+    if not (out_dir / WEIGHTS_FILE).exists() and not (out_dir / ROTATE_MANIFEST_FILE).exists():
+        return False
+    if not (out_dir / ROTATE_MANIFEST_FILE).exists():
+        raise ValueError(f"{out_dir} has no {ROTATE_MANIFEST_FILE}: an unfinished rotation")
+    with safe_open(str(out_dir / WEIGHTS_FILE), framework="pt") as f:
         metadata = f.metadata() or {}
     if not WeightFormat.from_metadata(metadata).rotation:
-        return None
-    return int(metadata[KEY_ROTATION_SEED])
+        raise ValueError(f"{out_dir} does not hold a rotated checkpoint")
+    found = {
+        "seed": metadata.get(KEY_ROTATION_SEED),
+        "source": metadata.get(KEY_SOURCE, ""),
+        "source_sha256": metadata.get(KEY_SOURCE_SHA256),
+    }
+    wanted = {
+        "seed": str(seed),
+        "source": source or found["source"],
+        "source_sha256": sha256_file(src_dir / WEIGHTS_FILE),
+    }
+    if found != wanted:
+        raise ValueError(f"{out_dir} holds the rotation of {found}, not {wanted}")
+    return True
 
 
 def ensure_rotated(name: str, seed: int) -> Path:
@@ -244,12 +265,9 @@ def ensure_rotated(name: str, seed: int) -> Path:
     if spec.family != "llama":
         raise ValueError(f"the rotation applies to a Llama; {spec.name} is a {spec.family}")
     out_dir = spec.variant_dir(WeightFormat.make(FP16, rotation=HADAMARD).variant)
-    if (out_dir / WEIGHTS_FILE).exists():
-        found = rotation_seed(out_dir)
-        if found != seed:
-            raise ValueError(f"{out_dir} holds the rotation of seed {found}, not {seed}")
-        return out_dir
-    rotate_checkpoint(spec.checkpoint_dir, out_dir, seed, f"{spec.hf_repo}@{spec.revision}")
+    source = f"{spec.hf_repo}@{spec.revision}"
+    if not reuse_rotated(spec.checkpoint_dir, out_dir, seed, source):
+        rotate_checkpoint(spec.checkpoint_dir, out_dir, seed, source)
     return out_dir
 
 

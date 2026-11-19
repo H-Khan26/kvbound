@@ -9,6 +9,7 @@ from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 
 from kvbound import gptq, tolerance
+from kvbound.evals import sites
 from kvbound.fixture import FIXTURE_DIR, HF_CONFIG, write_random_llama
 from kvbound.gptq import GptqConfig, quantize_model
 from kvbound.quantize import MANIFEST_FILE, convert, load_dequantized
@@ -18,6 +19,7 @@ from kvbound.rotate import (
     ROTATE_MANIFEST_FILE,
     hadamard,
     random_hadamard,
+    reuse_rotated,
     rotate_checkpoint,
     rotate_tensors,
 )
@@ -247,3 +249,33 @@ def test_head_chunks_give_the_integers_of_the_whole_head(tmp_path, monkeypatch):
     assert parts["loss_predicted"] == pytest.approx(report["loss_predicted"], rel=1e-5)
     for key, value in report["matrices"]["lm_head.weight"].items():
         assert parts["matrices"]["lm_head.weight"][key] == pytest.approx(value, rel=1e-5), key
+
+
+def test_an_existing_rotation_is_reused_only_when_complete_and_of_this_source(tmp_path):
+    out = tmp_path / "rot"
+    assert not reuse_rotated(FIXTURE_DIR, out, seed=3)
+    rotate_checkpoint(FIXTURE_DIR, out, seed=3, source="fixture@0")
+    assert reuse_rotated(FIXTURE_DIR, out, seed=3, source="fixture@0")
+    with pytest.raises(ValueError, match="seed"):
+        reuse_rotated(FIXTURE_DIR, out, seed=4, source="fixture@0")
+    with pytest.raises(ValueError, match="source"):
+        reuse_rotated(FIXTURE_DIR, out, seed=3, source="fixture@1")
+    other = tmp_path / "other"
+    write_random_llama(other, {}, seed=1)
+    with pytest.raises(ValueError, match="source_sha256"):
+        reuse_rotated(other, out, seed=3, source="fixture@0")
+    # Without the manifest, which is written last, the folder is an unfinished rotation.
+    (out / ROTATE_MANIFEST_FILE).unlink()
+    with pytest.raises(ValueError, match="unfinished"):
+        reuse_rotated(FIXTURE_DIR, out, seed=3, source="fixture@0")
+
+
+def test_sites_refuses_a_rotated_checkpoint(tmp_path, monkeypatch):
+    # Its residual stream is in another basis than the goldens'.
+    out = tmp_path / "rot"
+    rotate_checkpoint(FIXTURE_DIR, out)
+    assert not any(".rot" in variant for variant in sites.SITE_VARIANTS)
+    sites.refuse_rotated(FIXTURE_DIR)
+    monkeypatch.setattr(sites.bench, "checkpoint_dir", lambda model, weights: out)
+    with pytest.raises(ValueError, match="rotated"):
+        sites.evaluate("tinyllama-1.1b", "fp16.rot")
