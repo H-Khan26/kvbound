@@ -103,7 +103,6 @@ class ContextParams(ctypes.Structure):
 # name: (restype, argtypes) of every llama.dll function used.
 FUNCTIONS: dict[str, tuple[Any, list[Any]]] = {
     "llama_backend_init": (None, []),
-    "llama_backend_free": (None, []),
     "llama_model_default_params": (ModelParams, []),
     "llama_context_default_params": (ContextParams, []),
     "llama_model_load_from_file": (c_void_p, [c_char_p, ModelParams]),
@@ -112,7 +111,6 @@ FUNCTIONS: dict[str, tuple[Any, list[Any]]] = {
     "llama_free": (None, [c_void_p]),
     "llama_model_get_vocab": (c_void_p, [c_void_p]),
     "llama_vocab_n_tokens": (c_int32, [c_void_p]),
-    "llama_n_ctx": (ctypes.c_uint32, [c_void_p]),
     "llama_get_memory": (c_void_p, [c_void_p]),
     "llama_memory_clear": (None, [c_void_p, c_bool]),
     "llama_batch_ext_init": (c_void_p, [c_void_p]),
@@ -174,7 +172,6 @@ class Llama:
         *,
         flash_attn: str = "on",
         kv: str = "f16",
-        threads: int = 0,
     ) -> None:
         self.lib = lib
         model_params = lib.llama_model_default_params()
@@ -190,8 +187,6 @@ class Llama:
         context_params.n_seq_max = 1
         context_params.flash_attn_type = FLASH_ATTN[flash_attn]
         context_params.type_k = context_params.type_v = GGML_TYPES[kv]
-        if threads:
-            context_params.n_threads = context_params.n_threads_batch = threads
         self.settings = {
             "n_ctx": n_ctx,
             "n_batch": n_ctx,
@@ -219,8 +214,11 @@ class Llama:
             idx = lib.llama_batch_ext_add_token(self.batch, 0, token)
             if idx < 0:
                 raise RuntimeError(f"llama_batch_ext_add_token returned {idx} at position {pos}")
-            lib.llama_batch_ext_set_pos(self.batch, idx, byref(c_int32(pos)))
-            lib.llama_batch_ext_set_output_logits(self.batch, idx, True)
+            if not (
+                lib.llama_batch_ext_set_pos(self.batch, idx, byref(c_int32(pos)))
+                and lib.llama_batch_ext_set_output_logits(self.batch, idx, True)
+            ):
+                raise RuntimeError(f"llama.cpp refused position {pos} of the batch")
         status = lib.llama_process(self.ctx, PROCESS_DECODE, self.batch)
         if status != 0:
             raise RuntimeError(f"llama_process returned {status}")

@@ -81,6 +81,8 @@ ARTIFACTS = (
 )
 # Written into an extraction folder once every member is in place.
 DONE_FILE = "kvbound-fetched.json"
+# Seconds a download may wait on the connection or on its next bytes.
+DOWNLOAD_TIMEOUT_S = 60
 
 # Formats llama-quantize makes from the F16 file. Q4_0 (blocks of 32 weights with one F16
 # scale, round to nearest) is the nearest relative of kvbound's int4_g; Q4_K_M is the format
@@ -147,12 +149,16 @@ def _download(artifact: Artifact) -> Path:
     path = folder / artifact.file
     if path.exists() and sha256_file(path) == artifact.sha256:
         return path
+    partial = path.with_name(path.name + ".partial")
+    partial.unlink(missing_ok=True)  # a download this function did not finish
     if folder.exists() and any(p != path for p in folder.iterdir()):
         raise SystemExit(f"{folder} holds other files; empty it before fetching again")
     folder.mkdir(parents=True, exist_ok=True)
-    partial = path.with_name(path.name + ".partial")
     print(f"downloading {artifact.url}")
-    with urllib.request.urlopen(artifact.url) as response, partial.open("wb") as f:
+    with (
+        urllib.request.urlopen(artifact.url, timeout=DOWNLOAD_TIMEOUT_S) as response,
+        partial.open("wb") as f,
+    ):
         shutil.copyfileobj(response, f, 1 << 22)
     digest = sha256_file(partial)
     if digest != artifact.sha256:
@@ -203,18 +209,21 @@ def fetch() -> None:
 def _converter_python() -> Path:
     """The converter environment's interpreter, made with uv from the tag's requirements."""
     python = CONVERT_VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    if python.exists():
+    done = CONVERT_VENV / DONE_FILE
+    if done.exists():
         return python
     requirements = SRC / CONVERTER_REQUIREMENTS
     if not requirements.exists():
         raise SystemExit(f"{requirements} not found; run `fetch` first")
-    subprocess.run(["uv", "venv", "--python", "3.12", str(CONVERT_VENV)], check=True)
+    # --clear replaces an environment whose install did not finish.
+    subprocess.run(["uv", "venv", "--clear", "--python", "3.12", str(CONVERT_VENV)], check=True)
     # Wheels only, so that installing runs no build script from a source distribution.
     subprocess.run(
         ["uv", "pip", "install", "--python", str(python), "--only-binary", ":all:",
          "--index-strategy", "unsafe-best-match", "-r", str(requirements)],
         check=True, cwd=REPO_ROOT,
     )  # fmt: skip
+    done.write_text(json.dumps({"requirements": CONVERTER_REQUIREMENTS}) + "\n", encoding="utf-8")
     return python
 
 

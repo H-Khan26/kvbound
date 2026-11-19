@@ -13,7 +13,7 @@ REPORTS = REPO_ROOT / "reports"
 BUILD = REPO_ROOT / "build"
 # Outside stacks' binaries, converted weights and helper environments; $KVBOUND_EXT moves them
 # off the repository's drive.
-EXT = Path(os.environ.get("KVBOUND_EXT") or REPO_ROOT / "ext")
+EXT = Path(os.environ.get("KVBOUND_EXT") or REPO_ROOT / "ext").expanduser().resolve()
 
 
 def binary(name: str, preset: str) -> Path:
