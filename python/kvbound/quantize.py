@@ -13,8 +13,12 @@ With --gptq, int4_g integers are chosen by GPTQ instead of round-to-nearest, on 
 (kvbound.gptq), alone or after the AWQ scales and clip ranges of --awq. It too calibrates on text
 through a Llama.
 
+With --rotate, int4_g weights are quantized from the Llama's rotated FP16 checkpoint
+(kvbound.rotate), written first when it does not exist, by rounding to nearest or with --gptq.
+
 Usage: python -m kvbound.quantize tinyllama-1.1b --scheme int4_g --group-size 128
        python -m kvbound.quantize tinyllama-1.1b --scheme int4_g --awq --gptq
+       python -m kvbound.quantize llama-3.2-1b --scheme int4_g --rotate --gptq
        python -m kvbound.quantize whisper-base-ar-quran --scheme int8_pc
 """
 
@@ -39,8 +43,10 @@ from kvbound.weight_format import (
     CALIB_KEYS,
     CLIPS,
     DEFAULT_GROUP_SIZE,
+    HADAMARD,
     INT4_G,
     INT8_PC,
+    KEY_ROTATION_SEED,
     KEY_SOURCE,
     KEY_SOURCE_SHA256,
     QMAX,
@@ -264,13 +270,31 @@ def convert(
     gptq, a kvbound.gptq.GptqConfig, chooses the int4_g integers of every matrix but the
     embedding and a tied lm_head by GPTQ (kvbound.gptq.quantize_model), on the AWQ scales and
     clip scales when awq is set too. The manifest gets a "gptq" section.
+
+    A rotated source (kvbound.rotate) gives a rotated output: the format keeps its rotation and
+    the header its seed. The source hash is then the rotated file's, and the manifest gets a
+    "rotation" section with that file's kvbound header, which holds the original's hash. awq
+    does not apply to it.
     """
+    src_dir, out_dir = Path(src_dir), Path(out_dir)
+    src = src_dir / WEIGHTS_FILE
+    with safe_open(str(src), framework="pt") as f:
+        src_metadata = f.metadata() or {}
+    src_fmt = WeightFormat.from_metadata(src_metadata)
+    if src_fmt.quantized:
+        raise ValueError(f"{src} is already quantized")
+    if awq and src_fmt.rotation:
+        raise ValueError(
+            "awq does not apply to a rotated checkpoint: its scales live in the norm gains, "
+            "which the rotation folds into the matrices"
+        )
     fmt = WeightFormat.make(
         scheme,
         group_size,
         clip,
         "awq" if awq else "",
         "gptq" if gptq is not None else "",
+        src_fmt.rotation,
     )
     if not fmt.quantized:
         raise ValueError(f"{scheme!r} is not a quantized scheme")
@@ -280,13 +304,11 @@ def convert(
     if set(calib_meta or {}) - set(CALIB_KEYS) or (calib_meta and not calibrated):
         raise ValueError(f"calib_meta takes the keys {CALIB_KEYS}, with awq or gptq only")
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    src_dir, out_dir = Path(src_dir), Path(out_dir)
     config = json.loads((src_dir / "config.json").read_text(encoding="utf-8"))
     if calibrated and config.get("model_type") == "whisper":
         raise ValueError(
             "awq and gptq calibrate on text through a Llama; a Whisper checkpoint takes none"
         )
-    src = src_dir / WEIGHTS_FILE
     started = time.perf_counter()
 
     tensors: dict[str, Tensor] = {}
@@ -299,8 +321,6 @@ def convert(
     # With gptq: the integers and scales GPTQ chose, and its report.
     gptq_result = gptq_report = None
     with safe_open(str(src), framework="pt") as f:
-        if WeightFormat.from_metadata(f.metadata()).quantized:
-            raise ValueError(f"{src} is already quantized")
         names = list(f.keys())
         shapes = {name: f.get_slice(name).get_shape() for name in names}
         for name, shape in shapes.items():
@@ -395,6 +415,8 @@ def convert(
     if source:
         metadata[KEY_SOURCE] = source
     metadata[KEY_SOURCE_SHA256] = source_sha256
+    if fmt.rotation:
+        metadata[KEY_ROTATION_SEED] = src_metadata[KEY_ROTATION_SEED]
     metadata.update(calib_meta or {})
     out_dir.mkdir(parents=True, exist_ok=True)
     save_file(tensors, str(out_dir / WEIGHTS_FILE), metadata=metadata)
@@ -424,6 +446,12 @@ def convert(
         manifest["awq"] = awq_report
     if gptq_report is not None:
         manifest["gptq"] = gptq_report
+    if fmt.rotation:
+        manifest["rotation"] = {
+            "kind": fmt.rotation,
+            "seed": int(src_metadata[KEY_ROTATION_SEED]),
+            "source_header": {k: v for k, v in src_metadata.items() if k.startswith("kvbound.")},
+        }
     with (out_dir / MANIFEST_FILE).open("w", encoding="utf-8", newline="\n") as out:
         out.write(json.dumps(manifest, indent=2) + "\n")
     return manifest
@@ -501,6 +529,12 @@ def main() -> None:
         action="store_true",
         help="--gptq: columns in input order, scales set as reached unless AWQ's clip gives them",
     )
+    parser.add_argument(
+        "--rotate",
+        action="store_true",
+        help="int4_g only: quantize the Hadamard-rotated checkpoint (kvbound.rotate)",
+    )
+    parser.add_argument("--rotate-seed", type=int, default=0, help="--rotate: seed of the signs")
     parser.add_argument("--calib-windows", type=int, default=128, help="--awq, --gptq: windows")
     parser.add_argument("--calib-len", type=int, default=512, help="--awq, --gptq: window length")
     parser.add_argument("--calib-seed", type=int, default=0, help="--awq, --gptq: which windows")
@@ -515,20 +549,29 @@ def main() -> None:
         parser.error("--gptq-damp and --gptq-input-order need --gptq")
     if clip == "awq" and not args.awq:
         parser.error("--clip awq needs --awq")
+    if args.rotate and (args.scheme != INT4_G or args.awq or clip != "minmax"):
+        parser.error("--rotate applies to int4_g with min-max scales, without --awq")
+    if args.rotate_seed and not args.rotate:
+        parser.error("--rotate-seed needs --rotate")
 
     spec = load_spec(args.model)
-    if (args.awq or args.gptq) and spec.family != "llama":
-        parser.error(
-            f"--awq and --gptq calibrate on text through a Llama; {spec.name} is a {spec.family}"
-        )
+    if (args.awq or args.gptq or args.rotate) and spec.family != "llama":
+        parser.error(f"--awq, --gptq and --rotate apply to a Llama; {spec.name} is a {spec.family}")
     fmt = WeightFormat.make(
         args.scheme,
         args.group_size,
         clip,
         "awq" if args.awq else "",
         "gptq" if args.gptq else "",
+        HADAMARD if args.rotate else "",
     )
     out_dir = spec.variant_dir(fmt.variant)
+    src_dir = spec.checkpoint_dir
+    if args.rotate:
+        # Imported here because kvbound.rotate builds on this module.
+        from kvbound.rotate import ensure_rotated  # noqa: PLC0415
+
+        src_dir = ensure_rotated(spec.name, args.rotate_seed)
     windows = calib_meta = gptq_config = None
     if args.gptq:
         from kvbound.gptq import DEFAULT_DAMP, GptqConfig  # noqa: PLC0415
@@ -542,7 +585,7 @@ def main() -> None:
         calib = (args.calib_windows, args.calib_len, args.calib_seed)
         windows, calib_meta = calibration_windows(spec, *calib), calibration_meta(*calib)
     m = convert(
-        spec.checkpoint_dir,
+        src_dir,
         out_dir,
         args.scheme,
         args.group_size,
