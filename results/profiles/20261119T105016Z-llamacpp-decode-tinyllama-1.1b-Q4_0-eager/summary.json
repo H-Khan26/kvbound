@@ -1,0 +1,101 @@
+{
+  "engine": {
+    "name": "llama.cpp",
+    "version": "b12503",
+    "external": true,
+    "commit": "4577932fab595eaa8b27ad71734d5de1f3c07d8c",
+    "route": "llama-completion under nsys",
+    "artifacts": {
+      "llama-b12503-bin-win-cuda-12.4-x64.zip": "9df9b6316051ce258debb234b3475762eecd8721e6bb41474f0743d54aad08aa",
+      "cudart-llama-bin-win-cuda-12.4-x64.zip": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+      "llama.cpp-b12503.zip": "adef5ebb7c8715328d7de6524c9a3a483f1b9a9b9e8d351559ee0221d32f0233"
+    }
+  },
+  "weights": "Q4_0",
+  "traced_wall_ms_per_step": 3.8225882352941176,
+  "steps": 255,
+  "gpu_ms_per_step": {
+    "mul_mat_vec_q<(ggml_type)2, (int)1, (bool)1, (bool)0, (bool)0>": {
+      "ms": 1.363923062745098,
+      "launches": 65.00784313725491
+    },
+    "mul_mat_vec_q<(ggml_type)2, (int)1, (bool)0, (bool)0, (bool)0>": {
+      "ms": 0.2847327294117647,
+      "launches": 67.0
+    },
+    "quantize_q8_1": {
+      "ms": 0.1851792705882353,
+      "launches": 133.60392156862744
+    },
+    "mul_mat_vec_q<(ggml_type)14, (int)1, (bool)0, (bool)0, (bool)0>": {
+      "ms": 0.1304865882352941,
+      "launches": 1.003921568627451
+    },
+    "flash_attn_ext_f16<(int)64, (int)64, (int)1, (int)8, (bool)0, (bool)0, (bool)0>": {
+      "ms": 0.11513021176470588,
+      "launches": 22.0
+    },
+    "rms_norm_f32<float, (int)512, (int)1, (bool)1, (bool)1, (bool)0, (bool)0, float>": {
+      "ms": 0.10378849803921568,
+      "launches": 45.1764705882353
+    },
+    "k_set_rows<float, long long, __half>": {
+      "ms": 0.03298856470588235,
+      "launches": 22.08627450980392
+    },
+    "rope_norm<(bool)1, (bool)0, float, __half>": {
+      "ms": 0.032555282352941174,
+      "launches": 22.08627450980392
+    },
+    "rope_norm<(bool)1, (bool)0, float, float>": {
+      "ms": 0.03154529019607843,
+      "launches": 22.08627450980392
+    },
+    "flash_attn_stream_k_fixup_uniform<(int)64, (int)1, (int)8>": {
+      "ms": 0.029094619607843136,
+      "launches": 22.0
+    },
+    "mul_mat_vec_q<(ggml_type)2, (int)2, (bool)0, (bool)0, (bool)0>": {
+      "ms": 0.006331494117647059,
+      "launches": 0.592156862745098
+    },
+    "k_get_rows_float<float, float>": {
+      "ms": 0.0032407960784313727,
+      "launches": 2.007843137254902
+    },
+    "k_bin_bcast<&op_add, float, float, float, const float *>": {
+      "ms": 0.0017162117647058824,
+      "launches": 1.1686274509803922
+    },
+    "flash_attn_ext_f16<(int)64, (int)64, (int)2, (int)8, (bool)0, (bool)0, (bool)0>": {
+      "ms": 0.000512878431372549,
+      "launches": 0.08627450980392157
+    },
+    "unary_gated_op_kernel<&op_silu, float>": {
+      "ms": 0.00016351372549019605,
+      "launches": 0.08235294117647059
+    },
+    "flash_attn_stream_k_fixup_uniform<(int)64, (int)2, (int)8>": {
+      "ms": 0.00016050196078431372,
+      "launches": 0.08627450980392157
+    }
+  },
+  "gpu_ms_per_step_total": 2.3215495137254902,
+  "api_per_step": {
+    "cudaLaunchKernel": {
+      "ms": 1.8135311529411764,
+      "calls": 426.07450980392156,
+      "median_us": 3.321
+    },
+    "cudaStreamSynchronize": {
+      "ms": 1.1341523215686276,
+      "calls": 19.886274509803922,
+      "median_us": 1.123
+    },
+    "cudaMemcpyAsync": {
+      "ms": 0.7326253529411765,
+      "calls": 7.811764705882353,
+      "median_us": 5.36
+    }
+  }
+}
