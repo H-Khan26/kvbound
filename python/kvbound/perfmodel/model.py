@@ -12,7 +12,7 @@ the x-axis of a roofline plot.
 The model counts only what cannot be avoided: each weight is read once per step, each cached
 key and value is read once per decode step, and the matrix arithmetic is done once. Kernel launch
 overhead, elementwise ops (norms, RoPE, SiLU, residuals) and sampling are left out, so a real
-engine is always slower. The gap to this bound is what Phase 2 onward reports.
+engine is always slower. The engine's measurements are reported against this bound.
 """
 
 from dataclasses import dataclass

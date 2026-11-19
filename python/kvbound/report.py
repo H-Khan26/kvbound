@@ -2,9 +2,12 @@
 
 Hardware: roofline, bandwidth sweep, latency. Engine: KV layout benchmark, KV memory under static
 batching, the activation memory plan, the three serving setups in one KV pool, latency under
-arriving load, and the precision comparison. Figures whose records do not exist yet are skipped.
+arriving load, and the precision comparison. Production comparison (both models): tokens per
+second of each stack, and perplexity against bits per weight of every stack's formats. Figures
+whose records do not exist yet are skipped.
 
 Usage: python -m kvbound.report --device rtx3060ti --model tinyllama-1.1b
+       python -m kvbound.report --device rtx3060ti --model tinyllama-1.1b --comparison-only
 """
 
 import argparse
@@ -25,6 +28,7 @@ from kvbound.models import load_spec
 from kvbound.paths import CONFIGS, REPORTS
 from kvbound.perfmodel import hardware
 from kvbound.perfmodel.model import Arch, Precision, step_costs
+from kvbound.weight_format import WeightFormat
 
 # Chart tokens: surface, inks, and the categorical series colors in their fixed order.
 SURFACE, INK, INK_2, MUTED, GRID, AXIS = (
@@ -667,11 +671,296 @@ def arena(rec: dict[str, Any]) -> Figure:
     return fig
 
 
+# The stacks of the production comparison (docs/production-comparison.md) by engine name, in the
+# order their colors and markers are assigned. The colors extend SERIES with its next two slots.
+STACKS = {
+    "kvbound": "kvbound",
+    "llama.cpp": "llama.cpp",
+    "vllm": "vLLM",
+    "tensorrt-llm": "TensorRT-LLM",
+    "exllamav3": "ExLlamaV3",
+}
+STACK_COLORS = dict(zip(STACKS, (*SERIES, "#eda100", "#e87ba4"), strict=True))
+STACK_MARKERS = dict(zip(STACKS, ("o", "s", "^", "D", "P"), strict=True))
+COMPARISON_MODELS = {"tinyllama-1.1b": "TinyLlama 1.1B", "llama-3.2-1b": "Llama 3.2 1B"}
+# 4-bit formats as the comparison names them; a format not listed keeps its record name.
+FORMAT_LABELS = {
+    "int4_g": "INT4, round to nearest",
+    "int4_g.awq": "INT4 AWQ",
+    "int4_g.gptq": "INT4 GPTQ",
+    "int4_g.awq-gptq": "INT4 AWQ+GPTQ",
+    "int4_g.rot": "INT4 rotated",
+    "int4_g.rot-gptq": "INT4 rotated, GPTQ",
+    "Q4_0_PURE": "Q4_0 pure",
+    "W4A16_AWQ": "W4A16 AWQ",
+    "W4A16_GPTQ": "W4A16 GPTQ",
+    "EXL3_4.0": "EXL3 4.0",
+    "EXL3_4.0_H4_E4": "EXL3 4.0, 4-bit head",
+}
+# kvbound's variants in the accuracy comparison: its INT8 and int4_g checkpoints, without the
+# clip ablations (int4_g.mse, int4_g.awq-noclip).
+KVBOUND_QUANTIZED = (
+    "int8_pc", "int4_g", "int4_g.awq", "int4_g.gptq", "int4_g.awq-gptq", "int4_g.rot",
+    "int4_g.rot-gptq",
+)  # fmt: skip
+FOUR_BIT_PREFIXES = ("int4_g", "Q4_", "W4A16", "EXL3_4")
+
+ComparisonRecords = dict[str, dict[tuple[Any, ...], dict[str, Any]]]
+
+
+def _is_fp16(weights: str) -> bool:
+    return weights.lower() in {"fp16", "f16"}
+
+
+def _kv(params: dict[str, Any]) -> str:
+    return str(params.get("kv_dtype", params.get("kv", "fp16")))
+
+
+def stack_records(device: str) -> ComparisonRecords:
+    """The newest records of each stack in the production comparison, by measurement:
+    "decode": (engine, model, weights, prompt_len) -> one request, FP16 KV, 128 new tokens;
+    "serve": (engine, model) -> 96 `fixed` requests at once, FP16 weights and KV, a pool of
+    8 full sequences; "perplexity": (engine, model, weights) -> the whole test split, FP16 KV.
+    kvbound's decode runs replay CUDA graphs; llama.cpp's evaluate the prompt in one batch."""
+    out: ComparisonRecords = {"decode": {}, "serve": {}, "perplexity": {}}
+    for rec in record.load_records():
+        engine, params = rec["engine"]["name"], rec["params"]
+        if rec["fingerprint"]["device_config"] != device or engine not in STACKS:
+            continue
+        if not rec["model"] or rec["model"]["name"] not in COMPARISON_MODELS:
+            continue
+        if record.model_family(rec) != record.DEFAULT_FAMILY:
+            continue
+        model, weights = rec["model"]["name"], params.get("weights", "fp16")
+        if rec["kind"] == "generate":
+            prompt_len, server = params["prompt_len"], params.get("server")
+            # llama-server's micro-batch; the other stacks take the prompt whole.
+            ubatch = server.get("--ubatch-size", prompt_len) if isinstance(server, dict) else 0
+            if (params.get("batch"), params.get("new_tokens")) != (1, 128):
+                continue
+            if not _is_fp16(_kv(params)) or int(ubatch or prompt_len) < prompt_len:
+                continue
+            if engine == "kvbound" and not params.get("graph"):
+                continue
+            out["decode"][engine, model, weights, prompt_len] = rec
+        elif rec["kind"] == "serve":
+            run = (params.get("workload"), params.get("n_requests"), params.get("arrival_rate", 0))
+            if run != ("fixed", 96, 0):
+                continue
+            if not (_is_fp16(weights) and _is_fp16(_kv(params))):
+                continue
+            if engine == "kvbound":
+                pool_seqs = params["kv_blocks"] * params["kv_block_size"] / params["max_ctx"]
+                if serve_setup(rec) != "paged":
+                    continue
+            else:
+                pool_seqs = params["pool_seqs"]
+            if pool_seqs == 8:
+                out["serve"][engine, model] = rec
+        elif (
+            rec["kind"] == "eval.perplexity"
+            and params["max_windows"] == 0
+            and _kv(params) in {"fp16", "f16", "none"}  # ExLlamaV3's records name no cache type
+        ):
+            out["perplexity"][engine, model, weights] = rec
+    return out
+
+
+def bits_per_weight(rec: dict[str, Any]) -> float:
+    """Stored bits of every weight tensor over the parameter count, scales included. An outside
+    stack's record carries the figure; for a kvbound checkpoint it follows from the format in
+    the record's header and the model's shapes: every matrix in that format, including the
+    embedding, and the norm gains in FP16."""
+    params = rec["params"]
+    if "bits_per_weight" in params:
+        return float(params["bits_per_weight"])
+    fmt = WeightFormat.from_metadata(params.get("weights_header"))
+    table = load_spec(rec["model"]["name"]).arch
+    arch = Arch.from_table(table)
+    # A tied vocabulary matrix is stored once, as the embedding, unless the file is rotated.
+    tied = table.get("tie_word_embeddings", False) and not fmt.rotation
+    matrices = [
+        (rows, cols, count)
+        for name, rows, cols, count in arch.linears()
+        if not (name == "lm_head" and tied)
+    ]
+    matrices.append((arch.vocab_size, arch.hidden_size, 1))
+    norms = (2 * arch.n_layers + 1) * arch.hidden_size
+    n_weights = sum(rows * cols * count for rows, cols, count in matrices) + norms
+    bits = sum(rows * cols * count * fmt.bits_per_weight(rows, cols)
+               for rows, cols, count in matrices)  # fmt: skip
+    return (bits + 16 * norms) / n_weights
+
+
+def _stack_axis(ax: Axes, notes: dict[str, str] | None = None) -> None:
+    """Stack names under the slots, kvbound's in bold; notes go in a smaller line below."""
+    ax.set_xticks(range(len(STACKS)), list(STACKS.values()), fontsize=7.5)
+    for i, (tick, engine) in enumerate(zip(ax.get_xticklabels(), STACKS, strict=True)):
+        if engine == "kvbound":
+            tick.set_color(INK)
+            tick.set_fontweight("bold")
+        if notes and engine in notes:
+            ax.annotate(notes[engine], (i, 0), (0, -17), xycoords=("data", "axes fraction"),
+                        textcoords="offset points", ha="center", va="top", fontsize=7,
+                        color=MUTED)  # fmt: skip
+    ax.set_xlim(-0.6, len(STACKS) - 0.4)
+    ax.margins(y=0.16)
+
+
+def _stack_bars(ax: Axes, values: dict[str, float]) -> None:
+    """One bar per stack in its color with its value above; a stack without a value gets
+    "not measured" in its slot."""
+    top = max(values.values())
+    for i, engine in enumerate(STACKS):
+        if engine not in values:
+            ax.text(i, top * 0.04, "not\nmeasured", ha="center", va="bottom", fontsize=7.5,
+                    color=MUTED, style="italic")  # fmt: skip
+            continue
+        value = values[engine]
+        ax.bar(i, value, 0.66, color=STACK_COLORS[engine])
+        ours = engine == "kvbound"
+        ax.annotate(f"{value:,.0f}", (i, value), (0, 2), textcoords="offset points",
+                    ha="center", va="bottom", fontsize=8, color=INK if ours else INK_2,
+                    fontweight="bold" if ours else "normal")  # fmt: skip
+
+
+def stacks(comparison: ComparisonRecords) -> Figure | None:
+    """Tokens per second of each stack: one request at FP16 and at its fastest 4-bit format on
+    TinyLlama, and 96 requests at once with FP16 weights on both models."""
+    decode, serve = comparison["decode"], comparison["serve"]
+    tiny = "tinyllama-1.1b"
+
+    def rate(rec: dict[str, Any], metric: str) -> float:
+        return float(rec["metrics"][metric]["p50"])
+
+    fp16: dict[str, float] = {}
+    fastest: dict[str, tuple[float, str]] = {}
+    for (engine, model, weights, prompt_len), rec in decode.items():
+        if (model, prompt_len) != (tiny, 128):
+            continue
+        tok_s = rate(rec, "decode_tok_s")
+        if _is_fp16(weights):
+            fp16[engine] = tok_s
+        elif weights.startswith(FOUR_BIT_PREFIXES) and tok_s > fastest.get(engine, (0.0, ""))[0]:
+            fastest[engine] = (tok_s, weights)
+    served = {
+        model: {e: rate(rec, "throughput_tok_s") for (e, m), rec in serve.items() if m == model}
+        for model in COMPARISON_MODELS
+    }
+    if not all("kvbound" in v for v in (fp16, fastest, served[tiny], served["llama-3.2-1b"])):
+        return None
+    fig, grid = _panels(
+        2, 2,
+        "kvbound against production stacks on an RTX 3060 Ti",
+        "Tokens per second, higher is better. Same token ids, requests and KV memory in every"
+        " stack. Top: one request, decode\nafter a 128-token prompt, median of 10 runs. Bottom:"
+        " 96 requests of 256 prompt and 128 output tokens queued at once.",
+    )  # fmt: skip
+    panels = (
+        (grid[0][0], fp16, None, f"{COMPARISON_MODELS[tiny]}, FP16 weights, one request"),
+        (grid[0][1], {e: v for e, (v, _) in fastest.items()},
+         {e: FORMAT_LABELS.get(w, w) for e, (_, w) in fastest.items()},
+         f"{COMPARISON_MODELS[tiny]}, fastest 4-bit file, one request"),
+        *(
+            (grid[1][i], served[model], None, f"{name}, 96 requests at once, FP16 weights and KV")
+            for i, (model, name) in enumerate(COMPARISON_MODELS.items())
+        ),
+    )  # fmt: skip
+    for ax, values, notes, title in panels:
+        _stack_bars(ax, values)
+        _stack_axis(ax, notes)
+        ax.set_title(title, loc="left", fontsize=9.5, color=INK_2)
+    return fig
+
+
+# Direct labels of the notable points: text, offset in points and alignment; the moves adjust a
+# label for one model where it would collide.
+ACCURACY_LABELS = {
+    ("kvbound", "int4_g.awq-gptq"): ("kvbound\nAWQ+GPTQ", (-8, -4), "right"),
+    ("kvbound", "int4_g"): ("round to\nnearest", (-8, 0), "right"),
+    ("kvbound", "int4_g.rot"): ("rotated", (-8, 0), "right"),
+    ("llama.cpp", "Q4_0"): ("Q4_0", (7, 0), "left"),
+    ("llama.cpp", "Q4_K_M"): ("Q4_K_M", (7, 0), "left"),
+    ("exllamav3", "EXL3_4.0"): ("EXL3 4.0", (7, 0), "left"),
+    ("exllamav3", "EXL3_4.0_H4_E4"): ("EXL3 4.0,\n4-bit head", (-8, 0), "right"),
+}
+ACCURACY_LABEL_MOVES = {
+    ("tinyllama-1.1b", "llama.cpp", "Q4_K_M"): ((0, -11), "center"),
+}
+
+
+def accuracy_per_bit(comparison: ComparisonRecords) -> Figure | None:
+    """WikiText-2 perplexity against bits per weight for every quantized format, per model."""
+    points: dict[str, list[tuple[str, str, float, float]]] = {m: [] for m in COMPARISON_MODELS}
+    fp16_ppl: dict[str, float] = {}
+    for (engine, model, weights), rec in comparison["perplexity"].items():
+        ppl = float(rec["metrics"]["perplexity"])
+        if engine == "kvbound" and weights == "fp16":
+            fp16_ppl[model] = ppl
+        elif not _is_fp16(weights) and (engine != "kvbound" or weights in KVBOUND_QUANTIZED):
+            points[model].append((engine, weights, bits_per_weight(rec), ppl))
+    if set(fp16_ppl) != set(COMPARISON_MODELS):
+        return None
+    fig, grid = _panels(
+        1, 2,
+        "Accuracy per bit: every quantized format of every stack",
+        "WikiText-2 test perplexity, lower is better, against the stored bits of all weight"
+        " tensors per weight, scales included.\nkvbound's 4-bit points are one format with"
+        " different scales and rounding. Its calibration text, and vLLM's and\nTensorRT-LLM's,"
+        " is WikiText-2's train split; ExLlamaV3 calibrates on its own text, llama.cpp's files"
+        " on none.",
+    )  # fmt: skip
+    for ax, (model, name) in zip(grid[0], COMPARISON_MODELS.items(), strict=True):
+        ax.grid(True, axis="x", color=GRID, linewidth=0.6)
+        ax.axhline(fp16_ppl[model], color=MUTED, lw=1, ls=(0, (4, 3)), zorder=1)
+        for engine, stack in STACKS.items():
+            mine = [p for p in points[model] if p[0] == engine]
+            if not mine:
+                continue
+            ax.plot([p[2] for p in mine], [p[3] for p in mine], ls="none",
+                    marker=STACK_MARKERS[engine], ms=8 if engine == "vllm" else 7,
+                    color=STACK_COLORS[engine], mec=SURFACE, mew=1.2, label=stack,
+                    zorder=3)  # fmt: skip
+        for engine, weights, bits, ppl in points[model]:
+            if (engine, weights) not in ACCURACY_LABELS:
+                continue
+            text, offset, ha = ACCURACY_LABELS[engine, weights]
+            offset, ha = ACCURACY_LABEL_MOVES.get((model, engine, weights), (offset, ha))
+            ours = engine == "kvbound"
+            ax.annotate(text, (bits, ppl), offset, textcoords="offset points", ha=ha,
+                        va="center", fontsize=7.5, color=INK if ours else INK_2,
+                        fontweight="bold" if weights == "int4_g.awq-gptq" else "normal",
+                        linespacing=1.1)  # fmt: skip
+        ax.set_title(f"{name}  (FP16: {fp16_ppl[model]:.2f}, dashed line)", loc="left",
+                     fontsize=9.5, color=INK_2)  # fmt: skip
+        # Left of 4 bits is room for the labels of kvbound's 4.13-bit column.
+        ax.set_xlim(2.9, 9.1)
+        ax.set_xticks(range(4, 10))
+        ax.set_xlabel("bits per weight", color=INK_2, fontsize=9)
+        ax.margins(y=0.06)
+    grid[0][0].set_ylabel("perplexity", color=INK_2, fontsize=9)
+    grid[0][1].legend(loc="upper right", frameon=False, fontsize=8.5, labelcolor=INK_2)
+    return fig
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", required=True, help="name from configs/devices/")
     parser.add_argument("--model", required=True, help="model placed on the roofline")
+    parser.add_argument("--comparison-only", action="store_true",
+                        help="render only the production comparison's figures")  # fmt: skip
     args = parser.parse_args()
+
+    out = REPORTS / args.device
+    comparison = stack_records(args.device)
+    for name, figure in (
+        ("stacks", stacks(comparison)),
+        ("accuracy_per_bit", accuracy_per_bit(comparison)),
+    ):
+        if figure is not None:
+            print(_save(figure, out / f"{name}.png", top=0.85))
+    if args.comparison_only:
+        return
 
     records = hardware.latest_records(args.device)
     missing = {"bandwidth_sweep", "pointer_chase", "gemm_peak"} - set(records)
@@ -681,7 +970,6 @@ def main() -> None:
     if spec.family != record.DEFAULT_FAMILY:
         raise SystemExit(f"{args.model} is a {spec.family} model; these figures are for Llamas")
     arch = Arch.from_table(spec.arch)
-    out = REPORTS / args.device
     print(_save(roofline(args.device, records, arch, args.model), out / "roofline.png"))
     print(_save(bandwidth(args.device, records), out / "bandwidth.png"))
     print(_save(latency(records), out / "latency.png"))

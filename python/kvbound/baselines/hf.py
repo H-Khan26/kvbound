@@ -1,4 +1,4 @@
-"""Hugging Face Transformers baseline: the number every later phase is compared against.
+"""Hugging Face Transformers baseline: the reference point for the engine's measurements.
 
 Runs greedy generation of a fixed number of tokens from seeded random prompt ids (token ids in,
 token ids out; no tokenizer in the timed path) and records TTFT / TPOT / throughput / peak memory
