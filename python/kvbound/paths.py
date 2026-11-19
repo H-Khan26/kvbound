@@ -1,5 +1,6 @@
 """Repository locations shared by every script."""
 
+import os
 import platform
 from pathlib import Path
 
@@ -10,6 +11,9 @@ FIXTURES = REPO_ROOT / "fixtures"
 RESULTS_RAW = REPO_ROOT / "results" / "raw"
 REPORTS = REPO_ROOT / "reports"
 BUILD = REPO_ROOT / "build"
+# Outside stacks' binaries, converted weights and helper environments; $KVBOUND_EXT moves them
+# off the repository's drive.
+EXT = Path(os.environ.get("KVBOUND_EXT") or REPO_ROOT / "ext").expanduser().resolve()
 
 
 def binary(name: str, preset: str) -> Path:

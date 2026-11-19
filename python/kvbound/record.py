@@ -42,6 +42,14 @@ one audio window, and stops each transcription at its end-of-sequence token:
 
 Latencies are per clip and summarized like the benchmark iterations; the rates are single
 numbers per run.
+
+Outside stacks. A record of a stack kvbound does not build (llama.cpp, for one) has an engine
+entry made by external_engine(): its name, its version (a package version or a release tag),
+"external": true, and whatever else pins the build, such as the hashes of the files it came
+from. Its params then name the weight format in the stack's own terms ("weights", e.g.
+"Q4_K_M") and give "bits_per_weight": the stored bits of every weight tensor, scales included,
+over the number of weights. write_record() refuses such a record without them. Records written
+before this rule (Hugging Face, faster-whisper) carry a name and version only.
 """
 
 import json
@@ -118,6 +126,26 @@ def _tags(fingerprint: dict[str, Any], nvml: dict[str, Any] | None) -> list[str]
     return tags
 
 
+def external_engine(name: str, version: str, **pins: Any) -> dict[str, Any]:
+    """The engine entry of an outside stack's record: name, version and what pins its build."""
+    if not version:
+        raise ValueError(f"{name}: an outside stack's record needs its version or release tag")
+    return {"name": name, "version": version, "external": True, **pins}
+
+
+def check_external(engine: dict[str, Any], params: dict[str, Any]) -> None:
+    """Raises unless an outside stack's record states its version and weight format."""
+    if not engine.get("external"):
+        return
+    if not engine.get("version"):
+        raise ValueError(f"{engine['name']}: an outside stack's record needs engine.version")
+    if not isinstance(params.get("weights"), str):
+        raise ValueError(f"{engine['name']}: an outside stack's record needs params.weights")
+    bits = params.get("bits_per_weight")
+    if not isinstance(bits, int | float) or bits <= 0:
+        raise ValueError(f"{engine['name']}: an outside stack's record needs bits_per_weight")
+
+
 def write_record(
     kind: str,
     engine: dict[str, Any],
@@ -132,7 +160,8 @@ def write_record(
     """Writes one run to results/raw/<device_id>/<run_id>.json and returns the path.
 
     kind     what was measured, e.g. "generate", "asr" or "microbench.bandwidth".
-    engine   {"name": ..., "version": ...} of whatever produced the timings.
+    engine   {"name": ..., "version": ...} of whatever produced the timings; an outside stack's
+             comes from external_engine().
     params   the knobs of this run (batch size, lengths, dtype, seeds).
     metrics  summarized results; samples holds the raw per-iteration values behind them.
     model    {"name": ..., "hf_repo": ..., "revision": ...} plus "family", one of FAMILIES;
@@ -140,6 +169,7 @@ def write_record(
     """
     if model is not None and model.get("family", DEFAULT_FAMILY) not in FAMILIES:
         raise ValueError(f"unknown model family {model['family']!r}; expected one of {FAMILIES}")
+    check_external(engine, params)
     fingerprint = fp.fingerprint(gpu_index)
     now = datetime.now(UTC)
     run_id = f"{now:%Y%m%dT%H%M%SZ}-{kind.replace('.', '-')}-{secrets.token_hex(2)}"

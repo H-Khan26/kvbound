@@ -1,4 +1,4 @@
-.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters step-counters microbench quantize eval precision eval-asr bench-asr qaihub report predict lint format typecheck clean
+.PHONY: help setup doctor build test test-gpu test-real sanitize fetch fixture golden bench-hf bench serve serve-load profile counters step-counters microbench quantize eval precision eval-asr bench-asr qaihub fetch-llamacpp bench-llamacpp eval-llamacpp report predict lint format typecheck clean
 
 # torch wheel: cu128 on GPU machines, cpu in CI and on machines without a GPU
 TORCH ?= cu128
@@ -163,6 +163,24 @@ qaihub:           ## re-download AI Hub profile jobs and summarize them into res
 	uv run --with "qai-hub>=0.58.0" python -m kvbound.baselines.qai_hub fetch --raw "$(QAIHUB_RAW)" \
 	  $(if $(QAIHUB_LOG),--log "$(QAIHUB_LOG)") $(if $(QAIHUB_SUMMARY),--summary "$(QAIHUB_SUMMARY)")
 	uv run python -m kvbound.baselines.qai_hub summarize --raw "$(QAIHUB_RAW)"
+
+# llama.cpp at the release pinned in kvbound.baselines.llamacpp, under $KVBOUND_EXT (default ext/).
+LLAMACPP_FORMATS ?= F16 Q8_0 Q4_K_M Q4_0
+
+fetch-llamacpp:   ## pinned llama.cpp release and the GGUF files of a model under $KVBOUND_EXT (MODEL=...)
+	uv run python -m kvbound.baselines.llamacpp fetch
+	uv run python -m kvbound.baselines.llamacpp convert --model $(MODEL)
+
+bench-llamacpp:   ## llama.cpp through llama-server: batch 1 decode and a long prompt per format, like bench (MODEL=...)
+	for f in $(LLAMACPP_FORMATS); do \
+	  uv run python -m kvbound.baselines.llamacpp_bench --model $(MODEL) --weights $$f --prompt-len 128 || exit 1; \
+	  uv run python -m kvbound.baselines.llamacpp_bench --model $(MODEL) --weights $$f --prompt-len 1024 || exit 1; \
+	done
+
+eval-llamacpp:    ## WikiText-2 perplexity of each GGUF format under kvbound's protocol (MODEL=...)
+	for f in $(LLAMACPP_FORMATS); do \
+	  uv run python -m kvbound.baselines.llamacpp_eval --model $(MODEL) --weights $$f || exit 1; \
+	done
 
 report:           ## roofline, bandwidth and latency figures from the records (MODEL=... DEVICE=...)
 	uv run python -m kvbound.report --device $(DEVICE) --model $(MODEL)

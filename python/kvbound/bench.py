@@ -217,19 +217,25 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--preset", default="cuda")
     parser.add_argument("--allow-dirty", action="store_true")
+    parser.add_argument("--no-record", action="store_true", help="print the result only")
     args = parser.parse_args()
     if args.new_tokens < 2:
         parser.error("--new-tokens must be at least 2 to measure TPOT")
 
-    record.require_clean_tree(args.allow_dirty)
+    if not args.no_record:
+        record.require_clean_tree(args.allow_dirty)
     result = benchmark(args)
-    path = record.write_record(**result)
+    path = "(not recorded)" if args.no_record else record.write_record(**result)
     m = result["metrics"]
     ceiling = m.get("ceiling")
+    # NVML's device memory in use: the sampling starts before kvb-bench does.
+    memory = result["nvml"]["mem_used_mib"]
     print(
         f"TTFT p50 {m['ttft_s']['p50'] * 1e3:.1f} ms | TPOT p50 {m['tpot_s']['p50'] * 1e3:.2f} ms"
         f" | decode {m['decode_tok_s']['p50']:.1f} tok/s"
         + (f" ({ceiling['decode_fraction']:.0%} of the ceiling)" if ceiling else "")
+        + f" | median step {1 / m['decode_step_p50_s']['p50']:.1f} tok/s"
+        + f" | GPU memory +{memory['max'] - memory['min']:.0f} MiB"
         + f"\n{path}"
     )
 
