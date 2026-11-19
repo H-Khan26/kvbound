@@ -336,8 +336,9 @@ kept beside them, and perplexity from the stack's log-probabilities or logits un
   Without the padding its median time per token under load was about twice as long in a trial run.
 - **4-bit weights** (W4A16 in the tables: 4-bit weights, 16-bit activations). Each stack's own tool made them, on
   the 128 calibration windows kvbound's AWQ and GPTQ use: llm-compressor (AWQ and GPTQ) for vLLM and NVIDIA Model
-  Optimizer (its `awq_lite` search) for TensorRT-LLM, in groups of 128 like `int4_g`. Both tools leave the embedding and the vocabulary matrix in FP16, so these files hold 5.5 to 6.8 bits
-  per weight where `int4_g` holds 4.13. TensorRT-LLM 1.2.1 loads no GPTQ checkpoint.
+  Optimizer (its `awq_lite` search) for TensorRT-LLM, in groups of 128 like `int4_g`. Both tools leave the embedding
+  and the vocabulary matrix in FP16, so these files hold 5.5 to 6.8 bits per weight where `int4_g` holds 4.13.
+  TensorRT-LLM 1.2.1 loads no GPTQ checkpoint.
 - **WSL2.** kvbound built and run inside WSL decoded within 3% of its Windows figures in a trial run that was not
   recorded; kvbound's numbers below are its Windows records.
 
@@ -482,8 +483,8 @@ In short:
 
 Llama 3.2 1B (the base model; Qualcomm's export is the Instruct variant) decodes at 472 tokens/s on the RTX 3060 Ti
 with kvbound's INT4 weights. The two numbers are not a comparison of engines: one is a phone NPU running one
-sequence, the other a desktop card with a 220 W power limit. What carries over is the design lesson, that a compiler which needs every shape fixed pays for
-the full context on every step.
+sequence, the other a desktop card with a 220 W power limit. What carries over is the design lesson, that a compiler
+which needs every shape fixed pays for the full context on every step.
 
 ## What was not done
 

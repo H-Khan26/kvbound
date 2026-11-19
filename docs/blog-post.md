@@ -166,8 +166,8 @@ Three more GPU stacks went through the same protocol that day: vLLM and TensorRT
   and read it whole on every token.
 - **ExLlamaV3 is far ahead in accuracy per bit.** Its format is not a grid of levels per weight: it rotates each
   matrix and codes the weights with a trellis. With every matrix near 4 bits it scores 9.00 on TinyLlama, 0.12
-  above FP16 where kvbound's best checkpoint is 0.32 above, and its calibration text is not from the test corpus. AWQ and GPTQ on
-  a scalar format did not close that gap.
+  above FP16 where kvbound's best checkpoint is 0.32 above, and its calibration text is not from the test corpus.
+  AWQ and GPTQ on a scalar format did not close that gap.
 
 ## The same engine, a different model
 
